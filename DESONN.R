@@ -2084,26 +2084,33 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     errors[[self$num_layers]] <- error_last_layer  # [4500, out_dim]
     
     if (self$ML_NN) {
-    for (layer in (self$num_layers - 1):1) {
-      next_error <- errors[[layer + 1]]
-      weight_next <- self$weights[[layer + 1]]
-      
-      # Use forward pass output for derivative
-      activation_input <- hidden_outputs[[layer]]
-      
-      # Use derivative function (you already resolved this earlier)
-      if (!is.null(activation_derivative_function)) {
-        derivative_applied <- activation_derivative_function(activation_input)
-      } else {
-        stop(paste("Missing activation derivative function at layer", layer))
+      for (layer in (self$num_layers - 1):1) {
+        next_error <- errors[[layer + 1]]
+        weight_next <- self$weights[[layer + 1]]
+        
+        activation_input <- hidden_outputs[[layer]]
+        
+        # Retrieve activation derivative function for current layer
+        activation_derivative_function <- if (!is.null(activation_functions[[layer]]) &&
+                                              activation_functions[[layer]] %in% valid_activations) {
+          get(paste0(activation_functions[[layer]], "_derivative"))
+        } else {
+          NULL
+        }
+        
+        # Compute local derivative and apply backpropagation
+        if (!is.null(activation_derivative_function)) {
+          local_deriv <- activation_derivative_function(activation_input)
+          propagated_error <- next_error %*% t(weight_next)
+          errors[[layer]] <- propagated_error * local_deriv
+        } else {
+          # If no activation function derivative, just propagate error directly
+          errors[[layer]] <- next_error %*% t(weight_next)
+        }
       }
-      
-      # Backpropagate: [4500, current_layer_size] = [4500, next_layer_size] %*% t(weights[[next_layer]])
-      propagated_error <- next_error %*% t(weight_next)
-      
-      # Apply derivative
-      errors[[layer]] <- propagated_error * derivative_applied
-    }}
+    }
+    
+    
     else{
       cat("Single Layer Backpropagation\n")
       
