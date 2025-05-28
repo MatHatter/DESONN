@@ -1,5 +1,4 @@
-# source("DESONN_20240629_v6_rows_same_4500.R")
-source("DESONN_20240629_v6_rows_same_4500.R")
+source("DESONN.R")
 # source("DESONN_20240629_v6.R")
 # Initialize activation functions
 # self$activation_functions <- vector("list", self$num_layers)
@@ -88,9 +87,11 @@ ML_NN <- TRUE
 # ML_NN <- FALSE
 input_size <- 12 # This should match the actual number of features in your data
 # hidden_sizes <- NULL
-hidden_sizes <- c(16, 8, 8)  #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list("softplus", "sigmoid", "relu", "sigmoid_binary") #, "sigmoid", "sigmoid", "sigmoid", "sigmoid_binary") #, "sigmoid", "", "sigmoid", "sigmoid", "sigmoid_binary")
-activation_functions_learn <- list("softplus", "sigmoid", "relu", "sigmoid_binary") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+hidden_sizes <- c(24, 12) 
+#, 1, 1, 10) #,2,1,, 1)
+activation_functions <- list("relu", "relu", "sigmoid")
+#, "sigmoid", "sigmoid", "sigmoid", "sigmoid_binary") #, "sigmoid", "", "sigmoid", "sigmoid", "sigmoid_binary")
+activation_functions_learn <- list("relu", "relu", "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-10
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
@@ -404,7 +405,7 @@ increment_loop_flag <- FALSE
     if(hyperparameter_grid_setup){
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-        lr1 <- 0.00001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
+        lr1 <- 0.001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
         lambda1 <- .01 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
