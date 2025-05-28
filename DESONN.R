@@ -1617,10 +1617,21 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       
       # Get activation function for the first layer if exists
       
-      activation_function <- NULL
-      if (!is.null(activation_functions[[1]]) && activation_functions[[1]] %in% c("sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus", "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation", "custom_activation", "custom_binary_activation", "custom_binary_activation_net_pos", "softmax", "bent_identity")) {
-        activation_function <- get(activation_functions[[1]])
+      valid_activations <- c(
+        "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
+        "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
+        "custom_activation", "custom_binary_activation", "custom_binary_activation_net_pos",
+        "softmax", "bent_identity"
+      )
+      
+      activation_function <- if (is.list(activation_functions) &&
+                                 !is.null(activation_functions[[1]]) &&
+                                 activation_functions[[1]] %in% valid_activations) {
+        get(activation_functions[[1]])
+      } else {
+        NULL
       }
+      
       dropout_rate <- self$dropout_rates[[1]]
       
       # Bias handling logic and computation for layer 1
@@ -1676,11 +1687,13 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       
       for (layer in 2:self$num_layers) {
         
-        if (!is.null(activation_functions[[layer]])  && activation_functions[[layer]] %in% c("sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus", "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation", "custom_activation", "custom_binary_activation", "softmax", "bent_identity")) {
-          activation_function <- get(activation_functions[[layer]])
+        activation_function <- if (!is.null(activation_functions[[layer]]) &&
+                                   activation_functions[[layer]] %in% valid_activations) {
+          get(activation_functions[[layer]])
         } else {
-          activation_function <- NULL
+          NULL
         }
+        
         
         dropout_rate <- self$dropout_rates[[layer]]
         
@@ -2059,11 +2072,13 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     
     # --------- Backpropagation Begins ---------
     
-    if (!is.null(activation_functions[[layer]])  && activation_functions[[layer]] %in% c("sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus", "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation", "custom_activation", "custom_binary_activation", "softmax", "bent_identity")) {
-      activation_derivative_function <- get(paste0(activation_functions[[layer]], "_derivative"))
+    activation_derivative_function <- if (!is.null(activation_functions[[layer]]) &&
+                                          activation_functions[[layer]] %in% valid_activations) {
+      get(paste0(activation_functions[[layer]], "_derivative"))
     } else {
-      activation_derivative_function <- NULL
+      NULL
     }
+    
 
     errors <- vector("list", self$num_layers)
     errors[[self$num_layers]] <- error_last_layer  # [4500, out_dim]
