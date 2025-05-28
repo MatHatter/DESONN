@@ -1009,20 +1009,25 @@ if (ML_NN) {
         activation_functions_learn[[layer]] %in% valid_activations) {
       activation_derivative_function <- get(paste0(activation_functions_learn[[layer]], "_derivative"))
     } else {
-      stop(paste("Missing activation derivative for layer", layer))
+      activation_derivative_function <- NULL
     }
+    
     
     # Forward output for this layer
     activation_input <- predicted_output_learn_hidden[[layer]]
     
-    # Compute local derivative
-    local_deriv <- activation_derivative_function(activation_input)
+    # Compute local derivative only if function is not NULL
+    if (!is.null(activation_derivative_function)) {
+      local_deriv <- activation_derivative_function(activation_input)
+      # Backpropagation: propagated error times activation derivative
+      propagated_error <- next_error %*% t(weight_next)
+      # Apply elementwise derivative
+      errors[[layer]] <- propagated_error * local_deriv
+    } else {
+      # If no activation function derivative, just propagate error directly
+      errors[[layer]] <- next_error %*% t(weight_next)
+    }
     
-    # Backpropagation: propagated error times activation derivative
-    propagated_error <- next_error %*% t(weight_next)
-    
-    # Apply elementwise derivative
-    errors[[layer]] <- propagated_error * local_deriv
   }
   
   
@@ -1589,7 +1594,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     #print(paste("Epoch:", epoch))
     num_epochs_check <<- num_epochs
     # Calculate the predicted output for the entire Rdata
-    predicted_output_train_reg <<- self$predict(Rdata, labels, activation_functions)
+    predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions)
     
     
     
@@ -2044,7 +2049,13 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     }
     
     # Record the loss for this epoch
-    losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
+    # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
+    losses[[epoch]] <- loss_function(
+      predictions = if (self$ML_NN) predicted_output_train_reg_hidden[[self$num_layers]] else predicted_output_matrix,
+      labels = labels,
+      reg_loss_total = reg_loss_total,
+      loss_type = "CrossEntropy"  # or "MSE", etc. depending on your task
+    )
     
     # --------- Backpropagation Begins ---------
     
@@ -2122,59 +2133,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
               )
             }
             
-            
-            # # Check if the number of rows in t(errors[[layer]]) matches the number of rows in Rdata
-            # if (nrow(t(errors[[layer]])) != nrow(Rdata)) {
-            #   if (nrow(t(errors[[layer]])) > nrow(Rdata)) {
-            #     # Truncate t(errors[[layer]]) to match the number of rows in Rdata
-            #     errors[[layer]] <- errors[[layer]][1:nrow(Rdata), , drop = FALSE]
-            #   } else {
-            #     # Replicate t(errors[[layer]]) to match the number of rows in Rdata
-            #     errors[[layer]] <- matrix(
-            #       rep(errors[[layer]], length.out = nrow(Rdata) * ncol(t(errors[[layer]]))),
-            #       nrow = nrow(Rdata),
-            #       ncol = ncol(t(errors[[layer]]))
-            #     )
-            #   }
-            # }
-            # 
-            # # Check if the number of columns in t(errors[[layer]]) matches the number of columns in Rdata
-            # if (ncol(t(errors[[layer]])) != ncol(Rdata)) {
-            #   if (ncol(t(errors[[layer]])) > ncol(Rdata)) {
-            #     # Truncate t(errors[[layer]]) to match the number of columns in Rdata
-            #     errors[[layer]] <- errors[[layer]][, 1:ncol(Rdata), drop = FALSE]
-            #   } else {
-            #     # Replicate t(errors[[layer]]) to match the number of columns in Rdata
-            #     errors[[layer]] <- matrix(
-            #       rep(errors[[layer]], length.out = nrow(errors[[layer]]) * ncol(Rdata)),
-            #       nrow = nrow(errors[[layer]]),
-            #       ncol = ncol(Rdata)
-            #     )
-            #   }
-            # }
-            # 
-            # 
-            # # Compute the gradient matrix for the current layer
-            # err_mat <- errors[[layer]]
-            # 
-            # if (layer == 1) {
-            #   input_mat <- Rdata
-            # } else {
-            #   input_mat <- predicted_output_train_reg_hidden[[layer - 1]]
-            # }
-            # 
-            # # Handle row mismatch between input_mat and err_mat
-            # if (nrow(err_mat) != nrow(input_mat)) {
-            #   if (nrow(err_mat) < nrow(input_mat)) {
-            #     err_mat <- matrix(rep(err_mat, length.out = nrow(input_mat) * ncol(err_mat)),
-            #                       nrow = nrow(input_mat), ncol = ncol(err_mat))
-            #   } else {
-            #     err_mat <- err_mat[1:nrow(input_mat), , drop = FALSE]
-            #   }
-            # }
-            # 
-            # # Compute the gradients for this layer
-            # grads_matrix <- t(input_mat) %*% err_mat
+
             
             # Determine input matrix for current layer
             if (layer == 1) {
@@ -2825,47 +2784,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                   self$biases[[layer]] <- updated_optimizer$updated_weights_or_biases
                   optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                   
-              
-                
-              #   # Assuming optimizer_params_biases[[layer]] already initialized and other variables defined
-              #   optimizer_params_biases[[layer]] <- adam_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr, beta1, beta2, epsilon, t = epoch)
-              #   
-              #   # Accessing the returned values
-              #   updated_m_bias <- optimizer_params_biases[[layer]]$m
-              #   updated_v_bias <- optimizer_params_biases[[layer]]$v
-              #   updated_biases_update <- optimizer_params_biases[[layer]]$biases_update
-              #   
-              #   # Convert updated_biases_update to a numeric vector if it's a list
-              #   if (is.list(updated_biases_update)) {
-              #     updated_biases_update <- unlist(updated_biases_update)
-              #   }
-              #   
-              #   #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-              #   # Apply the regularization loss to the bias updates
-              #   # if (!is.null(reg_loss)) {
-              #   #     updated_biases_update <- updated_biases_update - (lr * reg_loss)
-              #   # }
-              #   #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-              #   # Checking and updating biases
-              #   if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-              #     cat("Dimensions match for matrix. Performing subtraction.\n")
-              #     self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-              #   } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-              #     cat("Dimensions match for vector. Performing subtraction.\n")
-              #     self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-              #   } else {
-              #     cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-              #     cat("Attempting to adjust dimensions if possible.\n")
-              #     
-              #     # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-              #     if (is.vector(updated_biases_update)) {
-              #       repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-              #       self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-              #     } else {
-              #       cat("Unable to adjust dimensions for updated_biases_update.\n")
-              #     }
-              #   }
-              # }
+            
               }
               else if (optimizer == "rmsprop") {
                 optimizer_params_biases[[layer]] <- rmsprop_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr, beta2, epsilon)

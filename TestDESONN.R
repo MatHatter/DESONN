@@ -67,7 +67,7 @@ function(test1){
 }
 
 # # Define parameters
-init_method <- "xavier" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
+init_method <- "variance_scaling" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
 lookahead_step <- 10
 batch_normalize_data <- FALSE
@@ -81,24 +81,26 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 
 
-custom_scale <- .3
+custom_scale <- .4
 # epsilon <- 1e-5
 ML_NN <- TRUE
 # ML_NN <- FALSE
 input_size <- 12 # This should match the actual number of features in your data
 # hidden_sizes <- NULL
-hidden_sizes <- c(24, 12) 
+hidden_sizes <- c(16, 8)
+
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list("relu", "relu", "sigmoid")
+activation_functions <- list(NULL, NULL, "relu")
 #, "sigmoid", "sigmoid", "sigmoid", "sigmoid_binary") #, "sigmoid", "", "sigmoid", "sigmoid", "sigmoid_binary")
-activation_functions_learn <- list("relu", "relu", "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- NULL # list("relu", "relu", "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-10
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- NULL #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
+dropout_rates <- list(0.3, 0.3, NULL)  # NULL for output layer
+#c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
 # hidden_sizes <- NULL
 num_layers <- length(hidden_sizes) + 1
@@ -184,124 +186,7 @@ y <- as.matrix(y_train)
 colnames(y) <- colname_y
 
 binary_flag <- is_binary(y)
-# Load necessary libraries
-# # Load necessary libraries
-# library(keras)
-# library(tensorflow)
-# library(dplyr)
-#
-# # Load the dataset
-# data <- read.csv("C:/Users/wfky1/Downloads/heart_failure_clinical_records.csv")
-#
-# # Check for missing values
-# if (sum(is.na(data)) > 0) {
-#     # Handle missing values if any
-#     data <- data %>% na.omit()  # For simplicity, removing rows with NA values
-# }
-#
-# # Convert categorical variables to factors if any
-# data <- data %>%
-#     mutate(across(where(is.character), as.factor))
-#
-# # Split the data into features (X) and target (y)
-# X <- data %>% select(-DEATH_EVENT)
-# y <- data$DEATH_EVENT
-#
-# # Normalize numeric features
-# X <- X %>% mutate(across(where(is.numeric), scale))
-#
-# # Split the data into training, validation, and test sets
-# set.seed(123)
-# total_num_samples <- nrow(data)
-# num_validation_samples <- 200
-# num_test_samples <- 300
-# num_training_samples <- total_num_samples - num_validation_samples - num_test_samples
-#
-# # Create a random permutation of row indices
-# indices <- sample(1:total_num_samples)
-#
-# # Split the indices into training, validation, and test sets
-# train_indices <- indices[1:num_training_samples]
-# validation_indices <- indices[(num_training_samples + 1):(num_training_samples + num_validation_samples)]
-# test_indices <- indices[(num_training_samples + num_validation_samples + 1):total_num_samples]
-#
-# # Create training, validation, and test sets
-# X_train <- X[train_indices, ]
-# y_train <- y[train_indices]
-#
-# X_validation <- X[validation_indices, ]
-# y_validation <- y[validation_indices]
-#
-# X_test <- X[test_indices, ]
-# y_test <- y[test_indices]
-#
-# # Convert data to matrix format for Keras
-# X_train <- as.matrix(X_train)
-# y_train <- as.matrix(y_train)
-# X_validation <- as.matrix(X_validation)
-# y_validation <- as.matrix(y_validation)
-# X_test <- as.matrix(X_test)
-# y_test <- as.matrix(y_test)
-#
-# # Build the neural network model using the Input layer
-# # Build the neural network model using the Input layer
-# input_shape <- ncol(X_train)
-# # Build a simpler neural network model
-# model <- keras_model_sequential(
-#     layer_dense(units = 64, activation = 'relu', input_shape = c(10), name = 'dense_1'),
-#     layer_dense(units = 1, activation = 'sigmoid')
-# )
-#
-# # Compile the model
-# model %>% compile(
-#     optimizer = 'adam',
-#     loss = 'binary_crossentropy',
-#     metrics = c('accuracy')
-# )
-#
-# # Train the model
-# history <- model %>% fit(
-#     x = X_train,
-#     y = y_train,
-#     epochs = 50,
-#     batch_size = 32,
-#     validation_data = list(X_validation, y_validation)
-# )
-#
-# # Evaluate the model on the test set
-# score <- model %>% evaluate(X_test, y_test)
-# cat('Test loss:', score$loss, '\n')
-# cat('Test accuracy:', score$accuracy, '\n')
-#
-# # Make predictions on the test set
-# predictions <- model %>% predict_classes(X_test)
-#
-# # Print a few predictions
-# print(predictions[1:10])
-#
-# # Make predictions on the test set
-# predictions <- model %>% predict_classes(X_test)
-#
-# # Print a few predictions
-# print(predictions[1:10])
 
-
-# #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-#
-# # Perform OLR
-# olr_model <- olr(hyperparameter_grid[, c("lr", "lambda", "significant_numeric")], responseName = "significant_numeric", predictorNames = c("lr", "lambda"))
-#
-# # Summary of the model
-# summary(olr_model)
-
-# # Predictions
-# predictions <- predict(olr_model, newdata = hyperparameter_grid)
-#
-# # Display predictions
-# print(predictions)
-#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-
-# options(scipen=999)
 
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -323,7 +208,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = "L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = "L1" #Max_Norm" #"Group_Lasso" #"L1_L2"
 olr <- FALSE
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
@@ -406,7 +291,7 @@ increment_loop_flag <- FALSE
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
         lr1 <- 0.001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
-        lambda1 <- .01 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
+        lambda1 <- .1 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
 
