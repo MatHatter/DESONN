@@ -984,96 +984,78 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
 
 ###############################
 # Calculate the error for the output layer
-errors <- vector("list", self$num_layers)
-errors[[self$num_layers]] <- error
-
+    # Initialize the error list
+    errors <- vector("list", self$num_layers)
+    errors[[self$num_layers]] <- error  # Only the output layer gets label-derived error
+    
 # Propagate the error backwards
 if (ML_NN) {
+  # --------- Backpropagation Begins ---------
+  
+
+  
+  # Perform backward propagation through layers
   for (layer in (self$num_layers - 1):1) {
-    cat("Layer:", layer, "\n")
+    next_error <- errors[[layer + 1]]
+    weight_next <- self$weights[[layer + 1]]
     
-    next_weights <- self$weights[[layer + 1]]
-    next_errors <- errors[[layer + 1]]
+    # Debug dimensions
+    cat("Backpropagating layer", layer, "\n")
+    cat("  next_error dim:", paste(dim(next_error), collapse = " x "), "\n")
+    cat("  weight_next dim:", paste(dim(weight_next), collapse = " x "), "\n")
     
-    # Check if weights and errors exist
-    if (is.null(next_weights) || is.null(next_errors)) {
-      cat(paste("Skipping layer", layer, "- weights or errors do not exist\n"))
-      next
+    # Retrieve activation derivative
+    if (!is.null(activation_functions_learn[[layer]]) &&
+        activation_functions_learn[[layer]] %in% valid_activations) {
+      activation_derivative_function <- get(paste0(activation_functions_learn[[layer]], "_derivative"))
+    } else {
+      stop(paste("Missing activation derivative for layer", layer))
     }
     
-    # Debugging: Print dimensions
-    cat("Weights dimensions:\n"); print(dim(next_weights))
-    cat("Errors dimensions:\n"); print(dim(next_errors))
+    # Forward output for this layer
+    activation_input <- predicted_output_learn_hidden[[layer]]
     
-    # Adjust error shape to match next_weights for matrix multiplication
-    if (ncol(next_errors) != nrow(next_weights)) {
-      if (ncol(next_errors) > nrow(next_weights)) {
-        next_errors <- next_errors[, 1:nrow(next_weights), drop = FALSE]
-      } else {
-        next_errors <- matrix(
-          rep(next_errors, length.out = nrow(next_errors) * nrow(next_weights)),
-          nrow = nrow(next_errors),
-          ncol = nrow(next_weights)
-        )
-      }
-    }
+    # Compute local derivative
+    local_deriv <- activation_derivative_function(activation_input)
     
-    if (nrow(next_errors) != ncol(next_weights)) {
-      if (nrow(next_errors) > ncol(next_weights)) {
-        next_errors <- next_errors[1:ncol(next_weights), , drop = FALSE]
-      } else {
-        next_errors <- matrix(
-          rep(next_errors, length.out = ncol(next_weights) * ncol(next_errors)),
-          nrow = ncol(next_weights),
-          ncol = ncol(next_errors)
-        )
-      }
-    }
+    # Backpropagation: propagated error times activation derivative
+    propagated_error <- next_error %*% t(weight_next)
     
-    # Perform matrix multiplication for backpropagation
-    cat("Performing matrix multiplication for layer", layer, "\n")
-    errors[[layer]] <- next_weights %*% next_errors
+    # Apply elementwise derivative
+    errors[[layer]] <- propagated_error * local_deriv
   }
+  
   
 } else {
-  # Single-layer neural network
+  # --------- Single-Layer Backpropagation ---------
   cat("Single Layer Backpropagation\n")
   
-  weight_matrix <- as.matrix(self$weights[[1]])
-  error_matrix <- errors[[1]]
-  
-  if (is.null(weight_matrix) || is.null(error_matrix)) {
-    stop("Error: Weights or errors for single layer do not exist.")
+  # Retrieve activation derivative function
+  if (!is.null(activation_functions_learn[[1]]) &&
+      activation_functions_learn[[1]] %in% valid_activations) {
+    activation_derivative_function <- get(paste0(activation_functions_learn[[1]], "_derivative"))
+  } else {
+    stop("Missing activation derivative function for single-layer network")
   }
   
-  cat("Weights dimensions:\n"); print(dim(weight_matrix))
-  cat("Errors dimensions:\n"); print(dim(error_matrix))
-  
-  if (ncol(error_matrix) != nrow(weight_matrix)) {
-    if (ncol(error_matrix) > nrow(weight_matrix)) {
-      error_matrix <- error_matrix[, 1:nrow(weight_matrix), drop = FALSE]
-    } else {
-      error_matrix <- matrix(
-        rep(error_matrix, length.out = nrow(error_matrix) * nrow(weight_matrix)),
-        nrow = nrow(error_matrix),
-        ncol = nrow(weight_matrix)
-      )
-    }
+  # Use pre-activation input for derivative (not the output)
+  Z <- Rdata %*% self$weights  # Single-layer has self$weights as a matrix
+  biases <- if (length(self$biases) == 1) {
+    matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
+  } else if (length(self$biases) == ncol(Z)) {
+    matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
+  } else {
+    stop("Bias dimension does not match output neurons for single-layer network")
   }
   
-  if (nrow(error_matrix) != ncol(weight_matrix)) {
-    if (nrow(error_matrix) > ncol(weight_matrix)) {
-      error_matrix <- error_matrix[1:ncol(weight_matrix), , drop = FALSE]
-    } else {
-      error_matrix <- matrix(
-        rep(error_matrix, length.out = ncol(weight_matrix) * ncol(error_matrix)),
-        nrow = ncol(weight_matrix),
-        ncol = ncol(error_matrix)
-      )
-    }
-  }
+  activation_input <- Z + biases
+  local_deriv <- activation_derivative_function(activation_input)
   
-  errors[[1]] <- weight_matrix %*% error_matrix
+  # Compute error for single-layer
+  errors <- list()
+  errors[[1]] <- error * local_deriv  # Elementwise: [n_samples, output_dim]
+  
+  
 }
 
 # Final Adjustment for errors[[1]] to match Rdata
@@ -1626,6 +1608,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       
       dim_hidden_layers <- vector("list", self$num_layers)
       
+      # --------- First Layer Forward Pass ---------
       
       # Get activation function for the first layer if exists
       
@@ -1683,7 +1666,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       
       
       
-      
+      # --------- > First Layer Forward Pass ---------
       
       
       for (layer in 2:self$num_layers) {
@@ -2065,41 +2048,52 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     
     # --------- Backpropagation Begins ---------
     
-    # Initialize the error list
+    if (!is.null(activation_functions[[layer]])  && activation_functions[[layer]] %in% c("sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus", "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation", "custom_activation", "custom_binary_activation", "softmax", "bent_identity")) {
+      activation_derivative_function <- get(paste0(activation_functions[[layer]], "_derivative"))
+    } else {
+      activation_derivative_function <- NULL
+    }
+
     errors <- vector("list", self$num_layers)
-    errors[[self$num_layers]] <- error_last_layer  # Only the output layer gets label-derived error
+    errors[[self$num_layers]] <- error_last_layer  # [4500, out_dim]
     
-    # Perform backward propagation through layers
+    if (self$ML_NN) {
     for (layer in (self$num_layers - 1):1) {
       next_error <- errors[[layer + 1]]
       weight_next <- self$weights[[layer + 1]]
       
-      # Attempt to backpropagate using correct shape
-      te <- t(next_error)
+      # Use forward pass output for derivative
+      activation_input <- hidden_outputs[[layer]]
       
-      # Debug dimensions
-      cat("Backprop: layer", layer, "\n")
-      cat("dim(weight_next):", paste(dim(weight_next), collapse = " x "), "\n")
-      cat("dim(t(next_error)):", paste(dim(te), collapse = " x "), "\n")
-      
-      # If not conformable, try without transpose
-      if (ncol(weight_next) != nrow(te)) {
-        cat("Trying alternative shape without transpose...\n")
-        te <- next_error  # revert to original (untransposed)
-        cat("dim(next_error):", paste(dim(te), collapse = " x "), "\n")
-        
-        # Final conformability check
-        if (ncol(weight_next) != nrow(te)) {
-          stop(paste("Non-conformable for %*% at layer", layer, ":",
-                     "weight dims", paste(dim(weight_next), collapse = "x"),
-                     "vs error dims", paste(dim(te), collapse = "x")))
-        }
+      # Use derivative function (you already resolved this earlier)
+      if (!is.null(activation_derivative_function)) {
+        derivative_applied <- activation_derivative_function(activation_input)
+      } else {
+        stop(paste("Missing activation derivative function at layer", layer))
       }
       
-      # Perform the matrix multiplication
-      errors[[layer]] <- weight_next %*% te
+      # Backpropagate: [4500, current_layer_size] = [4500, next_layer_size] %*% t(weights[[next_layer]])
+      propagated_error <- next_error %*% t(weight_next)
+      
+      # Apply derivative
+      errors[[layer]] <- propagated_error * derivative_applied
+    }}
+    else{
+      cat("Single Layer Backpropagation\n")
+      
+      if (!is.null(activation_functions[[1]]) &&
+          activation_functions[[1]] %in% valid_activations) {
+        activation_derivative_function <- get(paste0(activation_functions[[1]], "_derivative"))
+      } else {
+        stop("Missing activation derivative function for single-layer")
+      }
+      
+      activation_input <- predicted_output_train_reg  # this is your forward pass output
+      local_deriv <- activation_derivative_function(activation_input)
+      
+      errors <- list()
+      errors[[1]] <- error_last_layer * local_deriv
     }
-    
 
     
     
@@ -5604,31 +5598,104 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
 
 
 
+binary_activation_derivative <- function(x) {
+  return(rep(0, length(x)))  # Non-differentiable, set to 0
+}
+
+
+custom_binary_activation_derivative <- function(x, threshold = -1.08) {
+  return(rep(0, length(x)))  # Also a step function, gradient is zero everywhere
+}
+
+
+custom_activation_derivative <- function(z) {
+  softplus_output <- log1p(exp(z))
+  softplus_derivative <- 1 / (1 + exp(-z))  # sigmoid
+  
+  # If thresholding applies hard cut-off, gradient becomes 0
+  return(ifelse(softplus_output > 0.00000000001, 0, softplus_derivative))
+}
+
+bent_identity_derivative <- function(x) {
+  return(x / (2 * sqrt(x^2 + 1)) + 1)
+}
+
+relu_derivative <- function(x) {
+  return(ifelse(x > 0, 1, 0))
+}
+
+
+softplus_derivative <- function(x) {
+  return(1 / (1 + exp(-x)))
+}
+
+leaky_relu_derivative <- function(x, alpha = 0.01) {
+  return(ifelse(x > 0, 1, alpha))
+}
+
+elu_derivative <- function(x, alpha = 1.0) {
+  return(ifelse(x > 0, 1, alpha * exp(x)))
+}
+
+tanh_derivative <- function(x) {
+  t <- tanh(x)
+  return(1 - t^2)
+}
+
+sigmoid_derivative <- function(x) {
+  s <- 1 / (1 + exp(-x))
+  return(s * (1 - s))
+}
+
+hard_sigmoid_derivative <- function(x) {
+  return(ifelse(x > -2.5 & x < 2.5, 0.2, 0))
+}
+
+swish_derivative <- function(x) {
+  s <- 1 / (1 + exp(-x))  # sigmoid(x)
+  return(s + x * s * (1 - s))
+}
+
+sigmoid_binary_derivative <- function(x) {
+  # Approximate pseudo-gradient
+  return(rep(0, length(x)))  # Step function is not differentiable
+}
+
+gelu_derivative <- function(x) {
+  phi <- 0.5 * (1 + erf(x / sqrt(2)))
+  dphi <- exp(-x^2 / 2) / sqrt(2 * pi)
+  return(0.5 * phi + x * dphi)
+}
+
+selu_derivative <- function(x, lambda = 1.0507, alpha = 1.67326) {
+  return(lambda * ifelse(x > 0, 1, alpha * exp(x)))
+}
+
+mish_derivative <- function(x) {
+  sp <- log1p(exp(x))              # softplus
+  tanh_sp <- tanh(sp)
+  grad_sp <- 1 - exp(-sp)          # d(softplus) ≈ sigmoid(x)
+  return(tanh_sp + x * grad_sp * (1 - tanh_sp^2))
+}
+
+maxout_derivative <- function(x, w1 = 0.5, b1 = 1.0, w2 = -0.5, b2 = 0.5) {
+  val1 <- w1 * x + b1
+  val2 <- w2 * x + b2
+  return(ifelse(val1 > val2, w1, w2))  # Returns the gradient of the active unit
+}
+
+prelu_derivative <- function(x, alpha = 0.01) {
+  return(ifelse(x > 0, 1, alpha))
+}
+
+softmax_derivative <- function(x) {
+  s <- softmax(x)
+  return(s * (1 - s))  # Only valid when loss is MSE, not cross-entropy
+}
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+###################################################################################################################################################################
 
 
 
