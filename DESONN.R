@@ -1855,64 +1855,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
           stop("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'.")
         }
         
-        
-        
-        # Ensure the columns of predicted_output_train_reg_hidden[[layer]] match labels
-        
-        
-        # if (ncol(labels) != ncol(predicted_output_train_reg_hidden[[layer]])) {
-        #     if (ncol(labels) < ncol(predicted_output_train_reg_hidden[[layer]])) {
-        #         replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[layer]][, 1:ncol(labels), drop = FALSE]
-        #     } else {
-        #         replicated_predicted_output_train_reg_hidden <- matrix(
-        #             rep(predicted_output_train_reg_hidden[[layer]], each = ncol(labels) / ncol(predicted_output_train_reg_hidden[[layer]])),
-        #             nrow = nrow(predicted_output_train_reg_hidden[[layer]]),
-        #             ncol = ncol(labels),
-        #             byrow = FALSE
-        #         )
-        #     }
-        # } else {
-        #     replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[layer]]
-        # }
-        #
-        # if (nrow(labels) != nrow(replicated_predicted_output_train_reg_hidden)) {
-        #     if (nrow(labels) < nrow(replicated_predicted_output_train_reg_hidden)) {
-        #         replicated_predicted_output_train_reg_hidden <- replicated_predicted_output_train_reg_hidden[1:nrow(labels), , drop = FALSE]
-        #     } else {
-        #         replicated_predicted_output_train_reg_hidden <- matrix(
-        #             rep(replicated_predicted_output_train_reg_hidden, length.out = nrow(labels) * ncol(replicated_predicted_output_train_reg_hidden)),
-        #             nrow = nrow(labels),
-        #             ncol = ncol(replicated_predicted_output_train_reg_hidden)
-        #         )
-        #     }
-        # }
-        
-        # if (ncol(labels) != ncol(predicted_output_train_reg_hidden[[self$num_layers]])) {
-        #     if (ncol(labels) < ncol(predicted_output_train_reg_hidden[[self$num_layers]])) {
-        #         replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[self$num_layers]][, 1:ncol(labels), drop = FALSE]
-        #     } else {
-        #         replicated_predicted_output_train_reg_hidden <- matrix(
-        #             rep(predicted_output_train_reg_hidden[[self$num_layers]], each = ncol(labels) / ncol(predicted_output_train_reg_hidden[[self$num_layers]])),
-        #             nrow = nrow(predicted_output_train_reg_hidden[[self$num_layers]]),
-        #             ncol = ncol(labels),
-        #             byrow = FALSE
-        #         )
-        #     }
-        # } else {
-        #     replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[self$num_layers]]
-        # }
-        #
-        # if (nrow(labels) != nrow(replicated_predicted_output_train_reg_hidden)) {
-        #     if (nrow(labels) < nrow(replicated_predicted_output_train_reg_hidden)) {
-        #         replicated_predicted_output_train_reg_hidden <- replicated_predicted_output_train_reg_hidden[1:nrow(labels), , drop = FALSE]
-        #     } else {
-        #         replicated_predicted_output_train_reg_hidden <- matrix(
-        #             rep(replicated_predicted_output_train_reg_hidden, length.out = nrow(labels) * ncol(replicated_predicted_output_train_reg_hidden)),
-        #             nrow = nrow(labels),
-        #             ncol = ncol(replicated_predicted_output_train_reg_hidden)
-        #         )
-        #     }
-        # }
+
         if (layer == 1) {
           # For the first layer, replicate or truncate predicted_output_train_reg_hidden[[1]]
           if (ncol(predicted_output_train_reg_hidden[[1]]) < ncol(labels)) {
@@ -2157,54 +2100,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       errors[[layer]] <- weight_next %*% te
     }
     
-    
-    
-    # # # Calculate the error for the output layer
-    # errors <- vector("list", self$num_layers)
-    # errors[[self$num_layers]] <- error_1000x10
-    #
-    # # Propagate the error backwards
-    # for (layer in (self$num_layers - 1):1) {
-    #     # Print dimensions for debugging
-    #     print(dim(self$weights[[layer + 1]]))        # Print dimensions of weights for the current layer
-    #     print(dim(t(errors[[layer + 1]])))           # Print dimensions of transposed errors for the next layer
-    #
-    #     # Ensure the dimensions of t(errors[[layer + 1]]) match the dimensions of self$weights[[layer + 1]]
-    #
-    #     # Check if the number of rows in t(errors[[layer + 1]]) matches the number of rows in self$weights[[layer + 1]]
-    #     if (nrow(t(errors[[layer + 1]])) != nrow(self$weights[[layer + 1]])) {
-    #         if (nrow(t(errors[[layer + 1]])) > nrow(self$weights[[layer + 1]])) {
-    #             # Truncate t(errors[[layer + 1]]) to match the number of rows in self$weights[[layer + 1]]
-    #             errors[[layer + 1]] <- errors[[layer + 1]][1:nrow(self$weights[[layer + 1]]), , drop = FALSE]
-    #         } else {
-    #             # Replicate t(errors[[layer + 1]]) to match the number of rows in self$weights[[layer + 1]]
-    #             errors[[layer + 1]] <- matrix(
-    #                 rep(errors[[layer + 1]], length.out = nrow(self$weights[[layer + 1]]) * ncol(t(errors[[layer + 1]]))),
-    #                 nrow = nrow(self$weights[[layer + 1]]),
-    #                 ncol = ncol(t(errors[[layer + 1]]))
-    #             )
-    #         }
-    #     }
-    #
-    #     # Check if the number of columns in t(errors[[layer + 1]]) matches the number of columns in self$weights[[layer + 1]]
-    #     if (ncol(t(errors[[layer + 1]])) != ncol(self$weights[[layer + 1]])) {
-    #         if (ncol(t(errors[[layer + 1]])) > ncol(self$weights[[layer + 1]])) {
-    #             # Truncate t(errors[[layer + 1]]) to match the number of columns in self$weights[[layer + 1]]
-    #             errors[[layer + 1]] <- errors[[layer + 1]][, 1:ncol(self$weights[[layer + 1]]), drop = FALSE]
-    #         } else {
-    #             # Replicate t(errors[[layer + 1]]) to match the number of columns in self$weights[[layer + 1]]
-    #             errors[[layer + 1]] <- matrix(
-    #                 rep(errors[[layer + 1]], length.out = nrow(errors[[layer + 1]]) * ncol(self$weights[[layer + 1]])),
-    #                 nrow = nrow(errors[[layer + 1]]),
-    #                 ncol = ncol(self$weights[[layer + 1]])
-    #             )
-    #         }
-    #     }
-    #
-    #     # Perform the backward error propagation
-    #     errors[[layer]] <- self$weights[[layer + 1]] %*% t(errors[[layer + 1]])
-    # }
-    
+
     
     
     # Initialize records and optimizer parameters if ML_NN is TRUE
@@ -2219,117 +2115,117 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     
     # Update weights
     if (update_weights) {
-      # Update weights for the first layer
       if (self$ML_NN) {
-        if (!is.null(self$weights[[layer]])) {
-          for (layer in 1:self$num_layers){
+        for (layer in 1:self$num_layers) {
+          if (!is.null(self$weights[[layer]]) && !is.null(optimizer)) {
             
-            if (!is.null(optimizer)) {
-              optimizer_params_weights[[layer]] <- initialize_optimizer_params(optimizer, dim(self$weights[[layer]]), lookahead_step)
+            # Initialize optimizer parameters if needed
+            if (is.null(optimizer_params_weights[[layer]])) {
+              optimizer_params_weights[[layer]] <- initialize_optimizer_params(
+                optimizer,
+                dim(self$weights[[layer]]),
+                lookahead_step
+              )
             }
             
             
-            # Check if the number of rows in t(errors[[layer]]) matches the number of rows in Rdata
-            if (nrow(t(errors[[layer]])) != nrow(Rdata)) {
-              if (nrow(t(errors[[layer]])) > nrow(Rdata)) {
-                # Truncate t(errors[[layer]]) to match the number of rows in Rdata
-                errors[[layer]] <- errors[[layer]][1:nrow(Rdata), , drop = FALSE]
-              } else {
-                # Replicate t(errors[[layer]]) to match the number of rows in Rdata
-                errors[[layer]] <- matrix(
-                  rep(errors[[layer]], length.out = nrow(Rdata) * ncol(t(errors[[layer]]))),
-                  nrow = nrow(Rdata),
-                  ncol = ncol(t(errors[[layer]]))
-                )
-              }
-            }
+            # # Check if the number of rows in t(errors[[layer]]) matches the number of rows in Rdata
+            # if (nrow(t(errors[[layer]])) != nrow(Rdata)) {
+            #   if (nrow(t(errors[[layer]])) > nrow(Rdata)) {
+            #     # Truncate t(errors[[layer]]) to match the number of rows in Rdata
+            #     errors[[layer]] <- errors[[layer]][1:nrow(Rdata), , drop = FALSE]
+            #   } else {
+            #     # Replicate t(errors[[layer]]) to match the number of rows in Rdata
+            #     errors[[layer]] <- matrix(
+            #       rep(errors[[layer]], length.out = nrow(Rdata) * ncol(t(errors[[layer]]))),
+            #       nrow = nrow(Rdata),
+            #       ncol = ncol(t(errors[[layer]]))
+            #     )
+            #   }
+            # }
+            # 
+            # # Check if the number of columns in t(errors[[layer]]) matches the number of columns in Rdata
+            # if (ncol(t(errors[[layer]])) != ncol(Rdata)) {
+            #   if (ncol(t(errors[[layer]])) > ncol(Rdata)) {
+            #     # Truncate t(errors[[layer]]) to match the number of columns in Rdata
+            #     errors[[layer]] <- errors[[layer]][, 1:ncol(Rdata), drop = FALSE]
+            #   } else {
+            #     # Replicate t(errors[[layer]]) to match the number of columns in Rdata
+            #     errors[[layer]] <- matrix(
+            #       rep(errors[[layer]], length.out = nrow(errors[[layer]]) * ncol(Rdata)),
+            #       nrow = nrow(errors[[layer]]),
+            #       ncol = ncol(Rdata)
+            #     )
+            #   }
+            # }
+            # 
+            # 
+            # # Compute the gradient matrix for the current layer
+            # err_mat <- errors[[layer]]
+            # 
+            # if (layer == 1) {
+            #   input_mat <- Rdata
+            # } else {
+            #   input_mat <- predicted_output_train_reg_hidden[[layer - 1]]
+            # }
+            # 
+            # # Handle row mismatch between input_mat and err_mat
+            # if (nrow(err_mat) != nrow(input_mat)) {
+            #   if (nrow(err_mat) < nrow(input_mat)) {
+            #     err_mat <- matrix(rep(err_mat, length.out = nrow(input_mat) * ncol(err_mat)),
+            #                       nrow = nrow(input_mat), ncol = ncol(err_mat))
+            #   } else {
+            #     err_mat <- err_mat[1:nrow(input_mat), , drop = FALSE]
+            #   }
+            # }
+            # 
+            # # Compute the gradients for this layer
+            # grads_matrix <- t(input_mat) %*% err_mat
             
-            # Check if the number of columns in t(errors[[layer]]) matches the number of columns in Rdata
-            if (ncol(t(errors[[layer]])) != ncol(Rdata)) {
-              if (ncol(t(errors[[layer]])) > ncol(Rdata)) {
-                # Truncate t(errors[[layer]]) to match the number of columns in Rdata
-                errors[[layer]] <- errors[[layer]][, 1:ncol(Rdata), drop = FALSE]
-              } else {
-                # Replicate t(errors[[layer]]) to match the number of columns in Rdata
-                errors[[layer]] <- matrix(
-                  rep(errors[[layer]], length.out = nrow(errors[[layer]]) * ncol(Rdata)),
-                  nrow = nrow(errors[[layer]]),
-                  ncol = ncol(Rdata)
-                )
-              }
-            }
-            
-            
-            # Compute the gradient matrix for the current layer
-            err_mat <- errors[[layer]]
-            
+            # Determine input matrix for current layer
             if (layer == 1) {
               input_mat <- Rdata
             } else {
               input_mat <- predicted_output_train_reg_hidden[[layer - 1]]
             }
             
-            # Handle row mismatch between input_mat and err_mat
-            if (nrow(err_mat) != nrow(input_mat)) {
-              if (nrow(err_mat) < nrow(input_mat)) {
-                err_mat <- matrix(rep(err_mat, length.out = nrow(input_mat) * ncol(err_mat)),
-                                  nrow = nrow(input_mat), ncol = ncol(err_mat))
-              } else {
-                err_mat <- err_mat[1:nrow(input_mat), , drop = FALSE]
-              }
+            # Ensure dimensions match before matrix multiplication
+            if (nrow(errors[[layer]]) != nrow(input_mat)) {
+              stop(paste("Row mismatch: errors has", nrow(errors[[layer]]), "rows, but input has", nrow(input_mat)))
             }
             
             # Compute the gradients for this layer
-            grads_matrix <- t(input_mat) %*% err_mat
+            grads_matrix <- t(input_mat) %*% errors[[layer]]
+            
             
             
             
             
             if (!is.null(optimizer)) {
-              
               optimizer_params_weights[[layer]] <- initialize_optimizer_params(optimizer, dim(self$weights[[layer]]), lookahead_step)
-              
-              # Debug statement
-              # cat("Layer", layer, "optimizer_params_weights initialized:\n", toString(optimizer_params_weights[[layer]]), "\n")
             }
             
-            
-            # Apply optimizer update if optimizer is specified
             if (!is.null(optimizer_params_weights[[layer]]) && !is.null(optimizer)) {
-              
               if (optimizer == "adam") {
-                # Update weights using Adam optimizer
-                optimizer_params_weights[[layer]] <- adam_update(optimizer_params_weights[[layer]], grads_matrix, lr, beta1, beta2, epsilon, t = epoch)
+                updated_optimizer <- apply_optimizer_update(
+                  optimizer = optimizer,
+                  optimizer_params = optimizer_params_weights,
+                  grads_matrix = grads_matrix,
+                  lr = lr,
+                  beta1 = beta1,
+                  beta2 = beta2,
+                  epsilon = epsilon,
+                  epoch = epoch,
+                  self = self,
+                  layer = layer,
+                  target = "weights"
+                )
                 
-                # Accessing the returned values
-                updated_weights_update <- optimizer_params_weights[[layer]]$weights_update
+                self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
+                optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                 
-                # Convert updated_weights_update to a numeric vector if it's a list
-                if (is.list(updated_weights_update)) {
-                  updated_weights_update <- unlist(updated_weights_update)
-                }
-                #@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                # Apply the regularization loss to the weight updates
-                # if (!is.null(reg_loss)) {
-                #     updated_weights_update <- updated_weights_update - (lr * reg_loss)
-                # }
-                #@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                # Perform subtraction for weights if dimensions match exactly
-                if (length(updated_weights_update) == prod(dim(self$weights[[layer]]))) {
-                  cat("Dimensions match exactly. Performing subtraction.\n")
-                  self$weights[[layer]] <- self$weights[[layer]] - matrix(updated_weights_update, nrow = nrow(self$weights[[layer]]), byrow = TRUE)
-                } else if (prod(dim(self$weights[[layer]])) == 1) {
-                  # Handle scalar weight updates
-                  cat("Handling scalar weight update.\n")
-                  update_value <- sum(updated_weights_update)  # Assuming summing the updates is appropriate
-                  self$weights[[layer]] <- self$weights[[layer]] - update_value
-                } else {
-                  cat("Dimensions do not match exactly. Adjusting dimensions for subtraction.\n")
-                  repeat_times <- ceiling(nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]) / length(updated_weights_update))
-                  repeated_updated_weights_update <- rep(updated_weights_update, length.out = nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]))
-                  self$weights[[layer]] <- self$weights[[layer]] - matrix(repeated_updated_weights_update, nrow = nrow(self$weights[[layer]]), byrow = TRUE)
-                }
-              }
+            }
+            
               else if (optimizer == "rmsprop") {
                 # Update weights using RMSprop optimizer
                 optimizer_params_weights[[layer]] <- rmsprop_update(optimizer_params_weights[[layer]], grads_matrix, lr, beta2, epsilon)
@@ -2899,73 +2795,83 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     
     # Update biases for the first layer
     if (update_biases) {
-      # Update biases for the first layer
       if (self$ML_NN) {
-        if (!is.null(self$biases[[layer]])) {
-          
-          
-          if (!is.null(optimizer)) {
+        for (layer in 1:self$num_layers) {
+          if (!is.null(self$biases[[layer]]) && !is.null(optimizer)) {
             
-            optimizer_params_biases[[layer]] <- initialize_optimizer_params(optimizer, dim(as.matrix(self$biases[[layer]])), lookahead_step)
-            
-            # Debug statement
-            # cat("First layer optimizer_params_biases initialized:\n", toString(optimizer_params_biases[[1]]), "\n")
-          }
-          
-          
-          # Update biases for layers 2 to num_layers
-          for (layer in 1:self$num_layers) {
-            
-            
-            if (!is.null(optimizer)) {
-              optimizer_params_biases[[layer]] <- initialize_optimizer_params(optimizer, dim(as.matrix(self$biases[[layer]])), lookahead_step)
-              
-              # Debug statement
-              # cat("Layer", layer, "optimizer_params_biases initialized:\n", toString(optimizer_params_biases[[layer]]), "\n")
+            # Initialize optimizer parameters only if not already done
+            if (is.null(optimizer_params_biases[[layer]])) {
+              optimizer_params_biases[[layer]] <- initialize_optimizer_params(
+                optimizer,
+                dim(as.matrix(self$biases[[layer]])),
+                lookahead_step
+              )
             }
+            
+            
+
             # Apply optimizer update if optimizer is specified
             if (!is.null(optimizer_params_biases[[layer]]) && !is.null(optimizer)) {
               if (optimizer == "adam") {
-                
-                
-                # Assuming optimizer_params_biases[[layer]] already initialized and other variables defined
-                optimizer_params_biases[[layer]] <- adam_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr, beta1, beta2, epsilon, t = epoch)
-                
-                # Accessing the returned values
-                updated_m_bias <- optimizer_params_biases[[layer]]$m
-                updated_v_bias <- optimizer_params_biases[[layer]]$v
-                updated_biases_update <- optimizer_params_biases[[layer]]$biases_update
-                
-                # Convert updated_biases_update to a numeric vector if it's a list
-                if (is.list(updated_biases_update)) {
-                  updated_biases_update <- unlist(updated_biases_update)
-                }
-                
-                #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                # Apply the regularization loss to the bias updates
-                # if (!is.null(reg_loss)) {
-                #     updated_biases_update <- updated_biases_update - (lr * reg_loss)
-                # }
-                #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                # Checking and updating biases
-                if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                  cat("Dimensions match for matrix. Performing subtraction.\n")
-                  self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                  cat("Dimensions match for vector. Performing subtraction.\n")
-                  self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                } else {
-                  cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                  cat("Attempting to adjust dimensions if possible.\n")
+            
+                  updated_optimizer <- apply_optimizer_update(
+                    optimizer = optimizer,
+                    optimizer_params = optimizer_params_biases,
+                    grads_matrix = grads_matrix,
+                    lr = lr,
+                    beta1 = beta1,
+                    beta2 = beta2,
+                    epsilon = epsilon,
+                    epoch = epoch,
+                    self = self,
+                    layer = layer,
+                    target = "biases"
+                  )
                   
-                  # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                  if (is.vector(updated_biases_update)) {
-                    repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                    self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                  } else {
-                    cat("Unable to adjust dimensions for updated_biases_update.\n")
-                  }
-                }
+                  self$biases[[layer]] <- updated_optimizer$updated_weights_or_biases
+                  optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
+                  
+              
+                
+              #   # Assuming optimizer_params_biases[[layer]] already initialized and other variables defined
+              #   optimizer_params_biases[[layer]] <- adam_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr, beta1, beta2, epsilon, t = epoch)
+              #   
+              #   # Accessing the returned values
+              #   updated_m_bias <- optimizer_params_biases[[layer]]$m
+              #   updated_v_bias <- optimizer_params_biases[[layer]]$v
+              #   updated_biases_update <- optimizer_params_biases[[layer]]$biases_update
+              #   
+              #   # Convert updated_biases_update to a numeric vector if it's a list
+              #   if (is.list(updated_biases_update)) {
+              #     updated_biases_update <- unlist(updated_biases_update)
+              #   }
+              #   
+              #   #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+              #   # Apply the regularization loss to the bias updates
+              #   # if (!is.null(reg_loss)) {
+              #   #     updated_biases_update <- updated_biases_update - (lr * reg_loss)
+              #   # }
+              #   #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+              #   # Checking and updating biases
+              #   if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
+              #     cat("Dimensions match for matrix. Performing subtraction.\n")
+              #     self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
+              #   } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
+              #     cat("Dimensions match for vector. Performing subtraction.\n")
+              #     self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
+              #   } else {
+              #     cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
+              #     cat("Attempting to adjust dimensions if possible.\n")
+              #     
+              #     # Attempting to adjust dimensions if updated_biases_update is not directly suitable
+              #     if (is.vector(updated_biases_update)) {
+              #       repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
+              #       self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
+              #     } else {
+              #       cat("Unable to adjust dimensions for updated_biases_update.\n")
+              #     }
+              #   }
+              # }
               }
               else if (optimizer == "rmsprop") {
                 optimizer_params_biases[[layer]] <- rmsprop_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr, beta2, epsilon)
@@ -3440,6 +3346,24 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   # weights_record <- lapply(weights_record, as.matrix)
   # biases_record <- lapply(biases_record, as.matrix)
   
+  if (self$ML_NN) {
+    for (layer in 1:self$num_layers) {
+      cat(sprintf("Layer %d weights summary:\n", layer))
+      print(summary(as.vector(weights_record[[layer]])))
+      
+      cat(sprintf("Layer %d biases summary:\n", layer))
+      print(summary(as.vector(biases_record[[layer]])))
+    }
+  } else {
+    cat("Single-layer weights summary:\n")
+    print(summary(as.vector(weights_record)))
+    
+    cat("Single-layer biases summary:\n")
+    print(summary(as.vector(biases_record)))
+  }
+  
+  
+  
   # Dynamic assignment of weights and biases records
   for (i in 1:length(self$ensemble)) {
     weight_record_name <- paste0("weights_record_", i)
@@ -3742,7 +3666,7 @@ DESONN <- R6Class(
       
     },
     # Function to normalize specific columns in the data
-    normalize_data = function(Rdata, numeric_columns) {
+normalize_data = function(Rdata, numeric_columns) {
       # Calculate mean and standard deviation for each numeric feature
       means <- colMeans(Rdata[, numeric_columns])
       std_devs <- apply(Rdata[, numeric_columns], 2, sd)
@@ -3768,7 +3692,7 @@ DESONN <- R6Class(
     
     ,
     # Function to perform batch normalization on specific columns in the data
-    batch_normalize_data = function(Rdata, numeric_columns, gamma_bn, beta_bn, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE) {
+batch_normalize_data = function(Rdata, numeric_columns, gamma_bn, beta_bn, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE) {
       
       if (is_training_bn) {
         # Training mode: Compute mean and variance from the current batch
@@ -3820,7 +3744,7 @@ DESONN <- R6Class(
       return(list(normalized_data = normalized_data_bn, running_mean = running_mean_bn, running_var = running_var_bn))
     },
     # Function to calculate a reasonable batch size
-    calculate_batch_size = function(data_size, max_batch_size = 512, min_batch_size = 32) {
+calculate_batch_size = function(data_size, max_batch_size = 512, min_batch_size = 32) {
       # Get the number of rows from the dataset
       n <- nrow(data_size)
       
@@ -3838,7 +3762,7 @@ DESONN <- R6Class(
     },
     
     
-    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE) {
+train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3950,6 +3874,24 @@ DESONN <- R6Class(
               self$ensemble[[i]]$train_with_l2_regularization(
                 Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step
               )))
+            
+            # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
+            if (is.null(predicted_outputAndTime$predicted_output_l2)) {
+              predicted_outputAndTime$predicted_output_l2 <- list()
+              predicted_outputAndTime$predicted_output_l2$predicted_output <- predicted_outputAndTime$hidden_outputs[1:self$num_layers]
+              predicted_outputAndTime$dim_hidden_layers <- lapply(weights_record, dim)
+            } else {
+              # Otherwise, clean up NULL entries in the output
+              valid_outputs <- Filter(Negate(is.null), predicted_outputAndTime$predicted_output_l2$predicted_output)
+              valid_dims <- lapply(seq_along(valid_outputs), function(i) dim(self$weights[[i]]))
+              predicted_outputAndTime$predicted_output_l2$predicted_output <- valid_outputs
+              predicted_outputAndTime$dim_hidden_layers <- valid_dims
+            }
+            
+            # --- Final integrity check ---
+            stopifnot(length(predicted_outputAndTime$predicted_output_l2$predicted_output) == length(predicted_outputAndTime$dim_hidden_layers))
+            
+            
             # At the end of the training process, call the predict function
             # trained_predictions <<- self$predict(Rdata, labels, activation_functions)
             # print(dim(labels))
@@ -3961,7 +3903,18 @@ DESONN <- R6Class(
             }
             
             # Calculate and print the accuracy
-            accuracy <- calculate_accuracy(predicted_outputAndTime$predicted_output_l2$predicted_output[[num_layers]], labels)
+            # Extract predicted probabilities (matrix of shape [N, 1])
+            probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
+            
+            # Convert to binary predictions using threshold 0.5
+            binary_preds <- ifelse(probs >= 0.5, 1, 0)
+            
+            # Flatten actual labels
+            labels_flat <- as.vector(labels)
+            
+            # Now calculate accuracy
+            accuracy <- calculate_accuracy(binary_preds, labels_flat)
+            
             # accuracy <- calculate_accuracy(learn_results$predicted_output_learn, labels)
             # accuracy <- calculate_accuracy(trained_predictions, labels)
             print(paste("Accuracy:", accuracy))
@@ -3970,7 +3923,7 @@ DESONN <- R6Class(
             Rdata <- cbind(Rdata, labels)
             # Add the predictions column using mutate
             Rdata_predictions <<- Rdata %>%
-              mutate(Predictions = predicted_outputAndTime$predicted_output_l2$predicted_output[[num_layers]])
+              mutate(Predictions = binary_preds)
             
             write_xlsx(Rdata_predictions, "Rdata_predictions3.xlsx")
             
@@ -3984,30 +3937,86 @@ DESONN <- R6Class(
             
             if(ML_NN){
               
-              # Extract the outputs and their corresponding hidden sizes (weights)
-              all_layer_outputs <<- predicted_outputAndTime$predicted_output_l2$predicted_output
-              dim_hidden_sizes <- predicted_outputAndTime$dim_hidden_layers
+              # Step 1: Extract predicted output
+              predicted_output_raw <- predicted_outputAndTime$predicted_output_l2$predicted_output
+              cat("Type of predicted_output:", typeof(predicted_output_raw), "\n")
+              cat("Is list of layers?", is.list(predicted_output_raw), "\n")
               
-              # Compute the sum of all hidden sizes
+              # Step 2: Normalize predicted output to list format
+              if (!is.list(predicted_output_raw)) {
+                all_layer_outputs <- list(predicted_output_raw)
+              } else {
+                all_layer_outputs <- predicted_output_raw
+              }
+              
+              # Step 3: Extract dim_hidden_sizes
+              dim_hidden_sizes <- predicted_outputAndTime$dim_hidden_layers
+              if (is.null(dim_hidden_sizes) || length(dim_hidden_sizes) == 0 || all(sapply(dim_hidden_sizes, is.null))) {
+                dim_hidden_sizes <- lapply(predicted_outputAndTime$weights_record, function(w) {
+                  if (!is.null(w)) dim(w) else NULL
+                })
+                cat("dim_hidden_sizes reconstructed from weights_record\n")
+              }
+              
+              # Debug structure lengths
+              cat("Post-wrap: all_layer_outputs length = ", length(all_layer_outputs), "\n")
+              cat("Post-wrap: dim_hidden_sizes length = ", length(dim_hidden_sizes), "\n")
+              
+              # Ensure valid types
+              valid_outputs_logical <- sapply(all_layer_outputs, function(x) is.matrix(x) || is.vector(x))
+              valid_dims_logical <- sapply(dim_hidden_sizes, function(x) is.numeric(x) && is.atomic(x) && length(x) >= 2)
+              
+              # Pad shorter vector if needed to prevent filtering everything
+              len_diff <- length(dim_hidden_sizes) - length(all_layer_outputs)
+              if (len_diff > 0) {
+                all_layer_outputs <- c(all_layer_outputs, rep(list(NULL), len_diff))
+                valid_outputs_logical <- c(valid_outputs_logical, rep(FALSE, len_diff))
+              }
+              
+              # Filter only matched valid indices
+              min_len <- min(length(valid_outputs_logical), length(valid_dims_logical))
+              valid_indices <- which(valid_outputs_logical[1:min_len] & valid_dims_logical[1:min_len])
+              
+              # If nothing matched, fallback to first valid output and full dim list
+              if (length(valid_indices) == 0 && length(all_layer_outputs) == 1 && length(dim_hidden_sizes) >= 1) {
+                all_layer_outputs <- all_layer_outputs[1]
+                dim_hidden_sizes <- dim_hidden_sizes
+                cat("⚠️ Using fallback path: single output, full dim list\n")
+              } else {
+                all_layer_outputs <- all_layer_outputs[valid_indices]
+                dim_hidden_sizes <- dim_hidden_sizes[valid_indices]
+              }
+              
+              # Final checks
+              cat("Filtered dim_hidden_sizes structure:\n")
+              str(dim_hidden_sizes)
+              cat("Filtered all_layer_outputs length =", length(all_layer_outputs), "\n")
+              cat("Filtered dim_hidden_sizes length =", length(dim_hidden_sizes), "\n")
+              
+              stopifnot(length(all_layer_outputs) == length(dim_hidden_sizes))
+              
+              # Compute total hidden size
               total_hidden_size <- sum(sapply(dim_hidden_sizes, function(x) x[2]))
               
-              # Loop through each layer output and compute weighted sum
+              
+              weighted_sum_output <- NULL
+              
               for (l in seq_along(all_layer_outputs)) {
                 layer_output <- all_layer_outputs[[l]]
+                if (is.null(dim(layer_output))) {
+                  layer_output <- matrix(layer_output, ncol = 1)
+                }
                 
-                # Initialize weighted_sum_output with dimensions of the current layer output
-                weighted_sum_output <- array(0, dim = dim(layer_output))
+                if (is.null(weighted_sum_output)) {
+                  weighted_sum_output <- matrix(0, nrow = nrow(layer_output), ncol = ncol(layer_output))
+                }
                 
-                # Use the second dimension of the hidden size as the weight, normalized by the total hidden size
                 layer_weight <- dim_hidden_sizes[[l]][2] / total_hidden_size
-                
-                # Compute weighted sum
-                weighted_sum_output <<- weighted_sum_output + layer_output * layer_weight
-                
-                # Print dimensions for debugging
-                # cat("Dimensions of weighted_sum_output in iteration", i, ":\n")
-                # print(dim(weighted_sum_output))
+                weighted_sum_output <- weighted_sum_output + layer_output * layer_weight
               }
+              
+              
+              
               
               
               final_layer_prediction_time <- predicted_outputAndTime$train_reg_prediction_time[[length(predicted_outputAndTime$train_reg_prediction_time)]]
@@ -4251,7 +4260,8 @@ DESONN <- R6Class(
         print(performance_relevance_plots$relevance_low_mean_plots)
       }
     }, # Method for updating performance and relevance metrics
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime) {
+
+update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime) {
       
       # Initialize lists to store performance and relevance metrics for each SONN
       performance_list <- list()
@@ -5664,11 +5674,12 @@ bent_identity <- function(x) {
 }
 
 relu <- function(x) {
+  readthedata <<- x
   return(ifelse(x > 0, x, 0))
 }
 
 softplus <- function(x) {
-  store <<- log(1 + exp(x))
+  store <- log(1 + exp(x))
   return(log(1 + exp(x)))
 }
 
@@ -5685,6 +5696,7 @@ tanh <- function(x) {
 }
 
 sigmoid <- function(x) {
+  readthedata2 <<- x
   return(1 / (1 + exp(-x)))
 }
 
@@ -5697,6 +5709,7 @@ swish <- function(x) {
 }
 
 sigmoid_binary <- function(x) {
+  
   return(ifelse((1 / (1 + exp(-x))) >= 0.5, 1, 0))
 }
 
