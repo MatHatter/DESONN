@@ -1803,10 +1803,43 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
         }
         
       }
-    }else{
+    }else {
+      cat("Single Layer Forward Pass\n")
+      
       predicted_output_train_reg_prediction_time <- list()
-      predicted_output_train_reg_prediction_time <- predicted_output_train_reg$prediction_time[[1]]
+      predicted_output_train_reg_prediction_time[[1]] <- predicted_output_train_reg$prediction_time[[1]]
       dim_hidden_layers <- NULL
+      
+      # Construct biases
+      input_rows <- nrow(Rdata)
+      output_cols <- ncol(self$weights)
+      bias_vec <- self$biases
+      
+      if (length(bias_vec) == 1) {
+        biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(bias_vec) == output_cols) {
+        biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(bias_vec) < output_cols) {
+        biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else {
+        biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      }
+      
+      # Pre-activation forward pass
+      Z_input <- Rdata %*% self$weights + biases
+      activation_input <- Z_input
+      
+      if (!is.null(activation_functions[[1]]) &&
+          activation_functions[[1]] %in% valid_activations) {
+        activation_function <- get(activation_functions[[1]])
+        activated_output <- activation_function(activation_input)
+      } else {
+        activated_output <- activation_input
+      }
+      
+      # Store result as hidden layer 1 output
+      predicted_output_train_reg_hidden <- list()
+      predicted_output_train_reg_hidden[[1]] <- activated_output
     }
     
     
@@ -2150,9 +2183,16 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     }
     
     
-    else{
+    else {
       cat("Single Layer Backpropagation\n")
       
+      # Use the same Z_input from forward pass as activation_input
+      activation_input <- predicted_output_train_reg_hidden[[1]]
+      if (is.list(activation_input)) {
+        activation_input <- as.matrix(activation_input)
+      }
+      
+      # Get derivative function
       if (!is.null(activation_functions[[1]]) &&
           activation_functions[[1]] %in% valid_activations) {
         activation_derivative_function <- get(paste0(activation_functions[[1]], "_derivative"))
@@ -2160,17 +2200,15 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
         stop("Missing activation derivative function for single-layer")
       }
       
-      activation_input <- predicted_output_train_reg  # this is your forward pass output
-      if (is.list(activation_input)) {
-        activation_input <- as.matrix(activation_input[[1]])
-      }
       local_deriv <- activation_derivative_function(activation_input)
-      
-      
       
       errors <- list()
       errors[[1]] <- error_last_layer * local_deriv
+      
     }
+    
+    
+    
 
     
     
