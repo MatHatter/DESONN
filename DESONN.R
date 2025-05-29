@@ -110,13 +110,13 @@ self$dropout_rates_learn <- self$dropout_rates
                 self$weights <- init$weights
                 self$biases <- init$biases
             }else{
-                self$weights <- as.matrix(matrix(runif(input_size *  output_size), ncol = output_size, nrow = input_size)) #should highly consider removing column if not relevant
+                self$weights <- matrix(runif(input_size *  output_size), ncol = output_size, nrow = input_size) #should highly consider removing column if not relevant
                 self$biases <- rnorm(output_size, mean = 0, sd = 0.01)
             }
 
 
 
-    weights_stored <<- self$weights[[1]]
+    weights_stored <<- as.matrix(self$weights[[1]])
     biases_stored <<- as.matrix(self$biases)
 
 
@@ -160,58 +160,63 @@ self$dropout_rates_learn <- self$dropout_rates
 
         },
 initialize_weights = function(input_size, hidden_sizes, output_size, method = init_method, custom_scale) {
-
-    weights <- list()
-    biases <- list()
-
-    init_weight <- function(fan_in, fan_out, method, custom_scale) {
-        if (method == "xavier") {
-            scale <- ifelse(!is.null(custom_scale), custom_scale, 1) # Default scale = 1 if custom_scale is NULL
-            sd <- sqrt(2 / (fan_in + fan_out) * scale)
-        } else if (method == "he") {
-            sd <- sqrt(2 / fan_in)
-        } else if (method == "lecun") {
-            sd <- sqrt(1 / fan_in)
-        } else if (method == "orthogonal") {
-            library(Matrix)
-            A <- matrix(rnorm(fan_in * fan_out), ncol = fan_out, nrow = fan_in)
-            Q <- qr.Q(qr(A))
-            if (ncol(Q) < fan_out) {
-                Q <- cbind(Q, matrix(0, nrow = fan_in, ncol = fan_out - ncol(Q)))
-            }
-            return(Q)
-        } else if (method == "variance_scaling") {
-            sd <- custom_scale
-        } else if (method == "glorot_uniform") {
-            limit <- sqrt(6 / (fan_in + fan_out))
-            return(matrix(runif(fan_in * fan_out, min = -limit, max = limit), ncol = fan_out, nrow = fan_in))
-        } else {
-            sd <- 0.01
-        }
-
-        return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
+  
+  weights <- list()
+  biases <- list()
+  
+  init_weight <- function(fan_in, fan_out, method, custom_scale) {
+    if (method == "xavier") {
+      scale <- ifelse(!is.null(custom_scale), custom_scale, 1)
+      sd <- sqrt(2 / (fan_in + fan_out)) * scale
+    } else if (method == "he") {
+      sd <- sqrt(2 / fan_in)
+    } else if (method == "lecun") {
+      sd <- sqrt(1 / fan_in)
+    } else if (method == "orthogonal") {
+      library(Matrix)
+      A <- matrix(rnorm(fan_in * fan_out), ncol = fan_out, nrow = fan_in)
+      Q <- qr.Q(qr(A))
+      if (ncol(Q) < fan_out) {
+        Q <- cbind(Q, matrix(0, nrow = fan_in, ncol = fan_out - ncol(Q)))
+      }
+      return(as.matrix(Q))  # Ensure matrix
+    } else if (method == "variance_scaling") {
+      sd <- sqrt(1 / (fan_in + fan_out)) * custom_scale
+    } else if (method == "glorot_uniform") {
+      limit <- sqrt(6 / (fan_in + fan_out))
+      return(matrix(runif(fan_in * fan_out, min = -limit, max = limit), 
+                    ncol = fan_out, nrow = fan_in))
+    } else {
+      sd <- 0.01
     }
+    
+    return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), 
+                  ncol = fan_out, nrow = fan_in))
+  }
+  
+  # Initialize weights and biases for the first layer
+  weights[[1]] <- init_weight(input_size, hidden_sizes[1], method, custom_scale)
+  biases[[1]] <- matrix(rnorm(hidden_sizes[1], mean = 0, sd = 0.01), ncol = 1)
+  
+  # Initialize weights and biases for hidden layers
+  for (layer in 2:length(hidden_sizes)) {
+    weights[[layer]] <- init_weight(hidden_sizes[layer - 1], hidden_sizes[layer], method, custom_scale)
+    biases[[layer]] <- matrix(rnorm(hidden_sizes[layer], mean = 0, sd = 0.01), ncol = 1)
+  }
+  
+  # Initialize weights and biases for the output layer
+  last_hidden_size <- hidden_sizes[[length(hidden_sizes)]]
+  weights[[length(hidden_sizes) + 1]] <- matrix(init_weight(last_hidden_size, output_size, method, custom_scale))
+  biases[[length(hidden_sizes) + 1]] <- matrix(rnorm(output_size, mean = 0, sd = 0.01), ncol = 1)
+  
+  # Assign weights and biases to self
+  self$weights <- weights
+  self$biases <- biases
+  
+  return(list(weights = weights, biases = biases))
+}
+,
 
-    # Initialize weights and biases for the first layer
-    weights[[1]] <- init_weight(input_size, hidden_sizes[1], method, custom_scale)
-    biases[[1]] <- matrix(rnorm(hidden_sizes[1], mean = 0, sd = 0.01), ncol = 1)
-
-    # Initialize weights and biases for hidden layers
-    for (layer in 2:length(hidden_sizes)) {
-        weights[[layer]] <- init_weight(hidden_sizes[layer - 1], hidden_sizes[layer], method, custom_scale)
-        biases[[layer]] <- matrix(rnorm(hidden_sizes[layer], mean = 0, sd = 0.01), ncol = 1)
-    }
-
-    # Initialize weights and biases for the output layer
-    weights[[length(hidden_sizes) + 1]] <- init_weight(hidden_sizes[length(hidden_sizes)], output_size, method, custom_scale)
-    biases[[length(hidden_sizes) + 1]] <- matrix(rnorm(output_size, mean = 0, sd = 0.01), ncol = 1)
-
-    # Assign weights and biases to self
-    self$weights <- weights
-    self$biases <- biases
-
-    return(list(weights = weights, biases = biases))
-},
 
 process_input_size = function(input_size) {
             # If the input is a numeric vector
@@ -284,31 +289,12 @@ dropout = function(x, rate) {
 self_organize = function(Rdata, labels, lr) {
     print("------------------------self-organize-begin----------------------------------------")
 
-  # Bias handling for layer 1
-  input_rows <- nrow(Rdata)
-  output_cols <- ncol(self$weights[[1]])
-  bias_vec <- self$biases[[1]]
-  
-  if (length(bias_vec) == 1) {
-    # Scalar bias
-    biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(bias_vec) == output_cols) {
-    # One bias per neuron
-    biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(bias_vec) < output_cols) {
-    # Fewer biases, replicate
-    biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(bias_vec) > output_cols) {
-    # Too many biases, truncate
-    biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else {
-    stop("Length of biases does not match the number of neurons in the first layer")
-  }
+
   
 
 
   if (self$ML_NN) {
-    # Perform first layer output computation with safe bias broadcasting
+    # Multi-layer mode: First layer
     input_rows <- nrow(Rdata)
     output_cols <- ncol(self$weights[[1]])
     
@@ -317,7 +303,7 @@ self_organize = function(Rdata, labels, lr) {
     } else if (length(self$biases[[1]]) == output_cols) {
       bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
     } else if (length(self$biases[[1]]) < output_cols) {
-      bias_matrix <- matrix(rep(self$biases[[1]], length.out = output_cols),
+      bias_matrix <- matrix(rep(self$biases[[1]], length.out = output_cols), 
                             nrow = input_rows, ncol = output_cols, byrow = TRUE)
     } else {
       bias_matrix <- matrix(self$biases[[1]][1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
@@ -327,8 +313,23 @@ self_organize = function(Rdata, labels, lr) {
     
   } else {
     # Single-layer mode
-    outputs <- Rdata %*% self$weights + self$biases
+    input_rows <- nrow(Rdata)
+    output_cols <- ncol(self$weights)
+    
+    if (length(self$biases) == 1) {
+      bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else if (length(self$biases) == output_cols) {
+      bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else if (length(self$biases) < output_cols) {
+      bias_matrix <- matrix(rep(self$biases, length.out = output_cols), 
+                            nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else {
+      bias_matrix <- matrix(self$biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    }
+    
+    outputs <- Rdata %*% self$weights + bias_matrix 
   }
+
   
 
 
