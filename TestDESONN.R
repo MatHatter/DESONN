@@ -68,10 +68,10 @@ function(test1){
 
 # # Define parameters
 init_method <- "variance_scaling" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
-optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
-lookahead_step <- 10
+optimizer <- NULL # "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
+lookahead_step <- 100
 batch_normalize_data <- FALSE
-shuffle_bn <- TRUE
+shuffle_bn <- FALSE
 gamma_bn <- 1
 beta_bn <- 0
 epsilon_bn <- 1e-5  # Increase for numerical stability
@@ -81,19 +81,20 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 
 
-custom_scale <- .4
+custom_scale <- .42
 # epsilon <- 1e-5
 ML_NN <- TRUE
 # ML_NN <- FALSE
-input_size <- 12 # This should match the actual number of features in your data
-# hidden_sizes <- NULL
-hidden_sizes <- c(16, 8)
 
+# hidden_sizes <- NULL
+hidden_sizes <- c(32, 8)
+input_size <- 12
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(NULL, NULL, "relu")
+activation_functions <- list("relu", "relu", "sigmoid")
 #, "sigmoid", "sigmoid", "sigmoid", "sigmoid_binary") #, "sigmoid", "", "sigmoid", "sigmoid", "sigmoid_binary")
-activation_functions_learn <- NULL # list("relu", "relu", "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
-epsilon <- 1e-10
+activation_functions_learn <- list("relu", "relu", "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+epsilon <- 1e-8
+loss_type <- "CategoricalCrossEntropy" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
@@ -187,6 +188,28 @@ colnames(y) <- colname_y
 
 binary_flag <- is_binary(y)
 
+# # Perform Random Forest-based feature selection on training data
+# library(randomForest)
+# 
+# rf_data <- as.data.frame(X)
+# rf_data$DEATH_EVENT <- as.factor(y)
+# 
+# set.seed(42)
+# rf_model <- randomForest(DEATH_EVENT ~ ., data = rf_data, importance = TRUE)
+# 
+# # Compute feature importance and select features above median
+# importance_scores <- importance(rf_model, type = 2)[, 1]  # MeanDecreaseGini
+# threshold <- mean(importance_scores)
+# selected_features <- names(importance_scores[importance_scores > threshold])
+# 
+# # Filter feature matrix to selected important features
+# X <- as.matrix(rf_data[, selected_features, drop = FALSE])
+# 
+# # Update input size for neural network initialization
+# input_size <- ncol(X)
+# 
+# numeric_columns <- intersect(numeric_columns, selected_features)
+
 
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -208,7 +231,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = "L1" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = "L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 olr <- FALSE
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
@@ -291,7 +314,7 @@ increment_loop_flag <- FALSE
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
         lr1 <- 0.001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
-        lambda1 <- .1 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
+        lambda1 <- .01 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
 
@@ -410,7 +433,7 @@ if(never_ran_flag == FALSE) { #length(my_optimal_epoch_out_vector) > 1
     DESONN_model <<- DESONN_model_2
     SecondRunDESONN <- DESONN_model_2$train(X, y, lr, ensemble_number = j, num_epochs, threshold, reg_type, numeric_columns = numeric_columns, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions,
                                             dropout_rates_learn = dropout_rates_learn, dropout_rates = dropout_rates, optimizer = optimizer, beta1 = beta1, beta2 = beta2, epsilon = epsilon, lookahead_step = lookahead_step, batch_normalize_data = batch_normalize_data, gamma_bn = gamma_bn, beta_bn = beta_bn,
-                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn)
+                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type)
     if (SecondRunDESONN$loss_status == 'exceeds_10000') {
         next
     }
@@ -508,7 +531,7 @@ if(!predict_models){
 
 
     # print(head(X))
-    num_epochs <<- 10
+    num_epochs <- 10
     never_ran_flag <- TRUE
     # Train your DESONN model
 
@@ -523,7 +546,7 @@ if(!predict_models){
     DESONN_model <- DESONN_model_1
     FirstRunDESONN <- DESONN_model_1$train(X, y, lr, ensemble_number = j, num_epochs, threshold, reg_type, numeric_columns = numeric_columns, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions,
                                             dropout_rates_learn = dropout_rates_learn, dropout_rates = dropout_rates, optimizer = optimizer, beta1 = beta1, beta2 = beta2, epsilon = epsilon, lookahead_step = lookahead_step, batch_normalize_data = batch_normalize_data, gamma_bn = gamma_bn, beta_bn = beta_bn,
-                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn)
+                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type)
     if (FirstRunDESONN$loss_status == 'exceeds_10000') {
         next
     }

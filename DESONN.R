@@ -1546,7 +1546,7 @@ predict = function(Rdata, labels, activation_functions) {
             return(list(predicted_output = predicted_output_predict, prediction_time = prediction_time, error = error_prediction, dim_hidden_layers = dim_hidden_layers_predicted))
 
 },# Method for training the SONN with L2 regularization
-train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step) {
+train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type) {
   
   # Initialize learning rate scheduler
   # lr_scheduler <- function(epoch, initial_lr = lr) {
@@ -2067,7 +2067,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       predictions = if (self$ML_NN) predicted_output_train_reg_hidden[[self$num_layers]] else predicted_output_matrix,
       labels = labels,
       reg_loss_total = reg_loss_total,
-      loss_type = "CrossEntropy"  # or "MSE", etc. depending on your task
+      loss_type = loss_type  # or "MSE", etc. depending on your task
     )
     
     # --------- Backpropagation Begins ---------
@@ -3697,7 +3697,7 @@ calculate_batch_size = function(data_size, max_batch_size = 512, min_batch_size 
     },
     
     
-train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE) {
+train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3807,7 +3807,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             predicted_outputAndTime <<- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
               )))
             
             # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
@@ -4048,7 +4048,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
           if (learnOnlyTrainingRun == FALSE) {
             predicted_outputAndTime <<- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
               )))
             
             calculate_accuracy <- function(predictions, actual_labels) {
