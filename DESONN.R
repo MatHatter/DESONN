@@ -707,9 +707,13 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     print("------------------------learn-begin----------------------------------------------")
 
     start_time <- Sys.time()
-
-    # Apply the weights and biases of the neural network
     
+    if (self$ML_NN == FALSE) {
+    # Normalize to list if user passed a string
+    if (!is.list(activation_functions)) {
+      activation_functions <- list(activation_functions)
+    }
+    }
 
     # Retrieve activation function for layer 1
     valid_activations <- c(
@@ -718,16 +722,21 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       "custom_activation", "custom_binary_activation", "softmax", "bent_identity"
     )
     
-    activation_function_learn <- if (is.list(activation_functions_learn) &&
-                                     !is.null(activation_functions_learn[[1]]) &&
-                                     activation_functions_learn[[1]] %in% valid_activations) {
-      tryCatch(
-        get(activation_functions_learn[[1]], mode = "function"),
+
+    
+    # Retrieve activation function safely
+    if (!is.null(activation_functions[[1]]) &&
+        activation_functions[[1]] %in% valid_activations) {
+      activation_function <- tryCatch(
+        get(activation_functions[[1]], mode = "function", envir = environment()),
         error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
       )
     } else {
-      NULL
+      activation_function <- NULL
     }
+    
+    
+    
     
     
     input_rows <- nrow(Rdata)
@@ -773,14 +782,16 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       Z <- Rdata %*% self$weights + bias_matrix
       
       activation_function <- NULL
-      if (!is.null(activation_functions[[2]])) {
+      if (!is.null(activation_functions[[1]]) &&
+          activation_functions[[1]] %in% valid_activations) {
         activation_function <- tryCatch(
-          get(activation_functions[[2]], mode = "function", envir = environment()),
+          get(activation_functions[[1]], mode = "function", envir = environment()),
           error = function(e) {
             stop("Activation function retrieval failed: ", conditionMessage(e))
           }
         )
       }
+      
       
       predicted_output_learn <- if (!is.null(activation_function)) {
         activation_function(Z)
@@ -1279,24 +1290,34 @@ predict = function(Rdata, labels, activation_functions) {
     print("------------------------predict-begin-------------------------------------------------")
     start_time <- Sys.time()
     
-    # Define valid activations once at the top of the function
+    # Normalize to list if user passed a string
+    if (self$ML_NN == FALSE) {
+      # Normalize to list if user passed a string
+      if (!is.list(activation_functions)) {
+        activation_functions <- list(activation_functions)
+      }
+    }
+
+    # Retrieve activation function for layer 1
     valid_activations <- c(
       "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
       "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
       "custom_activation", "custom_binary_activation", "softmax", "bent_identity"
     )
     
-    # Safely retrieve activation function for predict
-    activation_function <- if (is.list(activation_functions) &&
-                               !is.null(activation_functions[[1]]) &&
-                               activation_functions[[1]] %in% valid_activations) {
-      tryCatch(
-        get(activation_functions[[1]], mode = "function"),
+
+    
+    # Retrieve activation function safely
+    if (!is.null(activation_functions[[1]]) &&
+        activation_functions[[1]] %in% valid_activations) {
+      activation_function <- tryCatch(
+        get(activation_functions[[1]], mode = "function", envir = environment()),
         error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
       )
     } else {
-      NULL
+      activation_function <- NULL
     }
+    
     
     
     dropout_rate <- self$dropout_rates[[1]]
@@ -1308,20 +1329,29 @@ predict = function(Rdata, labels, activation_functions) {
     
     # Bias broadcasting for layer 1
     input_rows <- nrow(Rdata)
-    output_cols <- ncol(self$weights[[1]])
-    bias_vec <- self$biases[[1]]
+    output_cols <- if (self$ML_NN) {
+      ncol(self$weights[[1]])
+    } else {
+      ncol(self$weights)
+    }
+    bias_vec <- if (self$ML_NN) self$biases[[1]] else self$biases
     
     if (length(bias_vec) == 1) {
       cat("Using single bias value:", bias_vec, "\n")
-    } else if (length(bias_vec) != output_cols) {
-      cat("Bias length and neuron count mismatch. Adjusting...\n")
+      biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else if (length(bias_vec) == output_cols) {
+      biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else if (length(bias_vec) < output_cols) {
+      cat("Bias length and neuron count mismatch. Adjusting (replicating)...\n")
+      biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else if (length(bias_vec) > output_cols) {
+      cat("Bias length exceeds neuron count. Truncating...\n")
+      biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    } else {
+      stop("Invalid bias configuration in layer 1")
     }
     
-    biases <- if (length(bias_vec) >= output_cols) {
-      matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else {
-      matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    }
+    
     
 
     if (self$ML_NN) {
@@ -1340,18 +1370,18 @@ predict = function(Rdata, labels, activation_functions) {
     }
     else {
       predicted_output_predict <- tryCatch({
-        biases <- adjust_biases_layer_1(self$biases, self$weights, Rdata)
-        result <- Rdata %*% self$weights + biases
+        Z <- Rdata %*% self$weights + biases
         
-        if (!is.null(activation_functions[[2]]) && activation_functions[[2]] %in% valid_activations) {
+        if (!is.null(activation_functions[[1]]) &&
+            activation_functions[[1]] %in% valid_activations) {
           activation_function <- tryCatch(
-            get(activation_functions[[2]], mode = "function", envir = environment()),
+            get(activation_functions[[1]], mode = "function", envir = environment()),
             error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
           )
-          result <- activation_function(result)
+          activation_function(Z)
+        } else {
+          Z
         }
-        
-        result
       }, error = function(e) {
         stop("Error during single-layer prediction: ", conditionMessage(e))
       })
@@ -1580,6 +1610,12 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   prev_weights <- NULL
   prev_biases <- NULL
   
+  valid_activations <- c(
+    "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
+    "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
+    "custom_activation", "custom_binary_activation", "softmax", "bent_identity"
+  )
+  
   for (epoch in 1:epoch_in_list) {
     # lr <- lr_scheduler(i, initial_lr = lr)
     #print(paste("Epoch:", epoch))
@@ -1605,23 +1641,21 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       dim_hidden_layers <- vector("list", self$num_layers)
       
       # --------- First Layer Forward Pass ---------
+
       
-      # Get activation function for the first layer if exists
       
-      valid_activations <- c(
-        "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
-        "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
-        "custom_activation", "custom_binary_activation", "custom_binary_activation_net_pos",
-        "softmax", "bent_identity"
-      )
       
-      activation_function <- if (is.list(activation_functions) &&
-                                 !is.null(activation_functions[[1]]) &&
-                                 activation_functions[[1]] %in% valid_activations) {
-        get(activation_functions[[1]])
+      # Retrieve activation function safely
+      if (!is.null(activation_functions[[1]]) &&
+          activation_functions[[1]] %in% valid_activations) {
+        activation_function <- tryCatch(
+          get(activation_functions[[1]], mode = "function", envir = environment()),
+          error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
+        )
       } else {
-        NULL
+        activation_function <- NULL
       }
+      
       
       dropout_rate <- self$dropout_rates[[1]]
       
@@ -2063,12 +2097,26 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     
     # --------- Backpropagation Begins ---------
     
-    activation_derivative_function <- if (!is.null(activation_functions[[layer]]) &&
-                                          activation_functions[[layer]] %in% valid_activations) {
-      get(paste0(activation_functions[[layer]], "_derivative"))
+    
+    if (self$ML_NN) {
+      if (length(activation_functions) >= layer &&
+          !is.null(activation_functions[[layer]]) &&
+          activation_functions[[layer]] %in% valid_activations) {
+        activation_derivative_function <- get(paste0(activation_functions[[layer]], "_derivative"))
+      } else {
+        activation_derivative_function <- NULL
+      }
     } else {
-      NULL
+      # Single-layer network only has one activation
+      if (length(activation_functions) >= 1 &&
+          !is.null(activation_functions[[1]]) &&
+          activation_functions[[1]] %in% valid_activations) {
+        activation_derivative_function <- get(paste0(activation_functions[[1]], "_derivative"))
+      } else {
+        activation_derivative_function <- NULL
+      }
     }
+    
     
 
     errors <- vector("list", self$num_layers)
@@ -2113,7 +2161,12 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       }
       
       activation_input <- predicted_output_train_reg  # this is your forward pass output
+      if (is.list(activation_input)) {
+        activation_input <- as.matrix(activation_input[[1]])
+      }
       local_deriv <- activation_derivative_function(activation_input)
+      
+      
       
       errors <- list()
       errors[[1]] <- error_last_layer * local_deriv
@@ -2741,14 +2794,45 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             }}
         }
       } else {
-        # Update weights with regularization single nn layer perceptron model way
-        if (reg_type == "L1") {
-          weight_update <- (self$lambda * sign(self$weights)) - (lr * apply(t(error_1000x10) %*% Rdata, 2, mean))
-        } else if (reg_type == "L2") {
-          weight_update <- (self$lambda * self$weights) - (lr * apply(t(error_1000x10) %*% Rdata, 2, mean))
+        cat("Single Layer Backpropagation\n")
+        
+        # --- Ensure self$weights is a numeric matrix ---
+        if (!is.matrix(self$weights) || !is.numeric(self$weights)) {
+          self$weights <- matrix(as.numeric(unlist(self$weights)), ncol = 1)
         }
+        
+        # --- Gradient calculation ---
+        grad_matrix <- t(Rdata) %*% errors[[1]]
+        
+        # --- L1 Regularization ---
+        if (!is.null(reg_type) && reg_type == "L1") {
+          weight_update <- (self$lambda * sign(self$weights)) - (lr * grad_matrix)
+          cat("L1 Regularization\n")
+          
+          # --- L2 Regularization ---
+        } else if (!is.null(reg_type) && reg_type == "l2") {
+          weight_penalty <- self$lambda * self$weights
+          weight_update <- lr * weight_penalty
+          cat("L2 Regularization\n")
+          
+          # --- No Regularization ---
+        } else {
+          weight_update <- lr * grad_matrix
+          cat("No Regularization\n")
+        }
+        
+        # --- Logging ---
+        cat("Weight update dimensions:", paste(dim(weight_update), collapse = " x "), "\n")
+        cat("Weights dimensions:", paste(dim(self$weights), collapse = " x "), "\n")
+        cat("errors[[1]] dimensions:", paste(dim(errors[[1]]), collapse = " x "), "\n")
+        
+        # --- Apply Update ---
         self$weights <- self$weights - weight_update
       }
+      
+      
+      
+      
     }
     # Record the updated weight matrix
     if (self$ML_NN) {
@@ -3247,12 +3331,35 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
               
               
             } }}}else {
-              if (ncol(self$biases[[layer]]) == ncol(error_1000x10)) {
-                self$biases[[layer]] <- self$biases[[layer]] - lr * (error_1000x10)
-              } else {
-                self$biases[[layer]] <- self$biases[[layer]] - lr * colMeans(error_1000x10)
+              cat("Single Layer Bias Update\n")
+              
+              # Make sure self$biases is a numeric vector or matrix
+              if (is.null(self$biases)) {
+                stop("Biases are NULL in single-layer mode.")
               }
+              
+              # Convert to matrix if not already
+              if (!is.matrix(self$biases)) {
+                self$biases <- matrix(self$biases, nrow = 1)
+              }
+              
+              # Compute mean error across rows (for each neuron)
+              bias_update <- colMeans(errors[[1]], na.rm = TRUE)
+              
+              # Reshape bias update to match self$biases
+              if (length(bias_update) != ncol(self$biases)) {
+                bias_update <- matrix(rep(bias_update, length.out = ncol(self$biases)), nrow = 1)
+              }
+              
+              # Debug print
+              cat("Bias update dimensions:", dim(bias_update), "\n")
+              cat("Biases dimensions before update:", dim(self$biases), "\n")
+              
+              # Subtract learning rate scaled update
+              self$biases <- self$biases - lr * bias_update
             }
+      
+      
       
       
     }

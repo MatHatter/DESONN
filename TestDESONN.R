@@ -67,7 +67,7 @@ function(test1){
 }
 
 # # Define parameters
-init_method <- "variance_scaling" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
+init_method <- "xavier" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- NULL # "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
 lookahead_step <- 100
 batch_normalize_data <- FALSE
@@ -81,20 +81,20 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 
 
-custom_scale <- .42
+custom_scale <- .4
 # epsilon <- 1e-5
-ML_NN <- TRUE
+ML_NN <- FALSE
 # ML_NN <- FALSE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 8)
+hidden_sizes <- c(16, 8, 2)
 input_size <- 12
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list("relu", "relu", "sigmoid")
+activation_functions <- "relu" #list("relu", "relu", NULL, "sigmoid")
 #, "sigmoid", "sigmoid", "sigmoid", "sigmoid_binary") #, "sigmoid", "", "sigmoid", "sigmoid", "sigmoid_binary")
-activation_functions_learn <- list("relu", "relu", "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- "relu" #list("relu", "relu", NULL, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-8
-loss_type <- "CategoricalCrossEntropy" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "MAE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
