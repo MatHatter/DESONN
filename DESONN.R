@@ -730,52 +730,48 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     }
     
     
-    # Bias broadcasting for layer 1
     input_rows <- nrow(Rdata)
-    output_cols <- ncol(self$weights[[1]])
-    bias_vec <- self$biases[[1]]
     
-    if (length(bias_vec) == 1) {
-      biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else if (length(bias_vec) == output_cols) {
-      biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else if (length(bias_vec) < output_cols) {
-      biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else if (length(bias_vec) > output_cols) {
-      biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else {
-      stop("Length of biases does not match number of neurons in first layer")
-    }
-    
-
     if (self$ML_NN) {
-      broadcast_bias <- function(bias, nrow_out, ncol_out) {
-        if (length(bias) == 1) {
-          matrix(bias, nrow_out, ncol_out, byrow = TRUE)
-        } else if (length(bias) == ncol_out) {
-          matrix(bias, nrow_out, ncol_out, byrow = TRUE)
-        } else if (length(bias) < ncol_out) {
-          matrix(rep(bias, length.out = ncol_out), nrow_out, ncol_out, byrow = TRUE)
-        } else {
-          matrix(bias[1:ncol_out], nrow_out, ncol_out, byrow = TRUE)
-        }
+      # Multi-layer mode
+      output_cols <- ncol(self$weights[[1]])
+      
+      if (length(self$biases[[1]]) == 1) {
+        bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(self$biases[[1]]) == output_cols) {
+        bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(self$biases[[1]]) < output_cols) {
+        bias_matrix <- matrix(rep(self$biases[[1]], length.out = output_cols), 
+                              nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else {
+        bias_matrix <- matrix(self$biases[[1]][1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
       }
       
-      predicted_output_learn <- tryCatch({
-        Z <- Rdata %*% self$weights[[1]]
-        bias_matrix <- broadcast_bias(self$biases[[1]], nrow(Z), ncol(Z))
-        Z <- Z + bias_matrix
-        
-        if (!is.null(activation_function_learn)) {
-          activation_function_learn(Z)
-        } else {
-          Z
-        }
-      }, error = function(e) {
-        stop("Error during forward pass in layer 1: ", conditionMessage(e))
-      })
+      Z <- Rdata %*% self$weights[[1]] + bias_matrix
+      
+      if (!is.null(activation_function_learn)) {
+        predicted_output_learn <- activation_function_learn(Z)
+      } else {
+        predicted_output_learn <- Z
+      }
+      
     } else {
-      # Determine if an activation function is defined for single-layer
+      # Single-layer mode
+      output_cols <- ncol(self$weights)
+      
+      if (length(self$biases) == 1) {
+        bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(self$biases) == output_cols) {
+        bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(self$biases) < output_cols) {
+        bias_matrix <- matrix(rep(self$biases, length.out = output_cols), 
+                              nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else {
+        bias_matrix <- matrix(self$biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      }
+      
+      Z <- Rdata %*% self$weights + bias_matrix
+      
       activation_function <- NULL
       if (!is.null(activation_functions[[2]])) {
         activation_function <- tryCatch(
@@ -786,19 +782,13 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
         )
       }
       
-      # Compute output with or without activation
-      predicted_output_learn <- tryCatch({
-        biases <- adjust_biases_layer_1(self$biases, self$weights, Rdata)
-        Z <- Rdata %*% self$weights + biases
-        if (!is.null(activation_function)) {
-          activation_function(Z)
-        } else {
-          Z
-        }
-      }, error = function(e) {
-        stop("Error during forward pass in single-layer network: ", conditionMessage(e))
-      })
+      predicted_output_learn <- if (!is.null(activation_function)) {
+        activation_function(Z)
+      } else {
+        Z
+      }
     }
+    
 
 
 
