@@ -1578,16 +1578,16 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   # }
   
   start_time <- Sys.time()
-  
-  # Initialize optimizer parameters if optimizer is specified
-  optimizer_params <- NULL
-  if (!is.null(optimizer)) {
-    if(ML_NN){
-      optimizer_params <- initialize_optimizer_params(optimizer, dim = dim(self$weights[[1]]), lookahead_step)
-    }else{
-      optimizer_params <- initialize_optimizer_params(optimizer, dim = dim(self$weights), lookahead_step)
-    }
-  }
+  # 
+  # # Initialize optimizer parameters if optimizer is specified
+  # optimizer_params <- NULL
+  # if (!is.null(optimizer)) {
+  #   if(ML_NN){
+  #     optimizer_params <- initialize_optimizer_params(optimizer, dim = dim(self$weights[[1]]), lookahead_step)
+  #   }else{
+  #     optimizer_params <- initialize_optimizer_params(optimizer, dim = dim(self$weights), lookahead_step)
+  #   }
+  # }
   
   # Convert labels to a column matrix if it is a vector
   # if (is.vector(labels)) {
@@ -2231,8 +2231,9 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             if (is.null(optimizer_params_weights[[layer]])) {
               optimizer_params_weights[[layer]] <- initialize_optimizer_params(
                 optimizer,
-                dim(self$weights[[layer]]),
-                lookahead_step
+                list(dim(self$weights[[layer]])),
+                lookahead_step,
+                layer
               )
             }
             
@@ -2254,12 +2255,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             grads_matrix <- t(input_mat) %*% errors[[layer]]
             
             
-            
-            
-            
-            if (!is.null(optimizer)) {
-              optimizer_params_weights[[layer]] <- initialize_optimizer_params(optimizer, dim(self$weights[[layer]]), lookahead_step)
-            }
+          
             
             if (!is.null(optimizer_params_weights[[layer]]) && !is.null(optimizer)) {
               if (optimizer == "adam") {
@@ -2831,41 +2827,69 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             }}
         }
       } else {
-        cat("Single Layer Backpropagation\n")
+        cat("Single Layer Weight Update\n")
         
-        # --- Ensure self$weights is a numeric matrix ---
-        if (!is.matrix(self$weights) || !is.numeric(self$weights)) {
-          self$weights <- matrix(as.numeric(unlist(self$weights)), ncol = 1)
+        # Check and convert self$weights to matrix
+        if (is.null(self$weights)) {
+          stop("Weights are NULL in single-layer mode.")
+        }
+        if (!is.matrix(self$weights)) {
+          self$weights <- matrix(self$weights, ncol = 1)
         }
         
-        # --- Gradient calculation ---
+        # Initialize optimizer parameters if needed
+        if (!is.null(optimizer) && is.null(optimizer_params_weights)) {
+          optimizer_params_weights <- initialize_optimizer_params(
+            optimizer,
+            list(dim(self$weights)),
+            lookahead_step,
+            layer
+          )
+        }
+        
+        # Compute gradient (standard backprop)
         grad_matrix <- t(Rdata) %*% errors[[1]]
         
-        # --- L1 Regularization ---
+        # Apply regularization
         if (!is.null(reg_type) && reg_type == "L1") {
           weight_update <- (self$lambda * sign(self$weights)) - (lr * grad_matrix)
-          cat("L1 Regularization\n")
-          
-          # --- L2 Regularization ---
+          cat("L1 Regularization applied\n")
         } else if (!is.null(reg_type) && reg_type == "l2") {
           weight_penalty <- self$lambda * self$weights
           weight_update <- lr * weight_penalty
-          cat("L2 Regularization\n")
-          
-          # --- No Regularization ---
+          cat("L2 Regularization applied\n")
         } else {
           weight_update <- lr * grad_matrix
-          cat("No Regularization\n")
+          cat("No Regularization applied\n")
         }
         
-        # --- Logging ---
-        cat("Weight update dimensions:", paste(dim(weight_update), collapse = " x "), "\n")
-        cat("Weights dimensions:", paste(dim(self$weights), collapse = " x "), "\n")
-        cat("errors[[1]] dimensions:", paste(dim(errors[[1]]), collapse = " x "), "\n")
+        # Debug prints
+        cat("Weight update dimensions:", dim(weight_update), "\n")
+        cat("Weights dimensions before update:", dim(self$weights), "\n")
         
-        # --- Apply Update ---
-        self$weights <- self$weights - weight_update
+        # Apply optimizer or fallback to SGD-style update
+        if (!is.null(optimizer)) {
+          updated_optimizer <- apply_optimizer_update(
+            optimizer = optimizer,
+            optimizer_params = optimizer_params_weights,
+            grads_matrix = grad_matrix,
+            lr = lr,
+            beta1 = beta1,
+            beta2 = beta2,
+            epsilon = epsilon,
+            epoch = epoch,
+            self = self,
+            layer = layer,
+            target = "weights"
+          )
+          
+          self$weights <- updated_optimizer$updated_weights_or_biases
+          optimizer_params_weights <- updated_optimizer$updated_optimizer_params
+        } else {
+          self$weights <- self$weights - weight_update
+        }
       }
+      
       
       
       
@@ -2890,8 +2914,9 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             if (is.null(optimizer_params_biases[[layer]])) {
               optimizer_params_biases[[layer]] <- initialize_optimizer_params(
                 optimizer,
-                dim(as.matrix(self$biases[[layer]])),
-                lookahead_step
+                list(dim(as.matrix(self$biases[[layer]]))),
+                lookahead_step,
+                layer
               )
             }
             
@@ -3370,7 +3395,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             } }}}else {
               cat("Single Layer Bias Update\n")
               
-              # Make sure self$biases is a numeric vector or matrix
+              # Check that self$biases is valid
               if (is.null(self$biases)) {
                 stop("Biases are NULL in single-layer mode.")
               }
@@ -3380,21 +3405,54 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                 self$biases <- matrix(self$biases, nrow = 1)
               }
               
+              # Initialize optimizer parameters if needed
+              if (!is.null(optimizer) && is.null(optimizer_params_biases)) {
+                optimizer_params_biases <- initialize_optimizer_params(
+                  optimizer,
+                  list(dim(self$biases)),
+                  lookahead_step,
+                  layer
+                )
+              }
+              
               # Compute mean error across rows (for each neuron)
               bias_update <- colMeans(errors[[1]], na.rm = TRUE)
               
-              # Reshape bias update to match self$biases
+              # Reshape bias update to match self$biases dimensions
               if (length(bias_update) != ncol(self$biases)) {
                 bias_update <- matrix(rep(bias_update, length.out = ncol(self$biases)), nrow = 1)
+              } else {
+                bias_update <- matrix(bias_update, nrow = 1)
               }
               
-              # Debug print
+              # Debug prints
               cat("Bias update dimensions:", dim(bias_update), "\n")
               cat("Biases dimensions before update:", dim(self$biases), "\n")
               
-              # Subtract learning rate scaled update
-              self$biases <- self$biases - lr * bias_update
+              # Use optimizer if specified
+              if (!is.null(optimizer)) {
+                updated_optimizer <- apply_optimizer_update(
+                  optimizer = optimizer,
+                  optimizer_params = optimizer_params_biases,
+                  grads_matrix = bias_update,
+                  lr = lr,
+                  beta1 = beta1,
+                  beta2 = beta2,
+                  epsilon = epsilon,
+                  epoch = epoch,
+                  self = self,
+                  layer = layer,
+                  target = "biases"
+                )
+                
+                self$biases <- updated_optimizer$updated_weights_or_biases
+                optimizer_params_biases <- updated_optimizer$updated_optimizer_params
+              } else {
+                # Fallback to SGD update if no optimizer
+                self$biases <- self$biases - lr * bias_update
+              }
             }
+      
       
       
       
@@ -5006,19 +5064,18 @@ is_binary <- function(column) {
 }
 
 
-initialize_optimizer_params <- function(optimizer, dim, lookahead_step = 5) {
+initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer) {
   params <- list()
   
-  if (length(dim) == 2) {
-    # Convert single dimension to a list
+  if (length(dim) == 2 && is.null(layer)) {
+    # Multi-layer is not specified; wrap single-layer into a list
     dim <- list(dim)
   }
   
   for (i in seq_along(dim)) {
     layer_dim <- dim[[i]]
     
-    # Default handling for invalid dimensions
-    if (length(layer_dim) != 2 || is.na(layer_dim[1]) || is.na(layer_dim[2]) || layer_dim[1] <= 0 || layer_dim[2] <= 0) {
+    if (length(layer_dim) != 2 || any(is.na(layer_dim)) || any(layer_dim <= 0)) {
       cat("Invalid dimensions detected for layer", i, ". Setting default dimension [1, 1].\n")
       layer_dim <- c(1, 1)
     }
@@ -5026,76 +5083,51 @@ initialize_optimizer_params <- function(optimizer, dim, lookahead_step = 5) {
     nrow_dim <- layer_dim[1]
     ncol_dim <- layer_dim[2]
     
-    cat("Layer", i, "dimensions: nrow =", nrow_dim, ", ncol =", ncol_dim, "\n")
+    current_layer <- if (!is.null(layer)) layer else i
+    cat("Layer", current_layer, "dimensions: nrow =", nrow_dim, ", ncol =", ncol_dim, "\n")
     
-    # Check if dimensions are valid before creating matrices
-    if (nrow_dim <= 0 || ncol_dim <= 0) {
-      stop(paste("Invalid dimensions for layer", i, ": nrow =", nrow_dim, ", ncol =", ncol_dim))
-    }
-    
-    # Initialize param with random weights
     param_init <- matrix(rnorm(nrow_dim * ncol_dim), nrow = nrow_dim, ncol = ncol_dim)
     
-    if (optimizer == "adam" || optimizer == "rmsprop" || optimizer == "adadelta") {
-      params[[i]] <- list(
-        param = param_init,
-        m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # First moment vector
-        v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)    # Second moment vector
-      )
-    } else if (optimizer == "adagrad") {
-      params[[i]] <- list(
-        param = param_init,
-        r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)    # Accumulated squared gradients
-      )
-    } else if (optimizer == "sgd" || optimizer == "sgd_momentum") {
-      params[[i]] <- list(
-        param = param_init,
-        momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)  # Momentum term
-      )
-    } else if (optimizer == "nag") {
-      params[[i]] <- list(
-        param = param_init,
-        momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim),  # Momentum term
-        fast_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),  # Fast weights for Nesterov Accelerated Gradient
-        fast_biases = matrix(0, nrow = nrow_dim, ncol = ncol_dim)   # Fast biases for Nesterov Accelerated Gradient
-      )
-    } else if (optimizer == "ftrl") {
-      params[[i]] <- list(
-        param = param_init,
-        z = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # Accumulated gradients
-        n = matrix(0, nrow = nrow_dim, ncol = ncol_dim)    # Accumulated squared gradients
-      )
-    } else if (optimizer == "lamb") {
-      params[[i]] <- list(
-        param = param_init,
-        m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # First moment vector
-        v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # Second moment vector
-        r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)    # Update vector
-      )
-    } else if (optimizer == "lookahead") {
-      params[[i]] <- list(
-        param = param_init,
-        m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # First moment vector
-        v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # Second moment vector
-        r = matrix(0, nrow = nrow_dim, ncol = ncol_dim),   # Update vector
-        slow_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),  # Slow weights for lookahead
-        lookahead_counter = 0,  # Lookahead counter
-        lookahead_step = lookahead_step  # Lookahead step
-      )
-    } else {
-      stop(paste("Optimizer", optimizer, "not supported."))
-    }
+    # Store optimizer state for this layer
+    entry <- switch(optimizer,
+                    adam = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    rmsprop = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    adadelta = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    adagrad = list(param = param_init, r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    sgd = list(param = param_init, momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    sgd_momentum = list(param = param_init, momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    nag = list(param = param_init,
+                               momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                               fast_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                               fast_biases = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    ftrl = list(param = param_init,
+                                z = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                n = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    lamb = list(param = param_init,
+                                m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                    lookahead = list(param = param_init,
+                                     m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                     v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                     r = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                     slow_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                     lookahead_counter = 0,
+                                     lookahead_step = lookahead_step),
+                    stop(paste("Optimizer", optimizer, "not supported."))
+    )
     
-    # Debug print statements for each layer initialization
+    params[[current_layer]] <- entry
+    
     if (verbose) {
-      cat("Layer", i, "optimizer tracking params initialized:\n")
-      print(str(params[[i]]))
+      cat("Layer", current_layer, "optimizer tracking params initialized:\n")
+      print(str(entry))
     }
-    
   }
   
   return(params)
 }
+
 
 
 
