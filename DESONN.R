@@ -1041,7 +1041,8 @@ if (ML_NN) {
       activation_functions_learn[[1]] %in% valid_activations) {
     activation_derivative_function <- get(paste0(activation_functions_learn[[1]], "_derivative"))
   } else {
-    stop("Missing activation derivative function for single-layer network")
+    print("Missing activation derivative function for single-layer network")
+    activation_derivative_function <- NULL
   }
   
   # Use pre-activation input for derivative (not the output)
@@ -1055,7 +1056,14 @@ if (ML_NN) {
   }
   
   activation_input <- Z + biases
-  local_deriv <- activation_derivative_function(activation_input)
+  
+  if (!is.null(activation_derivative_function)) {
+    local_deriv <- activation_derivative_function(activation_input)
+  } else {
+    cat("No activation derivative provided — assuming identity gradient.\n")
+    local_deriv <- matrix(1, nrow = nrow(activation_input), ncol = ncol(activation_input))
+  }
+  
   
   # Compute error for single-layer
   errors <- list()
@@ -1326,14 +1334,23 @@ predict = function(Rdata, labels, activation_functions) {
     cat("Weights dimensions: ", dim(as.matrix(self$weights)), "\n")
     cat("Biases dimensions: ", length(self$biases[[1]]), "\n")
     
-    # Bias broadcasting for layer 1
-    input_rows <- nrow(Rdata)
-    output_cols <- if (self$ML_NN) {
-      ncol(self$weights[[1]])
+    # -------- Bias broadcasting for layer 1 --------
+    weights_matrix <- if (self$ML_NN) {
+      as.matrix(self$weights[[1]])
     } else {
-      ncol(self$weights)
+      as.matrix(self$weights)
     }
+    output_cols <- as.integer(ncol(weights_matrix))
+    input_rows <- as.integer(nrow(Rdata))
+    
     bias_vec <- if (self$ML_NN) self$biases[[1]] else self$biases
+    if (is.list(bias_vec)) bias_vec <- unlist(bias_vec)
+    bias_vec <- as.numeric(bias_vec)
+    
+    # Debug output
+    cat("input_rows =", input_rows, "\n")
+    cat("output_cols =", output_cols, "\n")
+    cat("bias_vec length =", length(bias_vec), "\n")
     
     if (length(bias_vec) == 1) {
       cat("Using single bias value:", bias_vec, "\n")
@@ -1352,6 +1369,7 @@ predict = function(Rdata, labels, activation_functions) {
     
     
     
+    
 
     if (self$ML_NN) {
       predicted_output_predict <- tryCatch({
@@ -1366,10 +1384,25 @@ predict = function(Rdata, labels, activation_functions) {
       }, error = function(e) {
         stop("Error during forward pass in layer 1: ", conditionMessage(e))
       })
-    }
-    else {
+    } else {
       predicted_output_predict <- tryCatch({
-        Z <- Rdata %*% self$weights + biases
+        Rdata_matrix <- as.matrix(Rdata)
+        weights_matrix <- as.matrix(unlist(self$weights))
+        storage.mode(weights_matrix) <- "double"
+        
+        biases <- adjust_biases_layer_1(as.numeric(unlist(self$biases)), weights_matrix, Rdata_matrix)
+        
+        
+        cat("class(Rdata_matrix):", class(Rdata_matrix), "\n")
+        cat("storage.mode(Rdata_matrix):", storage.mode(Rdata_matrix), "\n")
+        cat("dim(Rdata_matrix):", dim(Rdata_matrix), "\n")
+        
+        cat("class(weights_matrix):", class(weights_matrix), "\n")
+        cat("storage.mode(weights_matrix):", storage.mode(weights_matrix), "\n")
+        cat("dim(weights_matrix):", dim(weights_matrix), "\n")
+        
+  
+        Z <- Rdata_matrix %*% weights_matrix + biases
         
         if (!is.null(activation_functions[[1]]) &&
             activation_functions[[1]] %in% valid_activations) {
@@ -1384,7 +1417,10 @@ predict = function(Rdata, labels, activation_functions) {
       }, error = function(e) {
         stop("Error during single-layer prediction: ", conditionMessage(e))
       })
+      
+      
     }
+    
 
 
     # Apply dropout for first layer if specified
@@ -1809,23 +1845,50 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       predicted_output_train_reg_prediction_time[[1]] <- predicted_output_train_reg$prediction_time[[1]]
       dim_hidden_layers <- NULL
       
-      # Construct biases
-      input_rows <- nrow(Rdata)
-      output_cols <- ncol(self$weights)
-      bias_vec <- self$biases
+      # Construct biases with safe dimensions
+      input_rows <- as.integer(nrow(Rdata))
+      
+      output_cols <- tryCatch({
+        out <- as.integer(ncol(as.matrix(self$weights)))
+        if (is.na(out)) stop("output_cols is NA")
+        out
+      }, error = function(e) {
+        stop("Failed to get output_cols from weights: ", conditionMessage(e))
+      })
+      
+      bias_vec <- as.numeric(unlist(self$biases))
+      
+      cat("input_rows:", input_rows, "\n")
+      cat("output_cols:", output_cols, "\n")
+      cat("bias_vec length:", length(bias_vec), "\n")
       
       if (length(bias_vec) == 1) {
+        cat("Using single bias value:", bias_vec, "\n")
         biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
       } else if (length(bias_vec) == output_cols) {
+        cat("Bias vector matches output columns.\n")
         biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
       } else if (length(bias_vec) < output_cols) {
+        cat("Bias vector shorter than output columns. Replicating.\n")
         biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
       } else {
+        cat("Bias vector longer than output columns. Truncating.\n")
         biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
       }
       
       # Pre-activation forward pass
-      Z_input <- Rdata %*% self$weights + biases
+      Rdata_matrix <- as.matrix(Rdata)
+      weights_matrix <- as.matrix(self$weights)
+      storage.mode(weights_matrix) <- "double"
+      storage.mode(Rdata_matrix) <- "double"
+      
+      cat("class(weights_matrix):", class(weights_matrix), "\n")
+      cat("storage.mode(weights_matrix):", storage.mode(weights_matrix), "\n")
+      cat("dim(weights_matrix):", dim(weights_matrix), "\n")
+      
+      
+      Z_input <- Rdata_matrix %*% weights_matrix + biases
+      
       activation_input <- Z_input
       
       if (!is.null(activation_functions[[1]]) &&
@@ -1840,6 +1903,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       predicted_output_train_reg_hidden <- list()
       predicted_output_train_reg_hidden[[1]] <- activated_output
     }
+    
     
     
     reg_loss_total <- 0
@@ -2827,52 +2891,60 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             }}
         }
       } else {
-        cat("Single Layer Weight Update\n")
+        cat("Single Layer Bias Update\n")
         
-        # Check and convert self$weights to matrix
-        if (is.null(self$weights)) {
-          stop("Weights are NULL in single-layer mode.")
+        # Ensure biases exist
+        if (is.null(self$biases)) {
+          stop("Biases are NULL in single-layer mode.")
         }
-        if (!is.matrix(self$weights)) {
-          self$weights <- matrix(self$weights, ncol = 1)
+        
+        # Convert biases to matrix if necessary
+        if (!is.matrix(self$biases)) {
+          self$biases <- matrix(self$biases, nrow = 1)
+        }
+        
+        # Debug: Show class of 'layer'
+        cat("Debug: Class of 'layer':", class(layer), "\n")
+        
+        # Protect against 'layer' being a function or NULL
+        if (!is.numeric(layer)) {
+          cat("Warning: 'layer' is not numeric, resetting to 1.\n")
+          layer <- 1
         }
         
         # Initialize optimizer parameters if needed
-        if (!is.null(optimizer) && is.null(optimizer_params_weights)) {
-          optimizer_params_weights <- initialize_optimizer_params(
+        if (!is.null(optimizer) && is.null(optimizer_params_biases)) {
+          cat("Initializing optimizer parameters for biases at layer:", layer, "\n")
+          optimizer_params_biases <- initialize_optimizer_params(
             optimizer,
-            list(dim(self$weights)),
+            list(dim(self$biases)),
             lookahead_step,
             layer
           )
         }
         
-        # Compute gradient (standard backprop)
-        grad_matrix <- t(Rdata) %*% errors[[1]]
+        # Compute bias update as column mean of errors
+        bias_update <- colMeans(errors[[1]], na.rm = TRUE)
         
-        # Apply regularization
-        if (!is.null(reg_type) && reg_type == "L1") {
-          weight_update <- (self$lambda * sign(self$weights)) - (lr * grad_matrix)
-          cat("L1 Regularization applied\n")
-        } else if (!is.null(reg_type) && reg_type == "l2") {
-          weight_penalty <- self$lambda * self$weights
-          weight_update <- lr * weight_penalty
-          cat("L2 Regularization applied\n")
+        # Reshape bias update if necessary to match bias dimensions
+        if (length(bias_update) != ncol(self$biases)) {
+          bias_update <- matrix(rep(bias_update, length.out = ncol(self$biases)), nrow = 1)
         } else {
-          weight_update <- lr * grad_matrix
-          cat("No Regularization applied\n")
+          bias_update <- matrix(bias_update, nrow = 1)
         }
         
         # Debug prints
-        cat("Weight update dimensions:", dim(weight_update), "\n")
-        cat("Weights dimensions before update:", dim(self$weights), "\n")
+        cat("Bias update dimensions:", dim(bias_update), "\n")
+        cat("Biases dimensions before update:", dim(self$biases), "\n")
         
         # Apply optimizer or fallback to SGD-style update
         if (!is.null(optimizer)) {
+          cat("Applying optimizer update for biases at layer:", layer, "\n")
+          
           updated_optimizer <- apply_optimizer_update(
             optimizer = optimizer,
-            optimizer_params = optimizer_params_weights,
-            grads_matrix = grad_matrix,
+            optimizer_params = optimizer_params_biases,
+            grads_matrix = bias_update,
             lr = lr,
             beta1 = beta1,
             beta2 = beta2,
@@ -2880,15 +2952,16 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             epoch = epoch,
             self = self,
             layer = layer,
-            target = "weights"
+            target = "biases"
           )
           
-          self$weights <- updated_optimizer$updated_weights_or_biases
-          optimizer_params_weights <- updated_optimizer$updated_optimizer_params
+          self$biases <- updated_optimizer$updated_weights_or_biases
+          optimizer_params_biases <- updated_optimizer$updated_optimizer_params
         } else {
-          self$weights <- self$weights - weight_update
+          self$biases <- self$biases - lr * bias_update
         }
       }
+      
       
       
       
@@ -7627,19 +7700,28 @@ serendipity <- function(SONN, Rdata, predicted_output) {
 }
 
 # Helper function to adjust biases for the first layer of the predict function
+# Top-level helper
 adjust_biases_layer_1 <- function(biases, weights, Rdata) {
+  biases <- as.numeric(unlist(biases))
+  input_rows <- as.integer(nrow(Rdata))
+  output_cols <- as.integer(ncol(weights))
+  
   if (length(biases) == 1) {
-    # Single bias value, replicate across all neurons
-    biases <- matrix(rep(biases, ncol(weights)), nrow = nrow(Rdata), ncol = ncol(weights), byrow = TRUE)
-  } else if (length(biases) < ncol(weights)) {
-    # Fewer biases than neurons, extend to match the number of neurons
-    biases <- matrix(rep(biases, ncol(weights)), nrow = nrow(Rdata), ncol = ncol(weights), byrow = TRUE)
-  } else if (length(biases) > ncol(weights)) {
-    # More biases than neurons, truncate to match the number of neurons
-    biases <- matrix(biases[1:ncol(weights)], nrow = nrow(Rdata), ncol = ncol(weights), byrow = TRUE)
+    cat("Using single bias value:", biases, "\n")
+    matrix(biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+  } else if (length(biases) < output_cols) {
+    cat("Bias length and neuron count mismatch. Adjusting (replicating)...\n")
+    matrix(rep(biases, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
+  } else if (length(biases) > output_cols) {
+    cat("Bias length exceeds neuron count. Truncating...\n")
+    matrix(biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
   } else {
-    # Biases are already the correct length
-    biases <- matrix(biases, nrow = nrow(Rdata), ncol = ncol(weights), byrow = TRUE)
+    matrix(biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
   }
-  return(biases)
 }
+
+
+
+
+
+
