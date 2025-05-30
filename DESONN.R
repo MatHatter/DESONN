@@ -17,7 +17,6 @@ library(tidyverse)
 library(ggplot2)
 library(plotly)
 library(gridExtra)
-library(olr)
 library(rlist)
 library(writexl)
 library(readxl)
@@ -63,7 +62,7 @@ SONN <- R6Class(
         dropout_rates = NULL,
         dropout_rates_learn = NULL,
 
-    initialize = function(input_size, hidden_sizes = NULL, output_size, Rdata = NULL, N,  lambda, ML_NN, dropout_rates = NULL, activation_functions_learn = NULL, activation_functions = NULL, method = init_method, custom_scale = custom_scale) {
+initialize = function(input_size, hidden_sizes = NULL, output_size, Rdata = NULL, N,  lambda, ML_NN, dropout_rates = NULL, activation_functions_learn = NULL, activation_functions = NULL, method = init_method, custom_scale = custom_scale) {
 
 
 
@@ -87,16 +86,16 @@ SONN <- R6Class(
             # Initialize self as an environment or list
             # self <- new.env()  # You could also use self <- list()
 
-self$output_size <- output_size
-self$lambda <- lambda  # Regularization parameter
-self$ML_NN <- ML_NN
-self$num_layers <- length(hidden_sizes) + 1  # including the output layer
+            self$output_size <- output_size
+            self$lambda <- lambda  # Regularization parameter
+            self$ML_NN <- ML_NN
+            self$num_layers <- length(hidden_sizes) + 1  # including the output layer
 
-self$dropout_rates <- dropout_rates
-self$dropout_rates_learn <- self$dropout_rates
+            self$dropout_rates <- dropout_rates
+            self$dropout_rates_learn <- self$dropout_rates
 
-# self$weights <- vector("list", self$num_layers)
-# self$biases <- vector("list", self$num_layers)
+            # self$weights <- vector("list", self$num_layers)
+            # self$biases <- vector("list", self$num_layers)
 
 
 
@@ -116,8 +115,8 @@ self$dropout_rates_learn <- self$dropout_rates
 
 
 
-    weights_stored <<- as.matrix(self$weights[[1]])
-    biases_stored <<- as.matrix(self$biases)
+            weights_stored <<- as.matrix(self$weights[[1]])
+            biases_stored <<- as.matrix(self$biases)
 
 
 
@@ -727,12 +726,12 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     # Retrieve activation function safely
     if (!is.null(activation_functions[[1]]) &&
         activation_functions[[1]] %in% valid_activations) {
-      activation_function <- tryCatch(
+      activation_function_learn <- tryCatch(
         get(activation_functions[[1]], mode = "function", envir = environment()),
         error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
       )
     } else {
-      activation_function <- NULL
+      activation_function_learn <- NULL
     }
     
     
@@ -781,10 +780,10 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       
       Z <- Rdata %*% self$weights + bias_matrix
       
-      activation_function <- NULL
+      activation_function_learn <- NULL
       if (!is.null(activation_functions[[1]]) &&
           activation_functions[[1]] %in% valid_activations) {
-        activation_function <- tryCatch(
+        activation_function_learn <- tryCatch(
           get(activation_functions[[1]], mode = "function", envir = environment()),
           error = function(e) {
             stop("Activation function retrieval failed: ", conditionMessage(e))
@@ -793,8 +792,8 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       
       
-      predicted_output_learn <- if (!is.null(activation_function)) {
-        activation_function(Z)
+      predicted_output_learn <- if (!is.null(activation_function_learn)) {
+        activation_function_learn(Z)
       } else {
         Z
       }
@@ -3489,7 +3488,6 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     # }
   }
   
-  losses <<- losses
   
   if(!predict_models){
     tryCatch({
@@ -3720,19 +3718,19 @@ DESONN <- R6Class(
       })
       
       
-      self$predicted_outputAndTime <<- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
-      results_list_learnOnly <<- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
-      results_list <<- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
+      self$predicted_outputAndTime <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
+      results_list_learnOnly <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
+      results_list <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
       self$numeric_columns <- NULL
       if(!hyperparameter_grid_setup){
-        ensembles$main_ensemble <<- list(
+        ensembles$main_ensemble <- list(
           run_results_1_1
           # run_results_1_2,
           # run_results_1_3,
           # run_results_1_4,
           # run_results_1_5
         )
-        ensembles$temp_ensemble <<- vector("list", length(self$ensemble))
+        ensembles$temp_ensemble <- vector("list", length(self$ensemble))
       }
       
     },
@@ -3941,10 +3939,10 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
           self$ensemble[[i]]$self_organize(Rdata, labels, lr)
           if (learnOnlyTrainingRun == FALSE) {
             learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
-            predicted_outputAndTime <<- suppressMessages(invisible(
+            predicted_outputAndTime <- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
                 Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
-              )))
+              ))) #<<-
             
             # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
             if (is.null(predicted_outputAndTime$predicted_output_l2)) {
@@ -3993,7 +3991,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             Rdata <- as.data.frame(Rdata)
             Rdata <- cbind(Rdata, labels)
             # Add the predictions column using mutate
-            Rdata_predictions <<- Rdata %>%
+            Rdata_predictions <- Rdata %>%
               mutate(Predictions = binary_preds)
             
             write_xlsx(Rdata_predictions, "Rdata_predictions3.xlsx")
@@ -4124,7 +4122,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
               all_predicted_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$predicted_output
               all_prediction_times[[i]] <- predicted_outputAndTime$predicted_output_l2$prediction_time
             }
-            my_optimal_epoch_out_vector[[i]] <<- predicted_outputAndTime$optimal_epoch
+            my_optimal_epoch_out_vector[[i]] <- predicted_outputAndTime$optimal_epoch #<<-
           } else if (learnOnlyTrainingRun == TRUE) {
             learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             all_learn_times[[i]] <- learn_results$learn_time
@@ -4135,7 +4133,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
         }
         
         if (learnOnlyTrainingRun == FALSE) {
-          all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
+          all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name) #<<-
           
           
           if(predicted_outputAndTime$loss_status == 'ok'){
@@ -4151,8 +4149,8 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             return(list(loss_status = loss_status, accuracy = accuracy))
           }
         } else if (learnOnlyTrainingRun == TRUE) {
-          all_learn_times <<- do.call(c, all_learn_times)
-          all_predicted_outputs_learn <<- do.call(c, all_predicted_outputs_learn)
+          all_learn_times <- do.call(c, all_learn_times) #<<-
+          all_predicted_outputs_learn <- do.call(c, all_predicted_outputs_learn) #<<-
           #all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
           
           if(predicted_outputAndTime$loss_status == 'ok'){
@@ -4182,10 +4180,10 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
           all_model_iter_num[[i]] <- model_iter_num
           
           if (learnOnlyTrainingRun == FALSE) {
-            predicted_outputAndTime <<- suppressMessages(invisible(
+            predicted_outputAndTime <- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
                 Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
-              )))
+              ))) #<<-
             
             calculate_accuracy <- function(predictions, actual_labels) {
               correct_predictions <- sum(predictions == actual_labels)
@@ -4265,17 +4263,17 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             }
             
             if(hyperparameter_grid_setup){
-              my_optimal_epoch_out_vector[[i]] <<- predicted_outputAndTime$optimal_epoch
+              my_optimal_epoch_out_vector[[i]] <- predicted_outputAndTime$optimal_epoch #<<-
             }
             
-            all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
+            all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name) #<<-
             print("outside predict")
             if(predict_models){
               print("inside predict")
-              prediction <<- self$ensemble[[i]]$predict(Rdata, labels, activation_functions, dropout_rates)
+              prediction <- self$ensemble[[i]]$predict(Rdata, labels, activation_functions, dropout_rates) #<<-
               
               # Extract the outputs and their corresponding hidden sizes (weights)
-              all_layer_predicted_outputs <<- prediction$predicted_output
+              all_layer_predicted_outputs <- prediction$predicted_output #<<-
               dim_hidden_sizes_predicted <- prediction$dim_hidden_layers
               
               # Compute the sum of all hidden sizes
@@ -4292,7 +4290,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
                 layer_predicted_weight <- dim_hidden_sizes_predicted[[l]][2] / total_hidden_size_predicted
                 
                 # Compute weighted sum
-                weighted_sum_predicted_output <<- weighted_sum_predicted_output + layer_predicted_output * layer_predicted_weight
+                weighted_sum_predicted_output <- weighted_sum_predicted_output + layer_predicted_output * layer_predicted_weight #<<-
                 
                 # Print dimensions for debugging
                 # cat("Dimensions of weighted_sum_output in iteration", i, ":\n")
@@ -4310,13 +4308,13 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
         
         if(predicted_outputAndTime$loss_status == 'ok'){
           #I think this line below could be in the if statement
-          performance_relevance_plots <<- self$update_performance_and_relevance(
+          performance_relevance_plots <- self$update_performance_and_relevance(
             Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
             learn_results = learn_results,
             predicted_output_list = all_predicted_outputs,
             learn_time = NULL,
             prediction_time_list = all_prediction_times, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
-          )
+          ) #<<-
           return(list(loss_status = loss_status, accuracy = accuracy))
         } else {
           return(list(loss_status = loss_status, accuracy = accuracy))
@@ -4370,8 +4368,8 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
             # # Append data frames to lists
             # model_name_list[[i]] <- run_id
             
-            performance_metric <<- performance_list[[i]]$metrics
-            relevance_metric <<- relevance_list[[i]]$metrics
+            performance_metric <- performance_list[[i]]$metrics #<<-
+            relevance_metric <- relevance_list[[i]]$metrics #<<-
             
             
           }else if(learnOnlyTrainingRun == TRUE){
@@ -4434,11 +4432,11 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
       #████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
       
       # Extract names and metrics for performance and relevance
-      performance_metrics <<- lapply(seq_along(performance_list), function(i) performance_list[[i]]$metrics)
-      performance_names <- lapply(seq_along(performance_list), function(i) performance_list[[i]]$names)
+      performance_metrics <- lapply(seq_along(performance_list), function(i) performance_list[[i]]$metrics) #<<-
+      performance_names <- lapply(seq_along(performance_list), function(i) performance_list[[i]]$names) #<<-
       
-      relevance_metrics <<- lapply(seq_along(relevance_list), function(i) relevance_list[[i]]$metrics)
-      relevance_names <- lapply(seq_along(relevance_list), function(i) relevance_list[[i]]$names)
+      relevance_metrics <- lapply(seq_along(relevance_list), function(i) relevance_list[[i]]$metrics) #<<-
+      relevance_names <- lapply(seq_along(relevance_list), function(i) relevance_list[[i]]$names) #<<-
       
       # Check for NULL values in performance_metrics and relevance_metrics
       check_null <- function(metrics_list) {
@@ -4451,9 +4449,9 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
         }))
       }
       check_null(performance_metrics)
-      null_check_performance <<- check_null(performance_metrics)
+      null_check_performance <- check_null(performance_metrics) #<<-
       check_null(relevance_metrics)
-      null_check_relevance <<- check_null(relevance_metrics)
+      null_check_relevance <- check_null(relevance_metrics) #<<-
       
       
       # Convert the matrix to a data frame without modifying row names
@@ -4539,14 +4537,14 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
       
       
       # Assuming performance_metrics and relevance_metrics are already defined
-      performance_results <<- process_performance(performance_metrics, run_id)
-      relevance_results <<- process_performance(relevance_metrics, run_id)
+      performance_results <- process_performance(performance_metrics, run_id) #<<-
+      relevance_results <- process_performance(relevance_metrics, run_id) #<<-
       
-      performance_high_mean_df <<- performance_results$high_mean_df
-      performance_low_mean_df <<- performance_results$low_mean_df
+      performance_high_mean_df <- performance_results$high_mean_df #<<-
+      performance_low_mean_df <- performance_results$low_mean_df #<<-
       
-      relevance_high_mean_df <<- relevance_results$high_mean_df
-      relevance_low_mean_df <<- relevance_results$low_mean_df
+      relevance_high_mean_df <- relevance_results$high_mean_df #<<-
+      relevance_low_mean_df <- relevance_results$low_mean_df #<<-
       
       # Function to check and print if a dataframe is NULL
       check_and_print_null <- function(df, df_name) {
@@ -4598,24 +4596,24 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
       if(hyperparameter_grid_setup){
         if(never_ran_flag == TRUE){
           if (learnOnlyTrainingRun == FALSE) {
-            run_results_1_1 <<- results_list[[1]]
+            run_results_1_1 <- results_list[[1]] #<<-
             # run_results_1_2 <<- results_list[[2]]
             # run_results_1_3 <<- results_list[[3]]
             # run_results_1_4 <<- results_list[[4]]
             # run_results_1_5 <<- results_list[[5]]
           }else if(learnOnlyTrainingRun == TRUE){
-            results_list_learnOnly_1_1 <<- results_list_learnOnly[[1]]
-            results_list_learnOnly_1_2 <<- results_list_learnOnly[[2]]
-            results_list_learnOnly_1_3 <<- results_list_learnOnly[[3]]
-            results_list_learnOnly_1_4 <<- results_list_learnOnly[[4]]
-            results_list_learnOnly_1_5 <<- results_list_learnOnly[[5]]
+            results_list_learnOnly_1_1 <- results_list_learnOnly[[1]] #<<-
+            results_list_learnOnly_1_2 <- results_list_learnOnly[[2]] #<<-
+            results_list_learnOnly_1_3 <- results_list_learnOnly[[3]] #<<-
+            results_list_learnOnly_1_4 <- results_list_learnOnly[[4]] #<<-
+            results_list_learnOnly_1_5 <- results_list_learnOnly[[5]] #<<-
           }}else if(never_ran_flag == FALSE){
             if (learnOnlyTrainingRun == FALSE) {
-              run_results_2_1 <<- results_list[[1]]
-              run_results_2_2 <<- results_list[[2]]
-              run_results_2_3 <<- results_list[[3]]
-              run_results_2_4 <<- results_list[[4]]
-              run_results_2_5 <<- results_list[[5]]
+              run_results_2_1 <- results_list[[1]] #<<-
+              run_results_2_2 <- results_list[[2]] #<<-
+              run_results_2_3 <- results_list[[3]] #<<-
+              run_results_2_4 <- results_list[[4]] #<<-
+              run_results_2_5 <- results_list[[5]] #<<-
             }
           }
       }
@@ -4678,7 +4676,7 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
         filtered_high_mean_df <- filtered_high_mean_df[!is.na(filtered_high_mean_df$Value) & !is.infinite(filtered_high_mean_df$Value), ]
         
         # Subset the data for the current metric
-        plot_data_high <<- filtered_high_mean_df[filtered_high_mean_df$Metric == metric, ]
+        plot_data_high <- filtered_high_mean_df[filtered_high_mean_df$Metric == metric, ] #<<-
         
         # Check if plot_data is not empty
         if (nrow(plot_data_high) > 0) {
@@ -4735,7 +4733,7 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
         # Filter out rows where the Value is NA
         filtered_low_mean_df <- filtered_low_mean_df[!is.na(filtered_low_mean_df$Value) & !is.infinite(filtered_low_mean_df$Value), ]
         
-        plot_data_low <<- filtered_low_mean_df[filtered_low_mean_df$Metric == metric, ]
+        plot_data_low <- filtered_low_mean_df[filtered_low_mean_df$Metric == metric, ] #<<-
         
         # Check if plot_data is not empty
         if (nrow(plot_data_low) > 0) {
@@ -4885,7 +4883,7 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
       )
       
       # Store the result in the results_list_learnOnly
-      results_list_learnOnly[[model_iter_num]] <<- result_learnOnly
+      results_list_learnOnly[[model_iter_num]] <- result_learnOnly #<<-
     },
     store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, threshold, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
@@ -4984,7 +4982,7 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
       if ((hyperparameter_grid_setup && !learnOnlyTrainingRun && (never_ran_flag || !never_ran_flag)) || predict_models) {
         print(model_iter_num)
         # Append result to the results list
-        results_list[[model_iter_num]] <<- result
+        results_list[[model_iter_num]] <- result #<<-
         
         # Create dynamic variable name
         variable_name <- paste0("Ensemble_", ensemble_number, "_model_", model_iter_num)
@@ -4993,7 +4991,7 @@ update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, 
         assign(variable_name, result, envir = .GlobalEnv)
       } else { # Temp iteration
         # Append result to the temporary ensemble (second list)
-        ensembles$temp_ensemble[[model_iter_num]] <<- result
+        ensembles$temp_ensemble[[model_iter_num]] <- result #<<-
       }
     }
     
@@ -5089,8 +5087,11 @@ initialize_optimizer_params <- function(optimizer, dim, lookahead_step = 5) {
     }
     
     # Debug print statements for each layer initialization
-    cat("Layer", i, "initialized params structure:\n")
-    print(str(params[[i]]))
+    if (verbose) {
+      cat("Layer", i, "optimizer tracking params initialized:\n")
+      print(str(params[[i]]))
+    }
+    
   }
   
   return(params)
