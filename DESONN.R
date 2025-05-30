@@ -5205,69 +5205,32 @@ initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer) {
 
 
 adam_update <- function(params, grads, lr, beta1, beta2, epsilon, t) {
-  # Initialize m and v as lists if they are not already
-  if (!is.list(params$m)) {
-    params$m <- vector("list", length(grads))
+  if (is.null(params$m)) {
+    params$m <- matrix(0, nrow = nrow(grads), ncol = ncol(grads))
   }
-  if (!is.list(params$v)) {
-    params$v <- vector("list", length(grads))
-  }
-  
-  # Update each element of m and v
-  for (i in seq_along(grads)) {
-    # Get the dimensions of the current gradient
-    grad_dims <- dim(grads[[i]])
-    
-    # If grads[[i]] is a scalar, set grad_dims to c(1) and convert to array
-    if (is.null(grad_dims)) {
-      grad_dims <- c(1)
-      grads[[i]] <- array(grads[[i]], dim = grad_dims)
-    }
-    
-    # Initialize m and v if they don't exist or have wrong dimensions
-    if (is.null(params$m[[i]]) || !all(dim(params$m[[i]]) == grad_dims)) {
-      params$m[[i]] <- array(0, dim = grad_dims)
-    }
-    if (is.null(params$v[[i]]) || !all(dim(params$v[[i]]) == grad_dims)) {
-      params$v[[i]] <- array(0, dim = grad_dims)
-    }
-    
-    # Update m and v for this element
-    params$m[[i]] <- beta1 * params$m[[i]] + (1 - beta1) * grads[[i]]
-    params$v[[i]] <- beta2 * params$v[[i]] + (1 - beta2) * (grads[[i]] ^ 2)
+  if (is.null(params$v)) {
+    params$v <- matrix(0, nrow = nrow(grads), ncol = ncol(grads))
   }
   
-  # Bias correction for each element
-  m_hat <- lapply(params$m, function(m) m / (1 - beta1 ^ t))
-  v_hat <- lapply(params$v, function(v) v / (1 - beta2 ^ t))
+  # Update biased first moment estimate
+  params$m <- beta1 * params$m + (1 - beta1) * grads
   
-  # Weight update for each element
-  weights_update <- Map(function(m, v) lr * m / (sqrt(v) + epsilon), m_hat, v_hat)
+  # Update biased second raw moment estimate
+  params$v <- beta2 * params$v + (1 - beta2) * (grads ^ 2)
   
-  # Bias update for each element
-  biases_update <- lapply(m_hat, function(m) lr * unlist(m) / (sqrt(unlist(v_hat)) + epsilon))
+  # Compute bias-corrected moment estimates
+  m_hat <- params$m / (1 - beta1 ^ t)
+  v_hat <- params$v / (1 - beta2 ^ t)
   
-  # Convert weights_update to the same format as grads (matrix or array)
-  for (i in seq_along(weights_update)) {
-    if (is.null(dim(grads[[i]]))) {
-      weights_update[[i]] <- array(weights_update[[i]], dim = c(1))
-    } else {
-      weights_update[[i]] <- matrix(weights_update[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-    }
-  }
+  # Compute update
+  update <- lr * m_hat / (sqrt(v_hat) + epsilon)
   
-  # Convert biases_update to the same format as grads (matrix or array)
-  for (i in seq_along(biases_update)) {
-    if (is.null(dim(grads[[i]]))) {
-      biases_update[[i]] <- array(biases_update[[i]], dim = c(1))
-    } else {
-      biases_update[[i]] <- matrix(biases_update[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-    }
-  }
+  # Ensure it's never NULL
+  params$param <- update
   
-  # Return updated parameters, m_hat, v_hat, weights_update, and biases_update
-  return(list(m = params$m, v = params$v, m_hat = m_hat, v_hat = v_hat, weights_update = weights_update, biases_update = biases_update))
+  return(params)
 }
+
 
 rmsprop_update <- function(params, grads, lr, beta2 = 0.999, epsilon = 1e-8) {
   # Initialize v as a list if it's not already

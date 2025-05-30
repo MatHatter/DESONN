@@ -1,44 +1,48 @@
 apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr, beta1, beta2, epsilon, epoch, self, layer, target) {  
 
-if (optimizer == "adam") {
-  optimizer_params[[layer]] <- adam_update(
-    optimizer_params[[layer]],
-    grads_matrix,
-    lr,
-    beta1,
-    beta2,
-    epsilon,
-    t = epoch
-  )
-  
-  update_matrix <- if (target == "weights") {
-    optimizer_params[[layer]]$weights_update
-  } else {
-    optimizer_params[[layer]]$biases_update
+  if (optimizer == "adam") {
+    # Debug info: gradient matrix
+    cat(">> Optimizer = adam\n")
+    cat("Layer:", layer, "\n")
+    cat("grads_matrix dim:\n")
+    print(dim(grads_matrix))
+    
+    optimizer_params[[layer]] <- adam_update(
+      optimizer_params[[layer]],
+      grads_matrix,
+      lr,
+      beta1,
+      beta2,
+      epsilon,
+      t = epoch
+    )
+    
+    update_matrix <- optimizer_params[[layer]]$param
+    
+    target_matrix <- if (target == "weights") self$weights[[layer]] else self$biases[[layer]]
+    target_dim <- dim(as.matrix(target_matrix))
+    update_len <- length(update_matrix)
+    
+    # Final fallback handling
+    if (is.null(update_matrix)) {
+      stop(paste0("Update matrix for layer ", layer, " is NULL — check gradients or optimizer output."))
+    }
+    
+    if (is.null(target_dim)) {
+      stop(paste0("Target matrix dimensions for layer ", layer, " are NULL."))
+    }
+    
+    if (update_len == prod(target_dim)) {
+      updated <- matrix(update_matrix, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+    } else if (prod(target_dim) == 1) {
+      updated <- sum(update_matrix)
+    } else {
+      repeated <- rep(update_matrix, length.out = prod(target_dim))
+      updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+    }
   }
   
-  if (is.list(update_matrix)) update_matrix <- unlist(update_matrix)
   
-  target_matrix <- if (target == "weights") self$weights[[layer]] else self$biases[[layer]]
-  
-  if (length(update_matrix) == prod(dim(target_matrix))) {
-    cat(paste("Updating", target, ": dimensions match exactly. Performing subtraction.\n"))
-    updated <- matrix(update_matrix, nrow = nrow(target_matrix), byrow = TRUE)
-  } else if (prod(dim(target_matrix)) == 1) {
-    cat(paste("Updating", target, ": scalar case.\n"))
-    updated <- sum(update_matrix)
-  } else {
-    cat(paste("Updating", target, ": adjusting dimensions.\n"))
-    repeated <- rep(update_matrix, length.out = prod(dim(target_matrix)))
-    updated <- matrix(repeated, nrow = nrow(target_matrix), byrow = TRUE)
-  }
-  
-  if (target == "weights") {
-    self$weights[[layer]] <- self$weights[[layer]] - updated
-  } else {
-    self$biases[[layer]] <- self$biases[[layer]] - updated
-  }
-}
 
     
   else if (optimizer == "rmsprop") {
