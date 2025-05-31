@@ -1599,7 +1599,7 @@ predict = function(Rdata, labels, activation_functions) {
 
             print("------------------------predict-end-------------------------------------------------")
 
-            return(list(predicted_output = predicted_output_predict, prediction_time = prediction_time, error = error_prediction, dim_hidden_layers = dim_hidden_layers_predicted))
+            return(list(predicted_output = predicted_output_predict, prediction_time = prediction_time, error = error_prediction, dim_hidden_layers = dim_hidden_layers_predicted, hidden_outputs = predicted_output_predict_hidden))
 
 },# Method for training the SONN with L2 regularization
 train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type) {
@@ -1615,15 +1615,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   
   start_time <- Sys.time()
   # 
-  # # Initialize optimizer parameters if optimizer is specified
-  # optimizer_params <- NULL
-  # if (!is.null(optimizer)) {
-  #   if(ML_NN){
-  #     optimizer_params <- initialize_optimizer_params(optimizer, dim = dim(self$weights[[1]]), lookahead_step)
-  #   }else{
-  #     optimizer_params <- initialize_optimizer_params(optimizer, dim = dim(self$weights), lookahead_step)
-  #   }
-  # }
+
   
   # Convert labels to a column matrix if it is a vector
   # if (is.vector(labels)) {
@@ -1655,524 +1647,154 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     # lr <- lr_scheduler(i, initial_lr = lr)
     #print(paste("Epoch:", epoch))
     num_epochs_check <<- num_epochs
-    # Calculate the predicted output for the entire Rdata
-    predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions)
     
+    # Run forward pass using centralized logic
+    start_time <- Sys.time()
+    predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions_learn)
+    predicted_output_train_reg_prediction_time <- Sys.time() - start_time
     
+    # Extract predicted output and error
+    predicted_output <- predicted_output_train_reg$predicted_output
+    error <- predicted_output_train_reg$error
     
-    # If the ML_NN flag is TRUE, calculate the outputs for subsequent layers
+    # Extract hidden outputs only for multi-layer networks
     if (self$ML_NN) {
-      hidden_outputs <- list()
-      hidden_outputs_prediction_time <- list()
-      # hidden_outputs[[1]] <- predicted_output_train_reg$predicted_output[[1]]
+      hidden_outputs <- predicted_output_train_reg$hidden_outputs
+      dim_hidden_layers <- lapply(hidden_outputs, dim)
       
-      #Added this line
-      hidden_outputs_prediction_time[[1]] <- NULL
-      hidden_outputs_prediction_time[[1]] <- predicted_output_train_reg$prediction_time
-      
-      predicted_output_train_reg_hidden <- vector("list", self$num_layers)
-      predicted_output_train_reg_prediction_time <- vector("list", self$num_layers)
-      
-      dim_hidden_layers <- vector("list", self$num_layers)
-      
-      # --------- First Layer Forward Pass ---------
-
-      
-      
-      
-      # Retrieve activation function safely
-      if (!is.null(activation_functions[[1]]) &&
-          activation_functions[[1]] %in% valid_activations) {
-        activation_function <- tryCatch(
-          get(activation_functions[[1]], mode = "function", envir = environment()),
-          error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
-        )
-      } else {
-        activation_function <- NULL
-      }
-      
-      
-      dropout_rate <- self$dropout_rates[[1]]
-      
-      # Bias handling logic and computation for layer 1
-      if (length(self$biases[[1]]) == 1) {
-        # Single bias value
-        biases <- matrix(rep(self$biases[[1]], times = nrow(Rdata)),
-                         nrow = nrow(Rdata), ncol = ncol(self$weights[[1]]), byrow = TRUE)
-      } else if (length(self$biases[[1]]) == ncol(self$weights[[1]])) {
-        # Multiple biases, one per neuron
-        biases <- matrix(self$biases[[1]],
-                         nrow = nrow(Rdata), ncol = ncol(self$weights[[1]]), byrow = TRUE)
-      } else if (length(self$biases[[1]]) < ncol(self$weights[[1]])) {
-        # Fewer biases than neurons, replicate each bias for all neurons
-        biases <- matrix(rep(self$biases[[1]], times = ncol(self$weights[[1]])),
-                         nrow = nrow(Rdata), ncol = ncol(self$weights[[1]]), byrow = TRUE)
-      } else if (length(self$biases[[1]]) > ncol(self$weights[[1]])) {
-        # More biases than neurons, take only the first ncol(weights[1]) biases
-        biases <- matrix(self$biases[[1]][1:ncol(self$weights[[1]])],
-                         nrow = nrow(Rdata), ncol = ncol(self$weights[[1]]), byrow = TRUE)
-      } else {
-        stop("Length of biases does not match the number of neurons in the first layer")
-      }
-      
-      # Compute output of the first layer
-      hidden_output_temp <- Rdata %*% self$weights[[1]] + biases
-      
-      
-      if (!is.null(activation_function)) {
-        hidden_outputs[[1]] <- activation_function(hidden_output_temp)
-      } else {
-        hidden_outputs[[1]] <- hidden_output_temp
-      }
-      
-      if (!is.null(dropout_rate)) {
-        hidden_outputs[[1]] <- self$dropout(hidden_outputs[[1]], dropout_rate)
-      }
-      
-      # Ensure hidden_outputs[[1]] is a matrix
-      if (is.vector(hidden_outputs[[1]])) {
-        hidden_outputs[[1]] <- as.matrix(hidden_outputs[[1]])
-        print("Ensure hidden_outputs[[1]] is a matrix")
-      }
-      
-      dim_hidden_layers[[1]] <- dim(hidden_outputs[[1]])
-      
-      predicted_output_train_reg_hidden[[1]] <- hidden_outputs[[1]]
-      predicted_output_train_reg_prediction_time[[1]] <- hidden_outputs_prediction_time[[1]]
-      
-      
-      
-      # --------- > First Layer Forward Pass ---------
-      
-      
-      for (layer in 2:self$num_layers) {
-        
-        activation_function <- if (!is.null(activation_functions[[layer]]) &&
-                                   activation_functions[[layer]] %in% valid_activations) {
-          get(activation_functions[[layer]])
-        } else {
-          NULL
-        }
-        
-        
-        dropout_rate <- self$dropout_rates[[layer]]
-        
-        cat("Processing layer:", layer, "\n")
-        cat("hidden_outputs[[layer - 1]] dimensions: ", dim(hidden_outputs[[layer - 1]]), "\n")
-        cat("self$weights[[layer]] dimensions: ", dim(self$weights[[layer]]), "\n")
-        
-        # if (ncol(hidden_outputs[[layer - 1]]) != nrow(self$weights[[layer]])) {
-        #     stop("Dimensions of hidden_outputs and weights are not conformable")
-        # }
-        
-        # Initialize biases based on the length of self$biases[[layer]]
-        if (length(self$biases[[layer]]) == 1) {
-          # Single bias replicated across all neurons
-          cat("Debug: Single bias case\n")  # Debug statement
-          biases <- matrix(rep(self$biases[[layer]], times = nrow(hidden_outputs[[layer - 1]])),
-                           nrow = nrow(hidden_outputs[[layer - 1]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-          cat("Single bias replicated across all neurons in layer", layer, "\n")
-        } else if (length(self$biases[[layer]]) == ncol(self$weights[[layer]])) {
-          # Multiple biases, one per neuron
-          cat("Debug: Multiple biases case\n")  # Debug statement
-          biases <- matrix(self$biases[[layer]],
-                           nrow = nrow(hidden_outputs[[layer - 1]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-          cat("Multiple biases provided matching neurons in layer", layer, "\n")
-        } else if (length(self$biases[[layer]]) < ncol(self$weights[[layer]])) {
-          # Less biases than neurons, replicate each bias for all neurons
-          cat("Debug: Fewer biases case\n")  # Debug statement
-          biases <- matrix(rep(self$biases[[layer]], times = ncol(self$weights[[layer]])),
-                           nrow = nrow(hidden_outputs[[layer - 1]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-          cat("Biases replicated for fewer neurons in layer", layer, "\n")
-        } else if (length(self$biases[[layer]]) > ncol(self$weights[[layer]])) {
-          # More biases than neurons, take only the first ncol(weights[layer]) biases
-          cat("Debug: Excess biases case\n")  # Debug statement
-          biases <- matrix(self$biases[[layer]][1:ncol(self$weights[[layer]])],
-                           nrow = nrow(hidden_outputs[[layer - 1]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-          cat("More biases provided than neurons in layer", layer, "\n")
-        } else {
-          stop("Length of biases does not match the number of neurons in the current layer")
-        }
-        
-        cat("biases dimensions: ", dim(biases), "\n")
-        
-        # Check for conformable dimensions between outputs and weights
-        if (ncol(hidden_outputs[[layer - 1]])!= nrow(self$weights[[layer]])) {
-          if (ncol(hidden_outputs[[layer - 1]]) == ncol(self$weights[[layer]])) {
-            hidden_output_temp <- hidden_outputs[[layer - 1]] %*% t(self$weights[[layer]]) + biases
-          } else {
-            stop("Dimensions of hidden_outputs and weights are not conformable")
-          }
-        } else {
-          hidden_output_temp <- hidden_outputs[[layer - 1]] %*% self$weights[[layer]] + biases
-        }
-        
-        cat("hidden_output_temp dimensions: ", dim(hidden_output_temp), "\n")
-        
-        if (ncol(hidden_output_temp) != ncol(biases)) {
-          stop("Dimensions of hidden_output_temp and biases are not conformable")
-        }
-        
-        if (!is.null(activation_function)) {
-          hidden_outputs[[layer]] <- activation_function(hidden_output_temp + biases)
-        } else {
-          hidden_outputs[[layer]] <- hidden_output_temp + biases
-        }
-        
-        dim_hidden_layers[[layer]] <- dim(hidden_outputs[[layer]])
-        
-        cat("hidden_outputs[[layer]] dimensions: ", dim(hidden_outputs[[layer]]), "\n")
-        
-        if (!is.null(dropout_rate)) {
-          hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], dropout_rate)
-        }
-        
-        predicted_output_train_reg_hidden[[layer]] <- hidden_outputs[[layer]]
-        
-        predicted_output_train_reg_prediction_time[[layer]] <- hidden_outputs_prediction_time[[1]]
-        
-        # Ensure predicted_output_train_reg_hidden[[layer]] is a matrix
-        if (is.vector(predicted_output_train_reg_hidden[[layer]])) {
-          predicted_output_train_reg_hidden[[layer]] <- as.matrix(predicted_output_train_reg_hidden[[layer]])
-          print("Ensure predicted_output_train_reg_hidden[[layer]] is a matrix")
-        }
-        
-      }
-    }else {
-      cat("Single Layer Forward Pass\n")
-      
-      predicted_output_train_reg_prediction_time <- list()
-      predicted_output_train_reg_prediction_time[[1]] <- predicted_output_train_reg$prediction_time[[1]]
-      dim_hidden_layers <- NULL
-      
-      # Construct biases with safe dimensions
-      input_rows <- as.integer(nrow(Rdata))
-      
-      output_cols <- tryCatch({
-        out <- as.integer(ncol(as.matrix(self$weights)))
-        if (is.na(out)) stop("output_cols is NA")
-        out
-      }, error = function(e) {
-        stop("Failed to get output_cols from weights: ", conditionMessage(e))
-      })
-      
-      bias_vec <- as.numeric(unlist(self$biases))
-      
-      cat("input_rows:", input_rows, "\n")
-      cat("output_cols:", output_cols, "\n")
-      cat("bias_vec length:", length(bias_vec), "\n")
-      
-      if (length(bias_vec) == 1) {
-        cat("Using single bias value:", bias_vec, "\n")
-        biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(bias_vec) == output_cols) {
-        cat("Bias vector matches output columns.\n")
-        biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(bias_vec) < output_cols) {
-        cat("Bias vector shorter than output columns. Replicating.\n")
-        biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else {
-        cat("Bias vector longer than output columns. Truncating.\n")
-        biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      }
-      
-      # Pre-activation forward pass
-      Rdata_matrix <- as.matrix(Rdata)
-      weights_matrix <- as.matrix(self$weights)
-      storage.mode(weights_matrix) <- "double"
-      storage.mode(Rdata_matrix) <- "double"
-      
-      cat("class(weights_matrix):", class(weights_matrix), "\n")
-      cat("storage.mode(weights_matrix):", storage.mode(weights_matrix), "\n")
-      cat("dim(weights_matrix):", dim(weights_matrix), "\n")
-      
-      
-      Z_input <- Rdata_matrix %*% weights_matrix + biases
-      
-      activation_input <- Z_input
-      
-      if (!is.null(activation_functions[[1]]) &&
-          activation_functions[[1]] %in% valid_activations) {
-        activation_function <- get(activation_functions[[1]])
-        activated_output <- activation_function(activation_input)
-      } else {
-        activated_output <- activation_input
-      }
-      
-      # Store result as hidden layer 1 output
-      predicted_output_train_reg_hidden <- list()
-      predicted_output_train_reg_hidden[[1]] <- activated_output
+      # Proceed with your loop for regularization + error calculation...
     }
     
     
     
-    reg_loss_total <- 0
-    
     if (self$ML_NN) {
-      # Loop through each layer to calculate the regularization loss and errors
+      reg_loss_total <- 0
+      errors <- list()
       
-      all_replicated_predicted_output_train_reg_hidden <- vector("list", self$num_layers)
-      errors <- vector("list", self$num_layers)
-      
-      reg_loss <- 0
-      
-      
-      
-      # Initialize total_error to zero or NULL
-      total_error <- NULL
-      
-      # Print out dimensions and class for debugging
-      # print(paste("Dimensions of labels: ", dim(labels)))
-      # print(paste("Class of labels: ", class(labels)))
-      # print(paste("Dimensions of predicted_output_train_reg_hidden[[layer]]: ", dim(predicted_output_train_reg_hidden[[layer]])))
-      # print(paste("Class of predicted_output_train_reg_hidden[[layer]]: ", class(predicted_output_train_reg_hidden[[layer]])))
       for (layer in 1:self$num_layers) {
-        
-        self$weights <- lapply(self$weights, function(w) as.matrix(w))  # Convert each element to a numeric matrix
-        
-        self$groups <- list(2:length(self$weights))
-        
-        # Calculate the regularization term based on 'reg_type'
+        # Apply regularization
         if (reg_type == "L1") {
-          # L1 Regularization: Encourages sparsity by adding the sum of absolute weights
-          reg_loss <- self$lambda * sum(sapply(self$weights, function(w) sum(abs(w), na.rm = TRUE)))
+          reg_loss <- self$lambda * sum(abs(self$weights[[layer]]), na.rm = TRUE)
         } else if (reg_type == "L2") {
-          # L2 Regularization: Adds a penalty proportional to the sum of squared weights
-          reg_loss <- self$lambda * sum(sapply(self$weights, function(w) sum(w^2, na.rm = TRUE)))
+          reg_loss <- self$lambda * sum(self$weights[[layer]]^2, na.rm = TRUE)
         } else if (reg_type == "L1_L2") {
-          # Elastic Net (L1_L2) Regularization: Combines L1 and L2 regularizations
-          l1_ratio <- 0.5  # Adjust this ratio based on your needs
-          reg_loss <- self$lambda * (l1_ratio * sum(sapply(self$weights, function(w) sum(abs(w), na.rm = TRUE))) +
-                                       (1 - l1_ratio) * sum(sapply(self$weights, function(w) sum(w^2, na.rm = TRUE))))
-        } else if (reg_type == "Group_Lasso") {
-          # Group Lasso Regularization: Regularizes groups of features
-          if (length(self$groups) == 0) {
-            stop("Groups must be defined for Group Lasso regularization.")
-          }
-          reg_loss <- self$lambda * sum(sapply(self$groups, function(group) {
-            group_norm <- sqrt(sum(sapply(group, function(idx) {
-              if (idx <= length(self$weights)) {
-                sqrt(sum(self$weights[[idx]]^2, na.rm = TRUE))  # Calculate the norm for the weight matrix
-              } else {
-                0  # In case the index exceeds the length of weights
-              }
-            })^2, na.rm = TRUE))  # Square the sum of norms for the group
-            group_norm
-          }))
-        } else if (reg_type == "Max_Norm") {
-          # Max-Norm Regularization: Constrains the norm of the weight vectors
-          max_norm <- 1.0  # Adjust this norm limit based on your needs
-          norm_violations <- sum(sapply(1:length(self$weights), function(i) {
-            norm_weight <- sqrt(sum(self$weights[[i]]^2, na.rm = TRUE))  # Compute the norm of the weight matrix
-            if (is.na(norm_weight)) norm_weight <- 0  # Handle NA values
-            if (norm_weight > max_norm) return(1) else return(0)  # Count violations
-          }))
-          reg_loss <- self$lambda * norm_violations
-        } else if (reg_type == "Sparse_Bayesian") {
-          # Sparse Bayesian Learning: Uses a Bayesian approach for sparsity
-          # Note: Implementing Sparse Bayesian Learning requires a more complex setup and is not a simple addition
-          stop("Sparse Bayesian Learning is not implemented in this code.")
+          l1_ratio <- 0.5
+          reg_loss <- self$lambda * (
+            l1_ratio * sum(abs(self$weights[[layer]]), na.rm = TRUE) +
+              (1 - l1_ratio) * sum(self$weights[[layer]]^2, na.rm = TRUE)
+          )
         } else {
-          # Handle invalid regularization type
-          stop("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'.")
+          reg_loss <- 0  # Handle or stop on unsupported types if needed
         }
-        
-
-        if (layer == 1) {
-          # For the first layer, replicate or truncate predicted_output_train_reg_hidden[[1]]
-          if (ncol(predicted_output_train_reg_hidden[[1]]) < ncol(labels)) {
-            # Replicate predicted_output_train_reg_hidden[[1]] to match the dimensions of labels
-            replicated_predicted_output_train_reg_hidden <- matrix(
-              rep(predicted_output_train_reg_hidden[[1]], each = ncol(labels) / ncol(predicted_output_train_reg_hidden[[1]])),
-              nrow = nrow(predicted_output_train_reg_hidden[[1]]),
-              ncol = ncol(labels),
-              byrow = FALSE  # Replicate by columns
-            )
-          } else if (ncol(predicted_output_train_reg_hidden[[1]]) > ncol(labels)) {
-            # Truncate predicted_output_train_reg_hidden[[1]] to match the dimensions of labels
-            replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[1]][, 1:ncol(labels), drop = FALSE]
-          } else {
-            replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[1]]
-          }
-          
-          # Check if the number of rows in replicated_predicted_output_train_reg_hidden matches labels
-          if (nrow(replicated_predicted_output_train_reg_hidden) < nrow(labels)) {
-            # If replicated_predicted_output_train_reg_hidden has fewer rows, replicate it to match the number of rows in labels
-            replicated_predicted_output_train_reg_hidden <- matrix(
-              rep(replicated_predicted_output_train_reg_hidden, length.out = nrow(labels) * ncol(replicated_predicted_output_train_reg_hidden)),
-              nrow = nrow(labels),
-              ncol = ncol(replicated_predicted_output_train_reg_hidden)
-            )
-          } else if (nrow(replicated_predicted_output_train_reg_hidden) > nrow(labels)) {
-            # If replicated_predicted_output_train_reg_hidden has more rows, truncate it to match the number of rows in labels
-            replicated_predicted_output_train_reg_hidden <- replicated_predicted_output_train_reg_hidden[1:nrow(labels), , drop = FALSE]
-          } else {
-            replicated_predicted_output_train_reg_hidden <- replicated_predicted_output_train_reg_hidden
-          }
-          
-          # Calculate the error for the first layer
-          error <- labels - replicated_predicted_output_train_reg_hidden
-          
-        } else {
-          # For subsequent layers, follow your existing logic
-          if (layer != self$num_layers) {
-            if (ncol(predicted_output_train_reg_hidden[[layer - 1]]) < ncol(predicted_output_train_reg_hidden[[layer]])) {
-              # Replicate previous layer output to match the dimensions of predicted_output_train_reg_hidden[[layer]]
-              replicated_previous_layer_output <- matrix(
-                rep(predicted_output_train_reg_hidden[[layer - 1]], each = ncol(predicted_output_train_reg_hidden[[layer]]) / ncol(predicted_output_train_reg_hidden[[layer - 1]])),
-                nrow = nrow(predicted_output_train_reg_hidden[[layer - 1]]),
-                ncol = ncol(predicted_output_train_reg_hidden[[layer]]),
-                byrow = FALSE  # Replicate by columns
-              )
-            } else if (ncol(predicted_output_train_reg_hidden[[layer - 1]]) > ncol(predicted_output_train_reg_hidden[[layer]])) {
-              # Truncate the previous layer output to match the dimensions of predicted_output_train_reg_hidden[[layer]]
-              replicated_previous_layer_output <- predicted_output_train_reg_hidden[[layer - 1]][, 1:ncol(predicted_output_train_reg_hidden[[layer]]), drop = FALSE]
-            } else {
-              replicated_previous_layer_output <- predicted_output_train_reg_hidden[[layer - 1]]
-            }
-            
-            # Check if the number of rows in replicated_previous_layer_output matches predicted_output_train_reg_hidden[[layer]]
-            if (nrow(replicated_previous_layer_output) < nrow(predicted_output_train_reg_hidden[[layer]])) {
-              # If replicated_previous_layer_output has fewer rows, replicate it to match the number of rows in predicted_output_train_reg_hidden[[layer]]
-              replicated_previous_layer_output <- matrix(
-                rep(replicated_previous_layer_output, length.out = nrow(predicted_output_train_reg_hidden[[layer]]) * ncol(replicated_previous_layer_output)),
-                nrow = nrow(predicted_output_train_reg_hidden[[layer]]),
-                ncol = ncol(replicated_previous_layer_output)
-              )
-            } else if (nrow(replicated_previous_layer_output) > nrow(predicted_output_train_reg_hidden[[layer]])) {
-              # If replicated_previous_layer_output has more rows, truncate it to match the number of rows in predicted_output_train_reg_hidden[[layer]]
-              replicated_previous_layer_output <- replicated_previous_layer_output[1:nrow(predicted_output_train_reg_hidden[[layer]]), , drop = FALSE]
-            } else {
-              replicated_previous_layer_output <- replicated_previous_layer_output
-            }
-            
-            # Calculate the error for hidden layers
-            error <- replicated_previous_layer_output - predicted_output_train_reg_hidden[[layer]]
-          } else {
-            # For the last layer
-            if (ncol(labels) != ncol(predicted_output_train_reg_hidden[[layer]])) {
-              if (ncol(labels) < ncol(predicted_output_train_reg_hidden[[layer]])) {
-                replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[layer]][, 1:ncol(labels), drop = FALSE]
-              } else {
-                replicated_predicted_output_train_reg_hidden <- matrix(
-                  rep(predicted_output_train_reg_hidden[[layer]], each = ncol(labels) / ncol(predicted_output_train_reg_hidden[[layer]])),
-                  nrow = nrow(predicted_output_train_reg_hidden[[layer]]),
-                  ncol = ncol(labels),
-                  byrow = FALSE
-                )
-              }
-            } else {
-              replicated_predicted_output_train_reg_hidden <- predicted_output_train_reg_hidden[[layer]]
-            }
-            
-            if (nrow(labels) != nrow(replicated_predicted_output_train_reg_hidden)) {
-              if (nrow(labels) < nrow(replicated_predicted_output_train_reg_hidden)) {
-                replicated_predicted_output_train_reg_hidden <- replicated_predicted_output_train_reg_hidden[1:nrow(labels), , drop = FALSE]
-              } else {
-                replicated_predicted_output_train_reg_hidden <- matrix(
-                  rep(replicated_predicted_output_train_reg_hidden, length.out = nrow(labels) * ncol(replicated_predicted_output_train_reg_hidden)),
-                  nrow = nrow(labels),
-                  ncol = ncol(replicated_predicted_output_train_reg_hidden),
-                  byrow = TRUE
-                )
-              }
-            }
-            
-            # Calculate the error for the output layer
-            error <- labels - replicated_predicted_output_train_reg_hidden
-          }
-        }
-        #
-        # # Print the error for debugging
-        # print(paste("Error for layer ", layer, ": ", sum(error^2)))
-        
-        
-        
-        # # Calculate the error
-        error <- labels - replicated_predicted_output_train_reg_hidden
-        errors[[layer]] <- error
-        
-        
         
         reg_loss_total <- reg_loss_total + reg_loss
         
-        # all_replicated_predicted_output_train_reg_hidden[layer] <- list(replicated_predicted_output_train_reg_hidden)
-      }}else { #if signle nn
-        
-        self$weights <- lapply(self$weights, function(w) as.matrix(w))  # Convert each element to a numeric matrix
-        
-        self$groups <- list(2:length(self$weights))
-        
-        # Calculate the regularization term based on 'reg_type'
-        if (reg_type == "L1") {
-          # L1 Regularization: Encourages sparsity by adding the sum of absolute weights
-          reg_loss <- self$lambda * sum(sapply(self$weights, function(w) sum(abs(w), na.rm = TRUE)))
-        } else if (reg_type == "L2") {
-          # L2 Regularization: Adds a penalty proportional to the sum of squared weights
-          reg_loss <- self$lambda * sum(sapply(self$weights, function(w) sum(w^2, na.rm = TRUE)))
-        } else if (reg_type == "L1_L2") {
-          # Elastic Net (L1_L2) Regularization: Combines L1 and L2 regularizations
-          l1_ratio <- 0.5  # Adjust this ratio based on your needs
-          reg_loss <- self$lambda * (l1_ratio * sum(sapply(self$weights, function(w) sum(abs(w), na.rm = TRUE))) +
-                                       (1 - l1_ratio) * sum(sapply(self$weights, function(w) sum(w^2, na.rm = TRUE))))
-        } else if (reg_type == "Group_Lasso") {
-          # Group Lasso Regularization: Regularizes groups of features
-          if (length(self$groups) == 0) {
-            stop("Groups must be defined for Group Lasso regularization.")
+        # Compute error
+        if (layer == self$num_layers) {
+          # Output layer: compare prediction with true labels
+          predicted <- hidden_outputs[[layer]]
+          
+          if (ncol(predicted) != ncol(labels)) {
+            if (ncol(predicted) < ncol(labels)) {
+              predicted <- matrix(rep(predicted, length.out = nrow(predicted) * ncol(labels)),
+                                  nrow = nrow(predicted), ncol = ncol(labels))
+            } else {
+              predicted <- predicted[, 1:ncol(labels), drop = FALSE]
+            }
           }
-          reg_loss <- self$lambda * sum(sapply(self$groups, function(group) {
-            group_norm <- sqrt(sum(sapply(group, function(idx) {
-              if (idx <= length(self$weights)) {
-                sqrt(sum(self$weights[[idx]]^2, na.rm = TRUE))  # Calculate the norm for the weight matrix
-              } else {
-                0  # In case the index exceeds the length of weights
-              }
-            })^2, na.rm = TRUE))  # Square the sum of norms for the group
-            group_norm
-          }))
-        } else if (reg_type == "Max_Norm") {
-          # Max-Norm Regularization: Constrains the norm of the weight vectors
-          max_norm <- 1.0  # Adjust this norm limit based on your needs
-          norm_violations <- sum(sapply(1:length(self$weights), function(i) {
-            norm_weight <- sqrt(sum(self$weights[[i]]^2, na.rm = TRUE))  # Compute the norm of the weight matrix
-            if (is.na(norm_weight)) norm_weight <- 0  # Handle NA values
-            if (norm_weight > max_norm) return(1) else return(0)  # Count violations
-          }))
-          reg_loss <- self$lambda * norm_violations
-        } else if (reg_type == "Sparse_Bayesian") {
-          # Sparse Bayesian Learning: Uses a Bayesian approach for sparsity
-          # Note: Implementing Sparse Bayesian Learning requires a more complex setup and is not a simple addition
-          stop("Sparse Bayesian Learning is not implemented in this code.")
+          
+          error <- labels - predicted
+          errors[[layer]] <- error
         } else {
-          # Handle invalid regularization type
-          stop("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'.")
-        }
-        
-        reg_loss_total <- reg_loss
-        if (ncol(labels) != ncol(predicted_output_train_reg$predicted_output)) {
-          if (ncol(predicted_output_train_reg$predicted_output) < ncol(labels)) {
-            # Calculate the required replication factor
-            rep_factor <- ceiling((nrow(labels) * ncol(labels)) / length(predicted_output_train_reg$predicted_output))
-            # Create the replicated vector and check its length
-            replicated_predicted_output <- rep(predicted_output_train_reg$predicted_output, rep_factor)
-            # Truncate the replicated vector to match the required length
-            replicated_predicted_output <- replicated_predicted_output[1:(nrow(labels) * ncol(labels))]
-            # Create the matrix and check its dimensions
-            predicted_output_matrix <- matrix(replicated_predicted_output, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
-          } else {
-            # Truncate predicted_output_train_reg$predicted_output to match the number of columns in labels
-            truncated_predicted_output <- predicted_output_train_reg$predicted_output[, 1:ncol(labels)]
-            # Create the matrix and check its dimensions
-            predicted_output_matrix <- matrix(truncated_predicted_output, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
+          # Hidden layer: autoencoder-style reconstruction loss
+          prev <- hidden_outputs[[layer]]
+          next_layer <- hidden_outputs[[layer + 1]]
+          
+          if (ncol(prev) != ncol(next_layer)) {
+            if (ncol(prev) < ncol(next_layer)) {
+              prev <- matrix(rep(prev, length.out = nrow(prev) * ncol(next_layer)),
+                             nrow = nrow(prev), ncol = ncol(next_layer))
+            } else {
+              prev <- prev[, 1:ncol(next_layer), drop = FALSE]
+            }
           }
-        } else {
-          predicted_output_matrix <- predicted_output_train_reg$predicted_output
+          
+          error <- prev - next_layer
+          errors[[layer]] <- error
         }
-        
-        # Calculate the error
-        error_1000x1 <- labels - predicted_output_matrix
-        
       }
+    }
+    
+    else {  # Single-layer NN case
+      
+      reg_loss_total <- 0
+      
+      # Compute regularization loss
+      if (reg_type == "L1") {
+        reg_loss_total <- self$lambda * sum(abs(self$weights[[1]]), na.rm = TRUE)
+      } else if (reg_type == "L2") {
+        reg_loss_total <- self$lambda * sum(self$weights[[1]]^2, na.rm = TRUE)
+      } else if (reg_type == "L1_L2") {
+        l1_ratio <- 0.5
+        reg_loss_total <- self$lambda * (
+          l1_ratio * sum(abs(self$weights[[1]]), na.rm = TRUE) +
+            (1 - l1_ratio) * sum(self$weights[[1]]^2, na.rm = TRUE)
+        )
+      } else if (reg_type == "Group_Lasso") {
+        self$groups <- list(1)
+        reg_loss_total <- self$lambda * sum(sapply(self$groups, function(group) {
+          group_norm <- sqrt(sum(sapply(group, function(idx) {
+            if (idx <= length(self$weights)) {
+              sqrt(sum(self$weights[[idx]]^2, na.rm = TRUE))
+            } else {
+              0
+            }
+          })^2, na.rm = TRUE))
+          group_norm
+        }))
+      } else if (reg_type == "Max_Norm") {
+        max_norm <- 1.0
+        reg_loss_total <- self$lambda * sum(sapply(self$weights, function(w) {
+          norm_weight <- sqrt(sum(w^2, na.rm = TRUE))
+          if (is.na(norm_weight)) norm_weight <- 0
+          if (norm_weight > max_norm) 1 else 0
+        }))
+      } else if (reg_type == "Sparse_Bayesian") {
+        stop("Sparse Bayesian Learning is not implemented in this code.")
+      } else {
+        stop("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'.")
+      }
+      
+      # Get predicted output
+      predicted_output <- predicted_output_train_reg$predicted_output
+      
+      # Align column dimensions
+      if (ncol(predicted_output) != ncol(labels)) {
+        if (ncol(predicted_output) < ncol(labels)) {
+          predicted_output <- matrix(
+            rep(predicted_output, length.out = nrow(labels) * ncol(labels)),
+            nrow = nrow(labels), ncol = ncol(labels)
+          )
+        } else {
+          predicted_output <- predicted_output[, 1:ncol(labels), drop = FALSE]
+        }
+      }
+      
+      # Align row dimensions
+      if (nrow(predicted_output) != nrow(labels)) {
+        if (nrow(predicted_output) < nrow(labels)) {
+          predicted_output <- matrix(
+            rep(predicted_output, length.out = nrow(labels) * ncol(predicted_output)),
+            nrow = nrow(labels), ncol = ncol(predicted_output)
+          )
+        } else {
+          predicted_output <- predicted_output[1:nrow(labels), , drop = FALSE]
+        }
+      }
+      
+      # Compute error
+      error_1000x1 <- labels - predicted_output
+    }
     
     # Set final error depending on architecture
     if (ML_NN) {
@@ -2185,10 +1807,10 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     # Record the loss for this epoch
     # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
     losses[[epoch]] <- loss_function(
-      predictions = if (self$ML_NN) predicted_output_train_reg_hidden[[self$num_layers]] else predicted_output_matrix,
+      predictions = if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_matrix,
       labels = labels,
       reg_loss_total = reg_loss_total,
-      loss_type = loss_type  # or "MSE", etc. depending on your task
+      loss_type = loss_type
     )
     
     # --------- Backpropagation Begins ---------
@@ -2214,8 +1836,6 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     }
     
     
-
-    errors <- vector("list", self$num_layers)
     errors[[self$num_layers]] <- error_last_layer  # [4500, out_dim]
     
     if (self$ML_NN) {
@@ -2250,7 +1870,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       cat("Single Layer Backpropagation\n")
       
       # Use the same Z_input from forward pass as activation_input
-      activation_input <- predicted_output_train_reg_hidden[[1]]
+      activation_input <- hidden_outputs[[1]]
       if (is.list(activation_input)) {
         activation_input <- as.matrix(activation_input)
       }
@@ -2265,7 +1885,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       
       local_deriv <- activation_derivative_function(activation_input)
       
-      errors <- list()
+
       errors[[1]] <- error_last_layer * local_deriv
       
     }
@@ -2307,7 +1927,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             if (layer == 1) {
               input_mat <- Rdata
             } else {
-              input_mat <- predicted_output_train_reg_hidden[[layer - 1]]
+              input_mat <- hidden_outputs[[layer - 1]]
             }
             
             # Ensure dimensions match before matrix multiplication
