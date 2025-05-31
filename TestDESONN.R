@@ -81,7 +81,7 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.997  # Slightly lower for better adaptabilit
 
 
-custom_scale <- 1.2
+custom_scale <- 0.2
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
@@ -90,7 +90,8 @@ ML_NN <- TRUE
 hidden_sizes <- c(16, 8)
 input_size <- 12
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu, relu, sigmoid)
+activation_functions <- list(relu, leaky_relu, sigmoid)
+
 
 
 activation_functions_learn <- NULL #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
@@ -323,8 +324,8 @@ increment_loop_flag <- FALSE
     if(hyperparameter_grid_setup){
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-        lr1 <- 0.0005 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
-        lambda1 <- .01 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
+        lr1 <- 0.05 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
+        lambda1 <- .1 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
 
