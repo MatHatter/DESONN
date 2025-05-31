@@ -715,25 +715,11 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     }
 
     # Retrieve activation function for layer 1
-    valid_activations <- c(
-      "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
-      "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
-      "custom_activation", "custom_binary_activation", "softmax", "bent_identity"
-    )
-    
-
-    
-    # Retrieve activation function safely
-    if (!is.null(activation_functions[[1]]) &&
-        activation_functions[[1]] %in% valid_activations) {
-      activation_function_learn <- tryCatch(
-        get(activation_functions[[1]], mode = "function", envir = environment()),
-        error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
-      )
+    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
+      activation_function_learn <- activation_functions[[1]]
     } else {
       activation_function_learn <- NULL
     }
-    
     
     
     
@@ -764,40 +750,35 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       
     } else {
-      # Single-layer mode
+      # -------------------- Single-layer Network Forward Pass --------------------
       output_cols <- ncol(self$weights)
+      input_rows <- nrow(Rdata)
       
-      if (length(self$biases) == 1) {
-        bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(self$biases) == output_cols) {
-        bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(self$biases) < output_cols) {
-        bias_matrix <- matrix(rep(self$biases, length.out = output_cols), 
-                              nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      # Prepare bias matrix with appropriate broadcasting
+      bias_vec <- as.numeric(self$biases)
+      if (length(bias_vec) == 1) {
+        bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(bias_vec) == output_cols) {
+        bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+      } else if (length(bias_vec) < output_cols) {
+        bias_matrix <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
       } else {
-        bias_matrix <- matrix(self$biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        bias_matrix <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
       }
       
-      Z <- Rdata %*% self$weights + bias_matrix
+      # Linear transformation
+      Z <- Rdata %*% as.matrix(self$weights) + bias_matrix
       
-      activation_function_learn <- NULL
-      if (!is.null(activation_functions[[1]]) &&
-          activation_functions[[1]] %in% valid_activations) {
-        activation_function_learn <- tryCatch(
-          get(activation_functions[[1]], mode = "function", envir = environment()),
-          error = function(e) {
-            stop("Activation function retrieval failed: ", conditionMessage(e))
-          }
-        )
-      }
-      
-      
-      predicted_output_learn <- if (!is.null(activation_function_learn)) {
-        activation_function_learn(Z)
+      # Apply activation function if provided and valid
+      predicted_output_learn <- if (!is.null(activation_functions[[1]]) &&
+                                    is.function(activation_functions[[1]])) {
+        activation_functions[[1]](Z)
       } else {
         Z
       }
     }
+    
+
     
 
 
@@ -1297,37 +1278,20 @@ predict = function(Rdata, labels, activation_functions) {
     print("------------------------predict-begin-------------------------------------------------")
     start_time <- Sys.time()
     
-    # Normalize to list if user passed a string
-    if (self$ML_NN == FALSE) {
-      # Normalize to list if user passed a string
-      if (!is.list(activation_functions)) {
-        activation_functions <- list(activation_functions)
-      }
-    }
+    if (!is.list(activation_functions)) activation_functions <- list(activation_functions)
+    
 
     # Retrieve activation function for layer 1
-    valid_activations <- c(
-      "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
-      "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
-      "custom_activation", "custom_binary_activation", "softmax", "bent_identity"
-    )
-    
-
-    
-    # Retrieve activation function safely
-    if (!is.null(activation_functions[[1]]) &&
-        activation_functions[[1]] %in% valid_activations) {
-      activation_function <- tryCatch(
-        get(activation_functions[[1]], mode = "function", envir = environment()),
-        error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
-      )
+    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
+      activation_function <- activation_functions[[1]]
     } else {
       activation_function <- NULL
     }
     
     
     
-    dropout_rate <- self$dropout_rates[[1]]
+    # Handle dropout format for SL vs ML
+    dropout_rates <- if (self$ML_NN) self$dropout_rates else list(self$dropout_rates)
     
     # Debugging: Log dimensions of Rdata, weights, and biases
     cat("Rdata dimensions: ", dim(Rdata), "\n")
@@ -1335,98 +1299,55 @@ predict = function(Rdata, labels, activation_functions) {
     cat("Biases dimensions: ", length(self$biases[[1]]), "\n")
     
     # -------- Bias broadcasting for layer 1 --------
-    weights_matrix <- if (self$ML_NN) {
-      as.matrix(self$weights[[1]])
-    } else {
-      as.matrix(self$weights)
-    }
-    output_cols <- as.integer(ncol(weights_matrix))
-    input_rows <- as.integer(nrow(Rdata))
-    
+    weights_matrix <- if (self$ML_NN) as.matrix(self$weights[[1]]) else as.matrix(self$weights)
     bias_vec <- if (self$ML_NN) self$biases[[1]] else self$biases
+    
     if (is.list(bias_vec)) bias_vec <- unlist(bias_vec)
     bias_vec <- as.numeric(bias_vec)
     
-    # Debug output
-    cat("input_rows =", input_rows, "\n")
-    cat("output_cols =", output_cols, "\n")
-    cat("bias_vec length =", length(bias_vec), "\n")
+    input_rows <- nrow(Rdata)
+    output_cols <- ncol(weights_matrix)
     
     if (length(bias_vec) == 1) {
-      cat("Using single bias value:", bias_vec, "\n")
       biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
     } else if (length(bias_vec) == output_cols) {
       biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
     } else if (length(bias_vec) < output_cols) {
-      cat("Bias length and neuron count mismatch. Adjusting (replicating)...\n")
       biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else if (length(bias_vec) > output_cols) {
-      cat("Bias length exceeds neuron count. Truncating...\n")
+    } else {
       biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else {
-      stop("Invalid bias configuration in layer 1")
     }
     
+    Z <- as.matrix(Rdata) %*% weights_matrix + biases
     
-    
-    
-
-    if (self$ML_NN) {
-      predicted_output_predict <- tryCatch({
-        biases <- adjust_biases_layer_1(self$biases[[1]], self$weights[[1]], Rdata)
-        result <- Rdata %*% self$weights[[1]] + biases
-        
-        if (!is.null(activation_function)) {
-          result <- activation_function(result)
-        }
-        
-        result
-      }, error = function(e) {
-        stop("Error during forward pass in layer 1: ", conditionMessage(e))
-      })
+    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
+      predicted_output_predict <- activation_functions[[1]](Z)
     } else {
-      predicted_output_predict <- tryCatch({
-        Rdata_matrix <- as.matrix(Rdata)
-        weights_matrix <- as.matrix(unlist(self$weights))
-        storage.mode(weights_matrix) <- "double"
-        
-        biases <- adjust_biases_layer_1(as.numeric(unlist(self$biases)), weights_matrix, Rdata_matrix)
-        
-        
-        cat("class(Rdata_matrix):", class(Rdata_matrix), "\n")
-        cat("storage.mode(Rdata_matrix):", storage.mode(Rdata_matrix), "\n")
-        cat("dim(Rdata_matrix):", dim(Rdata_matrix), "\n")
-        
-        cat("class(weights_matrix):", class(weights_matrix), "\n")
-        cat("storage.mode(weights_matrix):", storage.mode(weights_matrix), "\n")
-        cat("dim(weights_matrix):", dim(weights_matrix), "\n")
-        
-  
-        Z <- Rdata_matrix %*% weights_matrix + biases
-        
-        if (!is.null(activation_functions[[1]]) &&
-            activation_functions[[1]] %in% valid_activations) {
-          activation_function <- tryCatch(
-            get(activation_functions[[1]], mode = "function", envir = environment()),
-            error = function(e) stop("Activation function retrieval failed: ", conditionMessage(e))
-          )
-          activation_function(Z)
-        } else {
-          Z
-        }
-      }, error = function(e) {
-        stop("Error during single-layer prediction: ", conditionMessage(e))
-      })
-      
-      
+      predicted_output_predict <- Z
     }
     
-
-
-    # Apply dropout for first layer if specified
-    if (!is.null(dropout_rates)) {
+    if (!is.null(dropout_rates[[1]])) {
       predicted_output_predict <- self$dropout(predicted_output_predict, dropout_rates[[1]])
     }
+    
+    #Print to console
+    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
+      activation_function <- activation_functions[[1]]
+      
+      cat("Layer 1 activation function:", attr(activation_function, "name"),
+          "| Z range before:", range(Z), "\n")
+      
+      predicted_output_predict <- activation_function(Z)
+      
+      cat("Layer 1 activation applied:", attr(activation_function, "name"),
+          "| Z range after:", range(predicted_output_predict), "\n")
+      
+    } else {
+      cat("Layer 1 has no valid activation function. Skipping activation.",
+          "| Z range:", range(Z), "\n")
+      predicted_output_predict <- Z
+    }
+    
     
     # Multi-layer forward pass
     if (self$ML_NN) {
@@ -1437,22 +1358,19 @@ predict = function(Rdata, labels, activation_functions) {
       dim_hidden_layers_predicted[[1]] <- dim(predicted_output_predict)
       
       for (layer in 2:self$num_layers) {
-        # Retrieve activation function for this layer
-        activation_function <- if (!is.null(activation_functions[[layer]]) &&
-                                   activation_functions[[layer]] %in% valid_activations) {
-          tryCatch(get(activation_functions[[layer]], mode = "function"), error = function(e) NULL)
+        
+        activation_function <- if (!is.null(activation_functions[[layer]]) && is.function(activation_functions[[layer]])) {
+          activation_functions[[layer]]
         } else {
           NULL
         }
         
-        # Bias matrix broadcasting
-        num_rows <- nrow(hidden_outputs[[layer - 1]])
-        num_neurons <- ncol(self$weights[[layer]])
+        
+        input <- hidden_outputs[[layer - 1]]
+        weights <- self$weights[[layer]]
+        num_rows <- nrow(input)
+        num_neurons <- ncol(weights)
         bias_vec <- self$biases[[layer]]
-        
-        
-
-        
         
         if (length(bias_vec) == 1) {
           biases <- matrix(bias_vec, nrow = num_rows, ncol = num_neurons, byrow = TRUE)
@@ -1464,10 +1382,6 @@ predict = function(Rdata, labels, activation_functions) {
           biases <- matrix(bias_vec[1:num_neurons], nrow = num_rows, ncol = num_neurons, byrow = TRUE)
         }
         
-        # Compute weighted sum
-        input <- hidden_outputs[[layer - 1]]
-        weights <- self$weights[[layer]]
-        
         Z <- if (ncol(input) == nrow(weights)) {
           input %*% weights + biases
         } else if (ncol(input) == ncol(weights)) {
@@ -1476,26 +1390,44 @@ predict = function(Rdata, labels, activation_functions) {
           stop(paste("Incompatible dimensions between hidden_outputs and weights at layer", layer))
         }
         
-        # Apply activation
-        hidden_outputs[[layer]] <- if (!is.null(activation_function)) activation_function(Z) else Z
-        
-        # Optional dropout
-        if (!is.null(self$dropout_rates[[layer]])) {
-          hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], self$dropout_rates[[layer]])
+        if (!is.null(activation_functions[[layer]]) && is.function(activation_functions[[layer]])) {
+          activation_function <- activation_functions[[layer]]
+          
+          cat("Layer", layer, "activation function:", attr(activation_function, "name"),
+              "| Z range before:", range(Z), "\n")
+          
+          Z <- activation_function(Z)
+          
+          cat("Layer", layer, "activation applied:", attr(activation_function, "name"),
+              "| Z range after:", range(Z), "\n")
+          
+        } else {
+          cat("Layer", layer, "has no valid activation function. Skipping activation.",
+              "| Z range:", range(Z), "\n")
         }
         
-        # Store prediction and dimensions
+        if (layer == self$num_layers) {
+          cat("Final layer reached: layer", layer, "\n")
+        }
+        
+        hidden_outputs[[layer]] <- Z
+        
+        if (!is.null(dropout_rates[[layer]])) {
+          hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], dropout_rates[[layer]])
+        }
+        
         predicted_output_predict_hidden[[layer]] <- hidden_outputs[[layer]]
         dim_hidden_layers_predicted[[layer]] <- dim(hidden_outputs[[layer]])
         
-        # Ensure matrix structure
         if (is.vector(predicted_output_predict_hidden[[layer]])) {
           predicted_output_predict_hidden[[layer]] <- as.matrix(predicted_output_predict_hidden[[layer]])
         }
       }
     } else {
       dim_hidden_layers_predicted <- NULL
+      predicted_output_predict_hidden <- predicted_output_predict
     }
+    
     
 
 
@@ -1590,6 +1522,7 @@ predict = function(Rdata, labels, activation_functions) {
               
               # Compute prediction error
               error_prediction <- labels - predicted_output_matrix
+              predicted_output_predict <- predicted_output_matrix
             }
             
 
@@ -1636,12 +1569,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   # Initialize variables to store the previous weights and biases
   prev_weights <- NULL
   prev_biases <- NULL
-  
-  valid_activations <- c(
-    "sigmoid", "sigmoid_binary", "relu", "leaky_relu", "elu", "tanh", "swish", "softplus",
-    "hard_sigmoid", "gelu", "selu", "mish", "maxout", "prelu", "binary_activation",
-    "custom_activation", "custom_binary_activation", "softmax", "bent_identity"
-  )
+
   
   for (epoch in 1:epoch_in_list) {
     # lr <- lr_scheduler(i, initial_lr = lr)
@@ -1650,7 +1578,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     
     # Run forward pass using centralized logic
     start_time <- Sys.time()
-    predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions_learn)
+    predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions)
     predicted_output_train_reg_prediction_time <- Sys.time() - start_time
     
     # Extract predicted output and error
@@ -1663,6 +1591,8 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       dim_hidden_layers <- lapply(hidden_outputs, dim)
       
       # Proceed with your loop for regularization + error calculation...
+    } else {
+      dim_hidden_layers <- predicted_output_train_reg$hidden_outputs #This = NULL, I could've set to NULL, but I instead passed the NULL from predict() through this variable.
     }
     
     
@@ -1797,60 +1727,46 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     }
     
     # Set final error depending on architecture
-    if (ML_NN) {
-      # Final error comes from the output layer in multi-layer setup
+    if (self$ML_NN) {
       error_last_layer <- errors[[self$num_layers]]
     } else {
       error_last_layer <- error_1000x1
+      errors <- list()
     }
+    errors[[self$num_layers]] <- error_last_layer
+    
+    
     
     # Record the loss for this epoch
     # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
+    predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$predicted_output
+
     losses[[epoch]] <- loss_function(
-      predictions = if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_matrix,
+      predictions = predictions,
       labels = labels,
       reg_loss_total = reg_loss_total,
       loss_type = loss_type
     )
     
+    
     # --------- Backpropagation Begins ---------
-    
-    
-    if (self$ML_NN) {
-      if (length(activation_functions) >= layer &&
-          !is.null(activation_functions[[layer]]) &&
-          activation_functions[[layer]] %in% valid_activations) {
-        activation_derivative_function <- get(paste0(activation_functions[[layer]], "_derivative"))
-      } else {
-        activation_derivative_function <- NULL
-      }
-    } else {
-      # Single-layer network only has one activation
-      if (length(activation_functions) >= 1 &&
-          !is.null(activation_functions[[1]]) &&
-          activation_functions[[1]] %in% valid_activations) {
-        activation_derivative_function <- get(paste0(activation_functions[[1]], "_derivative"))
-      } else {
-        activation_derivative_function <- NULL
-      }
-    }
-    
-    
-    errors[[self$num_layers]] <- error_last_layer  # [4500, out_dim]
     
     if (self$ML_NN) {
       for (layer in (self$num_layers - 1):1) {
         next_error <- errors[[layer + 1]]
         weight_next <- self$weights[[layer + 1]]
-        
         activation_input <- hidden_outputs[[layer]]
         
-        # Retrieve activation derivative function for current layer
-        activation_derivative_function <- if (!is.null(activation_functions[[layer]]) &&
-                                              activation_functions[[layer]] %in% valid_activations) {
-          get(paste0(activation_functions[[layer]], "_derivative"))
-        } else {
-          NULL
+        # Safely retrieve activation derivative function for current layer
+        activation_derivative_function <- NULL
+        if (length(activation_functions) >= layer &&
+            !is.null(activation_functions[[layer]]) &&
+            is.function(activation_functions[[layer]])) {
+          func_name <- deparse(substitute(activation_functions[[layer]]))
+          activation_derivative_function <- tryCatch(
+            get(paste0(func_name, "_derivative"), mode = "function"),
+            error = function(e) NULL
+          )
         }
         
         # Compute local derivative and apply backpropagation
@@ -1859,36 +1775,53 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
           propagated_error <- next_error %*% t(weight_next)
           errors[[layer]] <- propagated_error * local_deriv
         } else {
-          # If no activation function derivative, just propagate error directly
           errors[[layer]] <- next_error %*% t(weight_next)
         }
       }
-    }
-    
-    
-    else {
+    } else {
       cat("Single Layer Backpropagation\n")
       
-      # Use the same Z_input from forward pass as activation_input
-      activation_input <- hidden_outputs[[1]]
-      if (is.list(activation_input)) {
-        activation_input <- as.matrix(activation_input)
+      # Wrap activation function into a list if it's a single function
+      if (!is.list(activation_functions)) {
+        if (is.function(activation_functions)) {
+          if (is.null(attr(activation_functions, "name"))) {
+            stop("Activation function must have a 'name' attribute. Set it with: attr(relu, 'name') <- 'relu'")
+          }
+          activation_functions <- list(activation_functions)
+        } else {
+          stop("activation_functions must be a function or a list of functions.")
+        }
       }
       
-      # Get derivative function
-      if (!is.null(activation_functions[[1]]) &&
-          activation_functions[[1]] %in% valid_activations) {
-        activation_derivative_function <- get(paste0(activation_functions[[1]], "_derivative"))
-      } else {
-        stop("Missing activation derivative function for single-layer")
+      # Extract the first activation function and its name
+      activation_function <- activation_functions[[1]]
+      activation_name <- attr(activation_function, "name")
+      
+      if (is.null(activation_name) || activation_name == "unknown") {
+        stop("Activation function name is not set or invalid.")
       }
       
+      # Retrieve the corresponding derivative function
+      derivative_name <- paste0(activation_name, "_derivative")
+      cat("Trying to get function: ", derivative_name, "\n")
+      
+      if (!exists(derivative_name, mode = "function")) {
+        stop("Activation derivative function '", derivative_name, "' does not exist.")
+      }
+      
+      activation_derivative_function <- get(derivative_name, mode = "function")
+      
+      # Apply derivative to predicted output
+      activation_input <- if (is.list(predicted_output)) as.matrix(predicted_output) else predicted_output
       local_deriv <- activation_derivative_function(activation_input)
       
-
+      errors <- list()
       errors[[1]] <- error_last_layer * local_deriv
-      
     }
+    
+      
+
+    
     
     
     
@@ -1938,8 +1871,13 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             # Compute the gradients for this layer
             grads_matrix <- t(input_mat) %*% errors[[layer]]
             
+            cat(">> Gradients for layer", layer, "\n")
+            cat("grads_matrix dim:\n")
+            print(dim(grads_matrix))
             
-          
+            cat("grads_matrix summary:\n")
+            print(summary(as.vector(grads_matrix)))
+            
             
             if (!is.null(optimizer_params_weights[[layer]]) && !is.null(optimizer)) {
               if (optimizer == "adam") {
@@ -3725,6 +3663,9 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             # Calculate and print the accuracy
             # Extract predicted probabilities (matrix of shape [N, 1])
             probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
+            cat("First few predicted probabilities:\n", as.vector(predicted_outputAndTime$predicted_output_l2$predicted_output[1:10]), "\n")
+            cat("Summary of predicted probabilities:\n")
+            print(summary(as.vector(predicted_outputAndTime$predicted_output_l2$predicted_output)))
             
             # Convert to binary predictions using threshold 0.5
             binary_preds <- ifelse(probs >= 0.5, 1, 0)
@@ -4825,32 +4766,59 @@ initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer) {
 
 
 adam_update <- function(params, grads, lr, beta1, beta2, epsilon, t) {
-  if (is.null(params$m)) {
-    params$m <- matrix(0, nrow = nrow(grads), ncol = ncol(grads))
-  }
-  if (is.null(params$v)) {
-    params$v <- matrix(0, nrow = nrow(grads), ncol = ncol(grads))
+  # Force grads into a list if it's not already
+  if (!is.list(grads)) {
+    grads <- list(as.matrix(grads))
   }
   
-  # Update biased first moment estimate
-  params$m <- beta1 * params$m + (1 - beta1) * grads
+  # Initialize m and v as lists
+  if (!is.list(params$m)) {
+    params$m <- vector("list", length(grads))
+  }
+  if (!is.list(params$v)) {
+    params$v <- vector("list", length(grads))
+  }
   
-  # Update biased second raw moment estimate
-  params$v <- beta2 * params$v + (1 - beta2) * (grads ^ 2)
+  # Learning rate scheduler
+  lr_schedule <- function(t, initial_lr) {
+    decay_rate <- 0.01
+    initial_lr * exp(-decay_rate * t)
+  }
+  lr <- lr_schedule(t, lr)
   
-  # Compute bias-corrected moment estimates
-  m_hat <- params$m / (1 - beta1 ^ t)
-  v_hat <- params$v / (1 - beta2 ^ t)
+  # Update moment estimates
+  for (i in seq_along(grads)) {
+    grad_matrix <- grads[[i]]
+    grad_dims <- dim(grad_matrix)
+    if (is.null(grad_dims)) grad_matrix <- matrix(grad_matrix, nrow = 1)
+    
+    # Initialize if missing or shape mismatch
+    if (is.null(params$m[[i]]) || !all(dim(params$m[[i]]) == dim(grad_matrix))) {
+      params$m[[i]] <- matrix(0, nrow = nrow(grad_matrix), ncol = ncol(grad_matrix))
+    }
+    if (is.null(params$v[[i]]) || !all(dim(params$v[[i]]) == dim(grad_matrix))) {
+      params$v[[i]] <- matrix(0, nrow = nrow(grad_matrix), ncol = ncol(grad_matrix))
+    }
+    
+    # Update m and v
+    params$m[[i]] <- beta1 * params$m[[i]] + (1 - beta1) * grad_matrix
+    params$v[[i]] <- beta2 * params$v[[i]] + (1 - beta2) * (grad_matrix ^ 2)
+  }
   
-  # Compute update
-  update <- lr * m_hat / (sqrt(v_hat) + epsilon)
+  # Bias correction
+  m_hat <- lapply(params$m, function(m) m / (1 - beta1 ^ t))
+  v_hat <- lapply(params$v, function(v) v / (1 - beta2 ^ t))
   
-  # Ensure it's never NULL
-  params$param <- update
+  # Compute updates
+  weights_update <- Map(function(m, v) lr * m / (sqrt(v) + epsilon), m_hat, v_hat)
   
-  return(params)
+  return(list(
+    m = params$m,
+    v = params$v,
+    weights_update = weights_update,
+    biases_update = weights_update  # identical in single-layer mode
+  ))
 }
-
 
 rmsprop_update <- function(params, grads, lr, beta2 = 0.999, epsilon = 1e-8) {
   # Initialize v as a list if it's not already
@@ -5357,11 +5325,16 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
 
 
 
-
-
-
-
-
+# Helper function that searches the parent environment for the function's name
+get_function_name <- function(fn) {
+  for (name in ls(envir = .GlobalEnv)) {
+    obj <- get(name, envir = .GlobalEnv)
+    if (is.function(obj) && identical(obj, fn)) {
+      return(name)
+    }
+  }
+  return("unknown")
+}
 
 
 binary_activation_derivative <- function(x) {
@@ -5470,11 +5443,17 @@ binary_activation <- function(x) {
   return(ifelse(x > 0.5, 1, 0))
 }
 
+attr(relu, "name") <- "binary_activation"
+activation_functions <- binary_activation
+
 custom_binary_activation <- function(x, threshold = -1.08) {
   # Apply thresholding
   result <- ifelse(x < threshold, 0, 1)
   return(result)
 }
+
+attr(relu, "name") <- "custom_binary_activation"
+activation_functions <- custom_binary_activation
 
 custom_activation <- function(z) {
   # Apply the softplus function
@@ -5491,6 +5470,8 @@ custom_activation <- function(z) {
   return(ifelse(softplus_output > 0.00000000001, 1, 0))#) #-00000 ifelse(softplus_output > 1, 1,
 } # Apply the thresholding to make binary output 0.0000000000003
 
+attr(relu, "name") <- "custom_activation"
+activation_functions <- custom_activation
 
 # custom_activation <- function(x, threshold = 1) {
 #
@@ -5506,53 +5487,76 @@ bent_identity <- function(x) {
   (sqrt(x^2 + 1) - 1) / 2 + x
 }
 
+attr(bent_identity, "name") <- "bent_identity"
+
 relu <- function(x) {
   readthedata <<- x
   return(ifelse(x > 0, x, 0))
 }
+
+attr(relu, "name") <- "relu"
 
 softplus <- function(x) {
   store <- log(1 + exp(x))
   return(log(1 + exp(x)))
 }
 
+attr(softplus, "name") <- "softplus"
+
 leaky_relu <- function(x, alpha = 0.01) {
   return(max(alpha * x, x))
 }
+
+attr(leaky_relu, "name") <- "leaky_relu"
 
 elu <- function(x, alpha = 1.0) {
   return(ifelse(x > 0, x, alpha * (exp(x) - 1)))
 }
 
+attr(elu, "name") <- "elu"
+
 tanh <- function(x) {
   return((exp(x) - exp(-x)) / (exp(x) + exp(-x)))
 }
+
+attr(tanh, "name") <- "tanh"
 
 sigmoid <- function(x) {
   readthedata2 <<- x
   return(1 / (1 + exp(-x)))
 }
 
+attr(sigmoid, "name") <- "sigmoid"
+
 hard_sigmoid <- function(x) {
   return(pmax(0, pmin(1, 0.2 * x + 0.5)))
 }
+
+attr(hard_sigmoid, "name") <- "hard_sigmoid"
 
 swish <- function(x) {
   return(x * sigmoid(x))
 }
 
+attr(swish, "name") <- "swish"
+
 sigmoid_binary <- function(x) {
-  
   return(ifelse((1 / (1 + exp(-x))) >= 0.5, 1, 0))
 }
+
+attr(sigmoid_binary, "name") <- "sigmoid_binary"
 
 gelu <- function(x) {
   return(x * 0.5 * (1 + erf(x / sqrt(2))))
 }
 
+attr(gelu, "name") <- "gelu"
+
 selu <- function(x, lambda = 1.0507, alpha = 1.67326) {
   return(lambda * ifelse(x > 0, x, alpha * exp(x) - alpha))
 }
+
+attr(selu, "name") <- "selu"
 
 mish <- function(x) {
   return(x * tanh(log(1 + exp(x))))
@@ -5565,14 +5569,20 @@ maxout <- function(x, w1 = 0.5, b1 = 1.0, w2= -0.5, b2=0.5) {
   return(pmax(w1 * x + b1, w2 * x + b2))
 }
 
+attr(mish, "name") <- "mish"
+
 prelu <- function(x, alpha = 0.01) {
   return(ifelse(x > 0, x, alpha * x))
 }
+
+attr(prelu, "name") <- "prelu"
 
 softmax <- function(z) {
   exp_z <- exp(z)
   return(exp_z / rowSums(exp_z))
 }
+
+attr(softmax, "name") <- "softmax"
 
 # Helper functions
 calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, predicted_output, prediction_time, ensemble_number, run_id) {
