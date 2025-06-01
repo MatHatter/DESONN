@@ -158,39 +158,40 @@ initialize = function(input_size, hidden_sizes = NULL, output_size, Rdata = NULL
             self$map <- matrix(1:N, nrow = grid_rows, ncol = grid_cols)
 
         },
-initialize_weights = function(input_size, hidden_sizes, output_size, method = init_method, custom_scale) {
-  
+initialize_weights = function(input_size, hidden_sizes, output_size, method = init_method, custom_scale = NULL) {
   weights <- list()
   biases <- list()
   
   init_weight <- function(fan_in, fan_out, method, custom_scale) {
     if (method == "xavier") {
-      scale <- ifelse(!is.null(custom_scale), custom_scale, 0.5)
+      scale <- ifelse(is.null(custom_scale), 0.1, custom_scale)  # LOWER DEFAULT SCALE
       sd <- sqrt(2 / (fan_in + fan_out)) * scale
+      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
     } else if (method == "he") {
       sd <- sqrt(2 / fan_in)
+      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
     } else if (method == "lecun") {
       sd <- sqrt(1 / fan_in)
+      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
     } else if (method == "orthogonal") {
-      library(Matrix)
       A <- matrix(rnorm(fan_in * fan_out), ncol = fan_out, nrow = fan_in)
       Q <- qr.Q(qr(A))
       if (ncol(Q) < fan_out) {
         Q <- cbind(Q, matrix(0, nrow = fan_in, ncol = fan_out - ncol(Q)))
       }
-      return(as.matrix(Q))  # Ensure it's a proper matrix
+      return(as.matrix(Q))
     } else if (method == "variance_scaling") {
-      sd <- sqrt(1 / (fan_in + fan_out)) * custom_scale
+      scale <- ifelse(is.null(custom_scale), 0.1, custom_scale)
+      sd <- sqrt(1 / (fan_in + fan_out)) * scale
+      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
     } else if (method == "glorot_uniform") {
       limit <- sqrt(6 / (fan_in + fan_out))
-      return(matrix(runif(fan_in * fan_out, min = -limit, max = limit), 
-                    ncol = fan_out, nrow = fan_in))
+      return(matrix(runif(fan_in * fan_out, min = -limit, max = limit), ncol = fan_out, nrow = fan_in))
     } else {
-      sd <- 0.01  # default standard deviation
+      # Default fallback: small standard deviation
+      sd <- 0.01
+      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
     }
-    
-    return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), 
-                  ncol = fan_out, nrow = fan_in))
   }
   
   # First hidden layer
@@ -203,7 +204,7 @@ initialize_weights = function(input_size, hidden_sizes, output_size, method = in
     biases[[layer]] <- matrix(rnorm(hidden_sizes[layer], mean = 0, sd = 0.01), ncol = 1)
   }
   
-  # ✅ Output layer: properly shaped matrix [last_hidden_size x output_size]
+  # Output layer
   last_hidden_size <- hidden_sizes[[length(hidden_sizes)]]
   weights[[length(hidden_sizes) + 1]] <- init_weight(last_hidden_size, output_size, method, custom_scale)
   biases[[length(hidden_sizes) + 1]] <- matrix(rnorm(output_size, mean = 0, sd = 0.01), ncol = 1)
@@ -214,6 +215,7 @@ initialize_weights = function(input_size, hidden_sizes, output_size, method = in
   
   return(list(weights = weights, biases = biases))
 }
+
 
 
 ,
@@ -803,11 +805,12 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
         for (layer in 2:self$num_layers) {
 
           if (!is.null(activation_functions_learn[[layer]]) &&
-              activation_functions_learn[[layer]] %in% valid_activations) {
+              is.function(tryCatch(get(activation_functions_learn[[layer]]), error = function(e) NULL))) {
             activation_function_learn <- get(activation_functions_learn[[layer]])
           } else {
             activation_function_learn <- NULL
           }
+          
           
 
             dropout_rate_learn <- self$dropout_rates_learn[[layer]]
@@ -973,121 +976,79 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     errors[[self$num_layers]] <- error  # Only the output layer gets label-derived error
     
 # Propagate the error backwards
-if (ML_NN) {
-  # --------- Backpropagation Begins ---------
-  
-
-  
-  # Perform backward propagation through layers
-  for (layer in (self$num_layers - 1):1) {
-    next_error <- errors[[layer + 1]]
-    weight_next <- self$weights[[layer + 1]]
+    # --------- Backpropagation Begins ---------
     
-    # Debug dimensions
-    cat("Backpropagating layer", layer, "\n")
-    cat("  next_error dim:", paste(dim(next_error), collapse = " x "), "\n")
-    cat("  weight_next dim:", paste(dim(weight_next), collapse = " x "), "\n")
-    
-    # Retrieve activation derivative
-    if (!is.null(activation_functions_learn[[layer]]) &&
-        activation_functions_learn[[layer]] %in% valid_activations) {
-      activation_derivative_function <- get(paste0(activation_functions_learn[[layer]], "_derivative"))
+    if (self$ML_NN) {
+      for (layer in (self$num_layers - 1):1) {
+        next_error <- errors[[layer + 1]]
+        weight_next <- self$weights[[layer + 1]]
+        activation_input <- hidden_outputs[[layer]]
+        
+        # Safely retrieve activation derivative function for current layer
+        activation_derivative_function <- NULL
+        if (!is.null(activation_functions_learn[[layer]]) &&
+            is.function(tryCatch(get(activation_functions_learn[[layer]]), error = function(e) NULL))) {
+          
+          derivative_name <- paste0(activation_functions_learn[[layer]], "_derivative")
+          
+          if (exists(derivative_name, mode = "function")) {
+            activation_derivative_function <- get(derivative_name, mode = "function")
+          } else {
+            cat("Derivative function", derivative_name, "does not exist\n")
+          }
+        }
+        
+        # Compute local derivative and apply backpropagation
+        if (!is.null(activation_derivative_function)) {
+          local_deriv <- activation_derivative_function(activation_input)
+          propagated_error <- next_error %*% t(weight_next)
+          errors[[layer]] <- propagated_error * local_deriv
+        } else {
+          errors[[layer]] <- next_error %*% t(weight_next)
+        }
+      }
+      
     } else {
+      cat("Single Layer Backpropagation\n")
+      
+      # Safely retrieve derivative function for single-layer case
       activation_derivative_function <- NULL
+      if (!is.null(activation_functions_learn[[1]]) &&
+          is.function(tryCatch(get(activation_functions_learn[[1]]), error = function(e) NULL))) {
+        
+        derivative_name <- paste0(activation_functions_learn[[1]], "_derivative")
+        
+        if (exists(derivative_name, mode = "function")) {
+          activation_derivative_function <- get(derivative_name, mode = "function")
+        } else {
+          cat("Derivative function", derivative_name, "does not exist\n")
+        }
+      }
+      
+      # Use pre-activation input (Z + bias) for derivative
+      Z <- Rdata %*% self$weights
+      biases <- if (length(self$biases) == 1) {
+        matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
+      } else if (length(self$biases) == ncol(Z)) {
+        matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
+      } else {
+        stop("Bias dimension does not match output neurons for single-layer network")
+      }
+      
+      activation_input <- Z + biases
+      
+      if (!is.null(activation_derivative_function)) {
+        local_deriv <- activation_derivative_function(activation_input)
+      } else {
+        cat("No activation derivative provided — assuming identity gradient.\n")
+        local_deriv <- matrix(1, nrow = nrow(activation_input), ncol = ncol(activation_input))
+      }
+      
+      # Final error
+      errors <- list()
+      errors[[1]] <- error * local_deriv
     }
     
-    
-    # Forward output for this layer
-    activation_input <- predicted_output_learn_hidden[[layer]]
-    
-    # Compute local derivative only if function is not NULL
-    if (!is.null(activation_derivative_function)) {
-      local_deriv <- activation_derivative_function(activation_input)
-      # Backpropagation: propagated error times activation derivative
-      propagated_error <- next_error %*% t(weight_next)
-      # Apply elementwise derivative
-      errors[[layer]] <- propagated_error * local_deriv
-    } else {
-      # If no activation function derivative, just propagate error directly
-      errors[[layer]] <- next_error %*% t(weight_next)
-    }
-    
-  }
-  
-  
-} else {
-  # --------- Single-Layer Backpropagation ---------
-  cat("Single Layer Backpropagation\n")
-  
-  # Retrieve activation derivative function
-  if (!is.null(activation_functions_learn[[1]]) &&
-      activation_functions_learn[[1]] %in% valid_activations) {
-    activation_derivative_function <- get(paste0(activation_functions_learn[[1]], "_derivative"))
-  } else {
-    print("Missing activation derivative function for single-layer network")
-    activation_derivative_function <- NULL
-  }
-  
-  # Use pre-activation input for derivative (not the output)
-  Z <- Rdata %*% self$weights  # Single-layer has self$weights as a matrix
-  biases <- if (length(self$biases) == 1) {
-    matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
-  } else if (length(self$biases) == ncol(Z)) {
-    matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
-  } else {
-    stop("Bias dimension does not match output neurons for single-layer network")
-  }
-  
-  activation_input <- Z + biases
-  
-  if (!is.null(activation_derivative_function)) {
-    local_deriv <- activation_derivative_function(activation_input)
-  } else {
-    cat("No activation derivative provided — assuming identity gradient.\n")
-    local_deriv <- matrix(1, nrow = nrow(activation_input), ncol = ncol(activation_input))
-  }
-  
-  
-  # Compute error for single-layer
-  errors <- list()
-  errors[[1]] <- error * local_deriv  # Elementwise: [n_samples, output_dim]
-  
-  
-}
-
-# Final Adjustment for errors[[1]] to match Rdata
-cat("\nFinal Adjustment for errors[[1]] to match Rdata:\n")
-if (!is.null(errors[[1]]) && !is.null(Rdata)) {
-  cat("Dimensions of errors[[1]] before adjustment: [", nrow(errors[[1]]), ",", ncol(errors[[1]]), "]\n")
-  cat("Dimensions of Rdata: [", nrow(Rdata), ",", ncol(Rdata), "]\n")
-  
-  # Match row dimensions
-  if (nrow(errors[[1]]) != nrow(Rdata)) {
-    if (nrow(errors[[1]]) < nrow(Rdata)) {
-      errors[[1]] <- matrix(
-        rep(errors[[1]], length.out = nrow(Rdata) * ncol(errors[[1]])),
-        nrow = nrow(Rdata),
-        ncol = ncol(errors[[1]])
-      )
-    } else {
-      errors[[1]] <- errors[[1]][1:nrow(Rdata), , drop = FALSE]
-    }
-  }
-  
-  # Match column dimensions
-  if (ncol(errors[[1]]) != ncol(Rdata)) {
-    max_cols <- min(ncol(errors[[1]]), ncol(Rdata))
-    errors[[1]] <- errors[[1]][, 1:max_cols, drop = FALSE]
-  }
-  
-  cat("Dimensions of errors[[1]] after adjustment: [", nrow(errors[[1]]), ",", ncol(errors[[1]]), "]\n")
-  cat("Successfully adjusted errors[[1]] to match Rdata dimensions.\n")
-} else {
-  stop("Error: errors[[1]] or Rdata is null or invalid.")
-}
-
-
-
 
 
 
@@ -1127,6 +1088,17 @@ if (ML_NN) {
   # Calculate weight and bias update for first layer
   weight_dim <- dim(self$weights[[1]])
   grad_matrix <- t(errors[[1]]) %*% Rdata
+  
+  grad_matrix <- t(errors[[1]]) %*% Rdata
+  
+  # --- Gradient Clipping for first layer ---
+  # max_norm <- 5
+  # grad_norm <- sqrt(sum(grad_matrix^2))
+  # if (grad_norm > max_norm) {
+  #   grad_matrix <- grad_matrix * (max_norm / grad_norm)
+  #   cat("Clipped grad_matrix norm from", grad_norm, "to", max_norm, "at layer 1\n")
+  # }
+  
   
   if (ncol(self$weights[[1]]) == ncol(Rdata) && all(dim(grad_matrix) == weight_dim)) {
     self$weights[[1]] <- self$weights[[1]] - (lr * grad_matrix)
@@ -1204,6 +1176,15 @@ if (ML_NN) {
     
     # Weight update
     weight_grad <- t(prev_output) %*% error
+    
+    # --- Gradient Clipping for hidden layer ---
+    # grad_norm <- sqrt(sum(weight_grad^2))
+    # if (grad_norm > max_norm) {
+    #   weight_grad <- weight_grad * (max_norm / grad_norm)
+    #   cat("Clipped weight_grad norm from", grad_norm, "to", max_norm, "at layer", layer, "\n")
+    # }
+    
+    
     weight_shape <- dim(self$weights[[layer]])
     
     if (all(dim(weight_grad) == weight_shape)) {
@@ -1450,7 +1431,7 @@ predict = function(Rdata, labels, activation_functions) {
         }
         
         hidden_outputs[[layer]] <- Z
-        predicted_output_predict_hidden[[layer]] <- Z
+        predicted_output_predict_hidden[[layer]] <- hidden_outputs[[layer]]
         dim_hidden_layers_predicted[[layer]] <- dim(Z)
       }
       
@@ -1466,7 +1447,7 @@ predict = function(Rdata, labels, activation_functions) {
     
     else {
       dim_hidden_layers_predicted <- NULL
-      predicted_output_predict_hidden <- predicted_output_predict
+      predicted_output_predict_hidden <- NULL
     }
     cat("---------- DEBUG: POST FORWARD PASS ----------\n")
     cat("self$num_layers:", self$num_layers, "\n")
@@ -1946,6 +1927,36 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             
             # Compute the gradients for this layer
             grads_matrix <- t(input_mat) %*% errors[[layer]]
+            
+            # Apply L2 or L1_L2 regularization if specified
+            if (reg_type == "L2" || reg_type == "L1_L2") {
+              weight_update <- lr * grads_matrix + self$lambda * self$weights[[layer]]
+            } else {
+              weight_update <- lr * grads_matrix
+            }
+            
+            # Apply the weight update
+            if (all(dim(grads_matrix) == dim(self$weights[[layer]]))) {
+              self$weights[[layer]] <- self$weights[[layer]] - weight_update
+            } else if (prod(dim(self$weights[[layer]])) == 1) {
+              self$weights[[layer]] <- self$weights[[layer]] - sum(weight_update)
+            } else {
+              self$weights[[layer]] <- self$weights[[layer]] - apply(weight_update, 2, mean)
+            }
+            
+            
+            
+            # --- Gradient Clipping ---
+            # max_norm <- 5
+            # grad_norm <- sqrt(sum(grads_matrix^2))
+            # 
+            # if (grad_norm > max_norm) {
+            #   grads_matrix <- grads_matrix * (max_norm / grad_norm)
+            #   cat("Clipped grads_matrix norm from", grad_norm, "to", max_norm, "at layer", layer, "\n")
+            # } else {
+            #   cat("No clipping needed. Grad norm at layer", layer, ":", grad_norm, "\n")
+            # }
+            
             
             cat(">> Gradients for layer", layer, "\n")
             cat("grads_matrix dim:\n")
@@ -5456,6 +5467,13 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
 
 
 
+clip_gradient_norm <- function(gradient, max_norm = 5) {
+  grad_norm <- sqrt(sum(gradient^2))
+  if (grad_norm > max_norm) {
+    gradient <- gradient * (max_norm / grad_norm)
+  }
+  return(gradient)
+}
 
 
 

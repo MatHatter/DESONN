@@ -69,7 +69,7 @@ function(test1){
 # # Define parameters
 init_method <- "xavier" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
-lookahead_step <- 10
+lookahead_step <- 100
 batch_normalize_data <- FALSE
 shuffle_bn <- TRUE
 gamma_bn <- 1
@@ -81,7 +81,7 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.997  # Slightly lower for better adaptabilit
 
 
-custom_scale <- 0.2
+custom_scale <- .2
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
@@ -90,19 +90,19 @@ ML_NN <- TRUE
 hidden_sizes <- c(16, 8)
 input_size <- 12
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu, leaky_relu, sigmoid)
+activation_functions <- list(NULL, bent_identity, sigmoid)
 
 
 
-activation_functions_learn <- NULL #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(NULL, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-8
-loss_type <- "CategoricalCrossEntropy" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.3, 0.15, NULL)  # NULL for output layer
+dropout_rates <- list(0.3, 0.15)  # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
 # hidden_sizes <- NULL
@@ -324,8 +324,8 @@ increment_loop_flag <- FALSE
     if(hyperparameter_grid_setup){
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-        lr1 <- 0.05 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
-        lambda1 <- .1 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
+        lr1 <- 0.0005 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
+        lambda1 <- 0.0001 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
 
