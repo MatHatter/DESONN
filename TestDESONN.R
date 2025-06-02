@@ -68,7 +68,7 @@ function(test1){
 
 # # Define parameters
 init_method <- "xavier" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
-optimizer <- NULL #"adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
+optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
 lookahead_step <- 100
 batch_normalize_data <- FALSE
 shuffle_bn <- TRUE
@@ -87,7 +87,7 @@ custom_scale <- .33
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(90, 6)
+hidden_sizes <- c(16, 8)
 input_size <- 12
 #, 1, 1, 10) #,2,1,, 1)
 activation_functions <- list(relu, relu, sigmoid)
@@ -324,7 +324,7 @@ increment_loop_flag <- FALSE
     if(hyperparameter_grid_setup){
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-        lr1 <- 0.00001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
+        lr1 <- 0.001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
         lambda1 <- 0.01#c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))

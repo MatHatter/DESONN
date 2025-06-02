@@ -1600,6 +1600,10 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   prev_biases <- NULL
 
   
+  # Initialize optimizer parameters for weights and biases
+  optimizer_params_weights <- vector("list", self$num_layers)
+  optimizer_params_biases <- vector("list", self$num_layers)
+  
   for (epoch in 1:epoch_in_list) {
     # lr <- lr_scheduler(i, initial_lr = lr)
     #print(paste("Epoch:", epoch))
@@ -1897,9 +1901,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       biases_record <- vector("list", self$num_layers)
     }
     
-    # Initialize optimizer parameters for weights and biases
-    optimizer_params_weights <- vector("list", self$num_layers)
-    optimizer_params_biases <- vector("list", self$num_layers)
+
     
     # Update weights
     if (update_weights) {
