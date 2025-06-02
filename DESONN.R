@@ -182,7 +182,8 @@ initialize_weights = function(input_size, hidden_sizes, output_size, method = in
       return(as.matrix(Q))
     } else if (method == "variance_scaling") {
       scale <- ifelse(is.null(custom_scale), 0.1, custom_scale)
-      sd <- sqrt(1 / (fan_in + fan_out)) * scale
+      sd_raw <- sqrt(1 / (fan_in + fan_out)) * scale
+      sd <- min(sd_raw, 0.2)  # Cap at 0.2
       return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
     } else if (method == "glorot_uniform") {
       limit <- sqrt(6 / (fan_in + fan_out))
@@ -1347,11 +1348,12 @@ predict = function(Rdata, labels, activation_functions) {
         cat("Input to layer", layer, "from hidden_outputs[[", layer - 1, "]] dim:", paste(dim(hidden_outputs[[layer - 1]]), collapse = " x "), "\n")
         
         
-        activation_function <- if (!is.null(activation_functions[[layer]]) && is.function(activation_functions[[layer]])) {
-          activation_functions[[layer]]
+        if (is.list(activation_functions) && length(activation_functions) >= layer && is.function(activation_functions[[layer]])) {
+          activation_function <- activation_functions[[layer]]
         } else {
-          NULL
+          activation_function <- NULL
         }
+        
         
         input <- as.matrix(hidden_outputs[[layer - 1]])
         cat("DEBUG: Input dim before fix:", paste(dim(input), collapse = " x "), "\n")
@@ -1632,9 +1634,31 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     # Extract hidden outputs only for multi-layer networks
     if (self$ML_NN) {
       hidden_outputs <- predicted_output_train_reg$hidden_outputs
-      dim_hidden_layers <- lapply(hidden_outputs, dim)
       
-      # Proceed with your loop for regularization + error calculation...
+      # Diagnostic print
+      cat("DEBUG: Type of hidden_outputs =", typeof(hidden_outputs), "\n")
+      cat("DEBUG: Class of hidden_outputs =", class(hidden_outputs), "\n")
+      
+      if (is.list(hidden_outputs)) {
+        # Check if each element is a matrix or can be coerced
+        dim_hidden_layers <- lapply(hidden_outputs, function(layer_output) {
+          if (is.matrix(layer_output)) {
+            return(dim(layer_output))
+          } else if (is.vector(layer_output)) {
+            return(length(layer_output))
+          } else if (is.null(layer_output)) {
+            return(NULL)
+          } else {
+            return(dim(as.matrix(layer_output)))
+          }
+        })
+      } else if (is.matrix(hidden_outputs)) {
+        dim_hidden_layers <- list(dim(hidden_outputs))
+      } else if (is.vector(hidden_outputs)) {
+        dim_hidden_layers <- list(length(hidden_outputs))
+      } else {
+        dim_hidden_layers <- list(NULL)
+      }
     } else {
       dim_hidden_layers <- predicted_output_train_reg$hidden_outputs #This = NULL, I could've set to NULL, but I instead passed the NULL from predict() through this variable.
     }
@@ -3721,21 +3745,21 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
               ))) #<<-
             
             # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
-            if (is.null(predicted_outputAndTime$predicted_output_l2)) {
-              predicted_outputAndTime$predicted_output_l2 <- list()
-              predicted_outputAndTime$predicted_output_l2$predicted_output <- predicted_outputAndTime$hidden_outputs[1:self$num_layers]
-              predicted_outputAndTime$dim_hidden_layers <- lapply(weights_record, dim)
-            } else {
-              # Otherwise, clean up NULL entries in the output
-              valid_outputs <- Filter(Negate(is.null), predicted_outputAndTime$predicted_output_l2$predicted_output)
-              valid_dims <- lapply(seq_along(valid_outputs), function(i) dim(self$weights[[i]]))
-              predicted_outputAndTime$predicted_output_l2$predicted_output <- valid_outputs
-              predicted_outputAndTime$dim_hidden_layers <- valid_dims
-            }
+            # if (is.null(predicted_outputAndTime$predicted_output_l2)) {
+            #   predicted_outputAndTime$predicted_output_l2 <- list()
+            #   predicted_outputAndTime$predicted_output_l2$predicted_output <- predicted_outputAndTime$hidden_outputs[1:self$num_layers]
+            #   predicted_outputAndTime$dim_hidden_layers <- lapply(weights_record, dim)
+            # } else {
+            #   # Otherwise, clean up NULL entries in the output
+            #   valid_outputs <- Filter(Negate(is.null), predicted_outputAndTime$predicted_output_l2$predicted_output)
+            #   valid_dims <- lapply(seq_along(valid_outputs), function(i) dim(self$weights[[i]]))
+            #   predicted_outputAndTime$predicted_output_l2$predicted_output <- valid_outputs
+            #   predicted_outputAndTime$dim_hidden_layers <- valid_dims
+            # }
             
             # --- Final integrity check ---
-            stopifnot(length(predicted_outputAndTime$predicted_output_l2$predicted_output) == length(predicted_outputAndTime$dim_hidden_layers))
-            
+            # stopifnot(length(predicted_outputAndTime$predicted_output_l2$predicted_output) == length(predicted_outputAndTime$dim_hidden_layers))
+          
             
             # At the end of the training process, call the predict function
             # trained_predictions <<- self$predict(Rdata, labels, activation_functions)
@@ -3759,35 +3783,38 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             }
             
             
-            # Extract predicted probabilities
+            # --- Safe prediction extraction and optional binarization ---
+            use_binary_predictions <- TRUE  # Toggle this flag
+            
+            # Extract predicted probabilities safely
             hidden_outputs <- predicted_outputAndTime$predicted_output$hidden_outputs
             
-            # Try to use last hidden layer only if it has 4000 rows
-            if (length(hidden_outputs) > 0 && is.matrix(hidden_outputs[[length(hidden_outputs)]]) &&
+            if (!is.null(hidden_outputs) &&
+                length(hidden_outputs) > 0 &&
+                is.matrix(hidden_outputs[[length(hidden_outputs)]]) &&
                 nrow(hidden_outputs[[length(hidden_outputs)]]) == nrow(Rdata)) {
               
               probs <- hidden_outputs[[length(hidden_outputs)]]
-              
               cat(">>> Using last hidden_output. Shape:\n")
               print(dim(probs))
               
-            } else {
-              # Fallback to predicted_output
-              probs <- predicted_outputAndTime$predicted_output$predicted_output
+            } else if (!is.null(predicted_outputAndTime$predicted_output$predicted_output)) {
               
+              probs <- predicted_outputAndTime$predicted_output$predicted_output
               cat(">>> Using predicted_output directly. Shape:\n")
               print(length(probs))
               
-              # Convert to matrix if needed
               probs <- as.matrix(probs)
               
-              # Transpose if it's 1 x N
               if (nrow(probs) == 1 && ncol(probs) == nrow(Rdata)) {
                 probs <- t(probs)
               }
+              
+            } else {
+              stop("ERROR: No valid predicted output found — both hidden_outputs and predicted_output are missing.")
             }
             
-            # Handle multi-class (just keep column 1)
+            # Optional: handle multi-column case
             if (is.matrix(probs) && ncol(probs) > 1) {
               cat(">>> Multiple columns detected. Using only first column.\n")
               probs <- probs[, 1, drop = FALSE]
@@ -3800,27 +3827,27 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             cat(">>> Final probs length:", length(probs), "\n")
             cat(">>> Number of rows in Rdata:", nrow(Rdata), "\n")
             
-            # Convert to binary predictions
-            binary_preds <- ifelse(probs >= 0.5, 1, 0)
-            
-            # Fix mismatch if needed
-            if (length(binary_preds) != nrow(Rdata)) {
-              if (length(binary_preds) == 1) {
-                binary_preds <- rep(binary_preds, nrow(Rdata))
-              } else {
-                stop(paste("binary_preds length mismatch:", length(binary_preds), "vs expected", nrow(Rdata)))
+            # Use raw probabilities or convert to binary
+            if (use_binary_predictions) {
+              binary_preds <- ifelse(probs >= 0.5, 1, 0)
+              
+              if (length(binary_preds) != nrow(Rdata)) {
+                if (length(binary_preds) == 1) {
+                  binary_preds <- rep(binary_preds, nrow(Rdata))
+                } else {
+                  stop(paste("binary_preds length mismatch:", length(binary_preds), "vs expected", nrow(Rdata)))
+                }
               }
+              final_output <- binary_preds
+            } else {
+              final_output <- probs
             }
-            
-            
-            
-            
             
             # Flatten actual labels
             labels_flat <- as.vector(labels)
             
             # Calculate accuracy
-            accuracy <- calculate_accuracy(binary_preds, labels_flat)
+            accuracy <- calculate_accuracy(final_output, labels_flat)
             print(paste("Accuracy:", accuracy))
             
             
