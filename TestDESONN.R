@@ -68,7 +68,7 @@ function(test1){
 
 # # Define parameters
 init_method <- "xavier" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
-optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
+optimizer <- NULL #"adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
 lookahead_step <- 100
 batch_normalize_data <- FALSE
 shuffle_bn <- TRUE
@@ -78,31 +78,31 @@ epsilon_bn <- 1e-9  # Increase for numerical stability
 momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
 beta1 <- 0.9  # Standard Adam value
-beta2 <- 0.997  # Slightly lower for better adaptabilit
+beta2 <- 0.999  # Slightly lower for better adaptabilit
 
 
-custom_scale <- .2
+custom_scale <- .33
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(16, 8)
+hidden_sizes <- c(90, 6)
 input_size <- 12
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(NULL, bent_identity, sigmoid)
+activation_functions <- list(relu, relu, sigmoid)
 
 
 
-activation_functions_learn <- list(NULL, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
-epsilon <- 1e-8
+activation_functions_learn <- list(relu, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+epsilon <- 1e-12
 loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.3, 0.15)  # NULL for output layer
+dropout_rates <- list(0.2, 0.1)  # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
 # hidden_sizes <- NULL
@@ -155,7 +155,7 @@ numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'pl
 y <- data %>% dplyr::select(DEATH_EVENT)
 colname_y <- colnames(y)
 # Define the number of samples for each set
-set.seed(16675)
+set.seed(1)
 total_num_samples <- nrow(data)
 # Define num_samples
 num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
@@ -242,7 +242,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = "L1_L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = "L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 olr <- FALSE
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
@@ -324,8 +324,8 @@ increment_loop_flag <- FALSE
     if(hyperparameter_grid_setup){
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-        lr1 <- 0.0005 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
-        lambda1 <- 0.0001 #c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
+        lr1 <- 0.00001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
+        lambda1 <- 0.01#c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
 
@@ -433,7 +433,7 @@ if(never_ran_flag == FALSE) { #length(my_optimal_epoch_out_vector) > 1
     num_epochs <- my_optimal_epoch_out_vector #<<-
     #num_epochs_max <<- max(unlist(my_optimal_epoch_out_vector))
     }else{
-        num_epochs <- 100 #<<-
+        num_epochs <- 10 #<<-
     }
 
     if(ML_NN){
@@ -542,7 +542,7 @@ if(!predict_models){
 
 
     # print(head(X))
-    num_epochs <- 4
+    num_epochs <- 11
     never_ran_flag <- TRUE
     # Train your DESONN model
 

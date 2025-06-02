@@ -869,10 +869,10 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
 
             # cat("hidden_outputs[[layer]] dimensions: ", dim(hidden_outputs[[layer]]), "\n")
 
-            if (!is.null(dropout_rate_learn)) {
-                hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], dropout_rate_learn)
+            if (layer != self$num_layers && !is.null(dropout_rate_learn)) {
+              hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], dropout_rate_learn)
             }
-
+            
             predicted_output_learn_hidden[[layer]] <- hidden_outputs[[layer]]
 
             # Ensure predicted_output_learn_hidden[[layer]] is a matrix
@@ -1273,10 +1273,6 @@ predict = function(Rdata, labels, activation_functions) {
     }
     
     
-    
-    # Handle dropout format for SL vs ML
-    dropout_rates <- if (self$ML_NN) self$dropout_rates else list(self$dropout_rates)
-    
     # Debugging: Log dimensions of Rdata, weights, and biases
     cat("Rdata dimensions: ", dim(Rdata), "\n")
     cat("Weights dimensions: ", dim(as.matrix(self$weights)), "\n")
@@ -1310,9 +1306,6 @@ predict = function(Rdata, labels, activation_functions) {
       predicted_output_predict <- Z
     }
     
-    if (!is.null(dropout_rates[[1]])) {
-      predicted_output_predict <- self$dropout(predicted_output_predict, dropout_rates[[1]])
-    }
     
     #Print to console
     if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
@@ -1419,11 +1412,6 @@ predict = function(Rdata, labels, activation_functions) {
         if (nrow(Z) == 1 && nrow(Rdata) > 1) {
           cat("WARNING: Activated output became 1-row. Expanding to", nrow(Rdata), "rows for layer", layer, "\n")
           Z <- matrix(rep(Z, each = nrow(Rdata)), nrow = nrow(Rdata), byrow = TRUE)
-        }
-        
-        if (!is.null(dropout_rates[[layer]])) {
-          Z <- self$dropout(Z, dropout_rates[[layer]])
-          Z <- as.matrix(Z)  # Ensure matrix after dropout
         }
         
         if (layer == self$num_layers) {
