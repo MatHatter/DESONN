@@ -162,37 +162,42 @@ initialize_weights = function(input_size, hidden_sizes, output_size, method = in
   weights <- list()
   biases <- list()
   
+  clip_weights <- function(W, limit = 5) {
+    return(pmin(pmax(W, -limit), limit))
+  }
+  
   init_weight <- function(fan_in, fan_out, method, custom_scale) {
     if (method == "xavier") {
-      scale <- ifelse(is.null(custom_scale), 0.1, custom_scale)  # LOWER DEFAULT SCALE
+      scale <- ifelse(is.null(custom_scale), 0.05, custom_scale)  # LOWER DEFAULT SCALE
       sd <- sqrt(2 / (fan_in + fan_out)) * scale
-      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
     } else if (method == "he") {
       sd <- sqrt(2 / fan_in)
-      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
     } else if (method == "lecun") {
       sd <- sqrt(1 / fan_in)
-      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
     } else if (method == "orthogonal") {
       A <- matrix(rnorm(fan_in * fan_out), ncol = fan_out, nrow = fan_in)
       Q <- qr.Q(qr(A))
       if (ncol(Q) < fan_out) {
         Q <- cbind(Q, matrix(0, nrow = fan_in, ncol = fan_out - ncol(Q)))
       }
-      return(as.matrix(Q))
+      W <- as.matrix(Q)
     } else if (method == "variance_scaling") {
-      scale <- ifelse(is.null(custom_scale), 0.1, custom_scale)
+      scale <- ifelse(is.null(custom_scale), 0.05, custom_scale)
       sd_raw <- sqrt(1 / (fan_in + fan_out)) * scale
       sd <- min(sd_raw, 0.2)  # Cap at 0.2
-      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
     } else if (method == "glorot_uniform") {
       limit <- sqrt(6 / (fan_in + fan_out))
-      return(matrix(runif(fan_in * fan_out, min = -limit, max = limit), ncol = fan_out, nrow = fan_in))
+      W <- matrix(runif(fan_in * fan_out, min = -limit, max = limit), ncol = fan_out, nrow = fan_in)
     } else {
       # Default fallback: small standard deviation
       sd <- 0.01
-      return(matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in))
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
     }
+    return(clip_weights(W))  # Apply weight clipping
   }
   
   # First hidden layer
@@ -216,7 +221,6 @@ initialize_weights = function(input_size, hidden_sizes, output_size, method = in
   
   return(list(weights = weights, biases = biases))
 }
-
 
 
 ,
@@ -723,10 +727,12 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
   error_learn <- NULL
   dim_hidden_layers_learn <- list()
   predicted_output_learn_hidden <- NULL
+  bias_gradients <- list()
   
   if (self$ML_NN) {
     hidden_outputs <- vector("list", self$num_layers)
     activation_derivatives <- vector("list", self$num_layers)
+    dim_hidden_layers_learn <- vector("list", self$num_layers)
     
     input_matrix <- as.matrix(Rdata)
     
@@ -734,11 +740,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       weights_matrix <- as.matrix(self$weights[[layer]])
       bias_vec <- as.numeric(unlist(self$biases[[layer]]))
       
-      if (layer == 1) {
-        input_data <- input_matrix
-      } else {
-        input_data <- hidden_outputs[[layer - 1]]
-      }
+      input_data <- if (layer == 1) input_matrix else hidden_outputs[[layer - 1]]
       
       input_rows <- nrow(input_data)
       weights_rows <- nrow(weights_matrix)
@@ -752,6 +754,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
                      layer, ncol(input_data), weights_rows))
       }
       
+      # Bias broadcasting
       if (length(bias_vec) == 1) {
         bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = weights_cols)
       } else if (length(bias_vec) == weights_cols) {
@@ -763,26 +766,29 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       
       Z <- input_data %*% weights_matrix + bias_matrix
+      
+      # Optional normalization
       Z_mean_abs <- mean(abs(Z))
-      if (Z_mean_abs > 3) Z <- Z * (3 / Z_mean_abs) else if (Z_mean_abs < 1) Z <- Z * (1 / Z_mean_abs)
+      if (Z_mean_abs > 20) Z <- Z * (20 / Z_mean_abs) else if (Z_mean_abs < 1) Z <- Z * (1 / Z_mean_abs)
       
       activation_function <- activation_functions_learn[[layer]]
-      activation_name <- attr(activation_function, "name")
+      activation_name <- if (!is.null(activation_function)) attr(activation_function, "name") else "none"
       
       hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
       
       cat(sprintf("[Debug] Layer %d : predicted_output_learn dim = %d x %d\n", layer, nrow(hidden_output), ncol(hidden_output)))
       
-      if (is.null(activation_name) || activation_name == "unknown") {
-        stop(paste("Layer", layer, ": Activation function name is not set or invalid."))
+      # Derivative handling
+      if (activation_name != "none") {
+        derivative_name <- paste0(activation_name, "_derivative")
+        if (!exists(derivative_name, mode = "function")) {
+          stop(paste("Layer", layer, ": Activation derivative function", derivative_name, "does not exist."))
+        }
+        deriv <- get(derivative_name, mode = "function")(Z)
+      } else {
+        deriv <- matrix(1, nrow = nrow(Z), ncol = ncol(Z))  # fallback derivative
       }
       
-      derivative_name <- paste0(activation_name, "_derivative")
-      if (!exists(derivative_name, mode = "function")) {
-        stop(paste("Layer", layer, ": Activation derivative function", derivative_name, "does not exist."))
-      }
-      
-      deriv <- get(derivative_name, mode = "function")(Z)
       activation_derivatives[[layer]] <- deriv
       hidden_outputs[[layer]] <- hidden_output
       dim_hidden_layers_learn[[layer]] <- dim(hidden_output)
@@ -792,7 +798,19 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     predicted_output_learn_hidden <- hidden_outputs
     error_learn <- predicted_output_learn - labels
     
-  } else {
+    # ---------- Backpropagate Bias Gradients ----------
+    error_backprop <- error_learn
+    for (layer in self$num_layers:1) {
+      delta <- error_backprop * activation_derivatives[[layer]]
+      bias_gradients[[layer]] <- matrix(colMeans(delta), nrow = 1)
+      
+      if (layer > 1) {
+        weights_t <- t(as.matrix(self$weights[[layer]]))
+        error_backprop <- delta %*% weights_t
+      }
+    }
+  }
+  else {
     cat("Single Layer Learning Phase\n")
     
     weights_matrix <- as.matrix(self$weights)
@@ -818,7 +836,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     
     Z <- Rdata %*% weights_matrix + bias_matrix
     Z_mean_abs <- mean(abs(Z))
-    if (Z_mean_abs > 3) Z <- Z * (3 / Z_mean_abs) else if (Z_mean_abs < 1) Z <- Z * (1 / Z_mean_abs)
+    if (Z_mean_abs > 20) Z <- Z * (20 / Z_mean_abs) else if (Z_mean_abs < 1) Z <- Z * (1 / Z_mean_abs)
     
     if (is.function(activation_functions_learn)) {
       activation_function <- activation_functions_learn
@@ -829,6 +847,14 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
     error_learn <- predicted_output_learn - labels
     dim_hidden_layers_learn[[1]] <- dim(predicted_output_learn)
+    
+    activation_deriv <- if (!is.null(activation_function)) {
+      deriv_fn <- paste0(attr(activation_function, "name"), "_derivative")
+      if (!exists(deriv_fn)) matrix(1, nrow = nrow(Z), ncol = ncol(Z)) else get(deriv_fn)(Z)
+    } else matrix(1, nrow = nrow(Z), ncol = ncol(Z))
+    
+    delta <- error_learn * activation_deriv
+    bias_gradients[[1]] <- matrix(colMeans(delta), nrow = 1)
   }
   
   learn_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
@@ -839,9 +865,11 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     learn_time = learn_time,
     error = error_learn,
     dim_hidden_layers = dim_hidden_layers_learn,
-    hidden_outputs = predicted_output_learn_hidden
+    hidden_outputs = predicted_output_learn_hidden,
+    bias_gradients = bias_gradients
   ))
 }
+
 
 
 ,# Method to perform prediction
@@ -982,8 +1010,8 @@ predict = function(Rdata, labels, activation_functions) {
         
         # --- Dynamic scaling of Z to control activation magnitude ---
         Z_mean_abs <- mean(abs(Z))
-        if (Z_mean_abs > 3) {
-          scale_factor <- 3 / Z_mean_abs
+        if (Z_mean_abs > 20) {
+          scale_factor <- 20 / Z_mean_abs
           Z <- Z * scale_factor
         } else if (Z_mean_abs < 1) {
           scale_factor <- 1 / Z_mean_abs
@@ -1234,6 +1262,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     }
     
     error <- predicted_output_train_reg$error
+    bias_gradients <- predicted_output_train_reg$bias_gradients  # <---- EXTRACT BIAS GRADIENTS
     
     # Extract hidden outputs only for multi-layer networks
     if (self$ML_NN) {
@@ -2273,7 +2302,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                   updated_optimizer <- apply_optimizer_update(
                     optimizer = optimizer,
                     optimizer_params = optimizer_params_biases,
-                    grads_matrix = grads_matrix,
+                    grads_matrix = bias_gradients[[layer]],
                     lr = lr,
                     beta1 = beta1,
                     beta2 = beta2,

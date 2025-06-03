@@ -1,48 +1,86 @@
-apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr, beta1, beta2, epsilon, epoch, self, layer, target) {  
-
+apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr, beta1, beta2, epsilon, epoch, self, layer, target) {
+  
   if (optimizer == "adam") {
-    # Debug info: gradient matrix
     cat(">> Optimizer = adam\n")
     cat("Layer:", layer, "\n")
     cat("grads_matrix dim:\n")
     print(dim(grads_matrix))
     
+    # Update optimizer params using Adam
     optimizer_params[[layer]] <- adam_update(
       optimizer_params[[layer]],
-      grads_matrix,
-      lr,
-      beta1,
-      beta2,
-      epsilon,
+      grads = list(grads_matrix),
+      lr = lr,
+      beta1 = beta1,
+      beta2 = beta2,
+      epsilon = epsilon,
       t = epoch
     )
     
-    update_matrix <- optimizer_params[[layer]]$param
+    # Select correct update matrix based on target
+    if (target == "weights") {
+      update <- optimizer_params[[layer]]$weights_update
+    } else if (target == "biases") {
+      update <- optimizer_params[[layer]]$biases_update
+    } else {
+      stop("Unknown target: must be 'weights' or 'biases'")
+    }
+    
+    # Fix: allow both SL NN (update is list of 1 matrix) and ML NN (direct matrix)
+    update_matrix <- if (is.list(update) && length(update) == 1) update[[1]] else update
+    
+    if (is.null(update_matrix)) {
+      stop(paste0("Update matrix for layer ", layer, " is NULL — check gradients or optimizer output."))
+    }
     
     target_matrix <- if (target == "weights") self$weights[[layer]] else self$biases[[layer]]
     target_dim <- dim(as.matrix(target_matrix))
     update_len <- length(update_matrix)
     
-    # Final fallback handling
-    if (is.null(update_matrix)) {
-      stop(paste0("Update matrix for layer ", layer, " is NULL — check gradients or optimizer output."))
-    }
-    
     if (is.null(target_dim)) {
       stop(paste0("Target matrix dimensions for layer ", layer, " are NULL."))
     }
     
-    if (update_len == prod(target_dim)) {
-      updated <- matrix(update_matrix, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
-    } else if (prod(target_dim) == 1) {
-      updated <- sum(update_matrix)
+    # ------------------------------------------
+    #     SHAPE FIXES FOR WEIGHTS VS. BIASES
+    # ------------------------------------------
+    if (target == "biases") {
+      if (length(update_matrix) == prod(target_dim)) {
+        updated <- matrix(update_matrix, nrow = target_dim[1], ncol = target_dim[2])
+      } else if (length(update_matrix) == 1) {
+        updated <- matrix(rep(update_matrix, prod(target_dim)), nrow = target_dim[1], ncol = target_dim[2])
+      } else {
+        repeated <- rep(update_matrix, length.out = prod(target_dim))
+        updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2])
+      }
     } else {
-      repeated <- rep(update_matrix, length.out = prod(target_dim))
-      updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+      if (update_len == prod(target_dim)) {
+        updated <- matrix(update_matrix, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+      } else if (prod(target_dim) == 1) {
+        updated <- matrix(update_matrix, nrow = 1, ncol = 1)
+      } else {
+        repeated <- rep(update_matrix, length.out = prod(target_dim))
+        updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+      }
+      
+      # ✅ Clip weights after update if target is "weights"
+      clip_threshold <- 5
+      updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
+    }
+    
+    # ✅ Diagnostic: log stats after update
+    cat("Updated", target, "summary (layer", layer, "): min =", min(updated), 
+        ", mean =", mean(updated), ", max =", max(updated), "\n")
+    
+    # Assign updated weights or biases back to self
+    if (target == "weights") {
+      self$weights[[layer]] <- updated
+    } else if (target == "biases") {
+      self$biases[[layer]] <- updated
     }
   }
-  
-  
+
+
 
     
   else if (optimizer == "rmsprop") {

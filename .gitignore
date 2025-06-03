@@ -1,0 +1,7 @@
+.RData
+.Rhistory
+*.rds
+*.xlsx
+optimizersnew.R
+plot_*.rds
+results.rds

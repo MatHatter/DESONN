@@ -81,7 +81,7 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 
 
-custom_scale <- .01
+custom_scale <- .05
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
@@ -90,11 +90,11 @@ ML_NN <- TRUE
 hidden_sizes <- c(16, 8)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu, relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(leaky_relu, bent_identity, sigmoid) #hidden layers + output layer
 
 
 
-activation_functions_learn <- list(relu, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(leaky_relu, bent_identity, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-12
 loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
@@ -331,7 +331,7 @@ increment_loop_flag <- FALSE
     if(hyperparameter_grid_setup){
         # Initialize ensembles list
         ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-        lr1 <- 0.001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
+        lr1 <- 0.0001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
         lambda1 <- 0.01#c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
         hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
             mutate_all(~ format(., scientific = FALSE))
