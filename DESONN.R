@@ -708,556 +708,143 @@ print(str(errors[[self$num_layers]]))
 },
 # Method to perform learning
 learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn) {
-    print("------------------------learn-begin----------------------------------------------")
-
-    start_time <- Sys.time()
+  print("------------------------learn-begin-------------------------------------------------")
+  start_time <- Sys.time()
+  
+  self$dropout_rates_learn <- dropout_rates_learn
+  
+  if (!is.matrix(labels)) labels <- as.matrix(labels)
+  if (length(dim(labels)) == 2 && nrow(labels) == ncol(labels)) {
+    labels <- matrix(diag(labels), ncol = 1)
+  }
+  labels <- matrix(as.numeric(labels), ncol = 1)
+  
+  predicted_output_learn <- NULL
+  error_learn <- NULL
+  dim_hidden_layers_learn <- list()
+  predicted_output_learn_hidden <- NULL
+  
+  if (self$ML_NN) {
+    hidden_outputs <- vector("list", self$num_layers)
+    activation_derivatives <- vector("list", self$num_layers)
     
-    if (self$ML_NN == FALSE) {
-    # Normalize to list if user passed a string
-    if (!is.list(activation_functions)) {
-      activation_functions <- list(activation_functions)
+    input_matrix <- as.matrix(Rdata)
+    
+    for (layer in 1:self$num_layers) {
+      weights_matrix <- as.matrix(self$weights[[layer]])
+      bias_vec <- as.numeric(unlist(self$biases[[layer]]))
+      
+      if (layer == 1) {
+        input_data <- input_matrix
+      } else {
+        input_data <- hidden_outputs[[layer - 1]]
+      }
+      
+      input_rows <- nrow(input_data)
+      weights_rows <- nrow(weights_matrix)
+      weights_cols <- ncol(weights_matrix)
+      
+      cat(sprintf("[Debug] Layer %d : input dim = %d x %d | weights dim = %d x %d\n",
+                  layer, input_rows, ncol(input_data), weights_rows, weights_cols))
+      
+      if (ncol(input_data) != weights_rows) {
+        stop(sprintf("Layer %d: input cols (%d) do not match weights rows (%d)",
+                     layer, ncol(input_data), weights_rows))
+      }
+      
+      if (length(bias_vec) == 1) {
+        bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = weights_cols)
+      } else if (length(bias_vec) == weights_cols) {
+        bias_matrix <- matrix(rep(bias_vec, each = input_rows), nrow = input_rows)
+      } else if (length(bias_vec) == input_rows * weights_cols) {
+        bias_matrix <- matrix(bias_vec, nrow = input_rows)
+      } else {
+        stop(sprintf("Layer %d: invalid bias shape: length = %d", layer, length(bias_vec)))
+      }
+      
+      Z <- input_data %*% weights_matrix + bias_matrix
+      Z_mean_abs <- mean(abs(Z))
+      if (Z_mean_abs > 3) Z <- Z * (3 / Z_mean_abs) else if (Z_mean_abs < 1) Z <- Z * (1 / Z_mean_abs)
+      
+      activation_function <- activation_functions_learn[[layer]]
+      activation_name <- attr(activation_function, "name")
+      
+      hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
+      
+      cat(sprintf("[Debug] Layer %d : predicted_output_learn dim = %d x %d\n", layer, nrow(hidden_output), ncol(hidden_output)))
+      
+      if (is.null(activation_name) || activation_name == "unknown") {
+        stop(paste("Layer", layer, ": Activation function name is not set or invalid."))
+      }
+      
+      derivative_name <- paste0(activation_name, "_derivative")
+      if (!exists(derivative_name, mode = "function")) {
+        stop(paste("Layer", layer, ": Activation derivative function", derivative_name, "does not exist."))
+      }
+      
+      deriv <- get(derivative_name, mode = "function")(Z)
+      activation_derivatives[[layer]] <- deriv
+      hidden_outputs[[layer]] <- hidden_output
+      dim_hidden_layers_learn[[layer]] <- dim(hidden_output)
     }
-    }
-
-    # Retrieve activation function for layer 1
-    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
-      activation_function_learn <- activation_functions[[1]]
-    } else {
-      activation_function_learn <- NULL
-    }
     
+    predicted_output_learn <- hidden_outputs[[self$num_layers]]
+    predicted_output_learn_hidden <- hidden_outputs
+    error_learn <- predicted_output_learn - labels
     
+  } else {
+    cat("Single Layer Learning Phase\n")
     
+    weights_matrix <- as.matrix(self$weights)
+    bias_vec <- as.numeric(unlist(self$biases))
     
     input_rows <- nrow(Rdata)
+    weights_rows <- nrow(weights_matrix)
+    weights_cols <- ncol(weights_matrix)
     
-    if (self$ML_NN) {
-      # Multi-layer mode
-      output_cols <- ncol(self$weights[[1]])
-      
-      if (length(self$biases[[1]]) == 1) {
-        bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(self$biases[[1]]) == output_cols) {
-        bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(self$biases[[1]]) < output_cols) {
-        bias_matrix <- matrix(rep(self$biases[[1]], length.out = output_cols), 
-                              nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else {
-        bias_matrix <- matrix(self$biases[[1]][1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      }
-      
-      Z <- Rdata %*% self$weights[[1]] + bias_matrix
-      
-      if (!is.null(activation_function_learn)) {
-        predicted_output_learn <- activation_function_learn(Z)
-      } else {
-        predicted_output_learn <- Z
-      }
-      
+    if (ncol(Rdata) != weights_rows) {
+      stop(sprintf("SL NN: input cols (%d) do not match weights rows (%d)", ncol(Rdata), weights_rows))
+    }
+    
+    if (length(bias_vec) == 1) {
+      bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = weights_cols)
+    } else if (length(bias_vec) == weights_cols) {
+      bias_matrix <- matrix(rep(bias_vec, each = input_rows), nrow = input_rows)
+    } else if (length(bias_vec) == input_rows * weights_cols) {
+      bias_matrix <- matrix(bias_vec, nrow = input_rows)
     } else {
-      # -------------------- Single-layer Network Forward Pass --------------------
-      output_cols <- ncol(self$weights)
-      input_rows <- nrow(Rdata)
-      
-      # Prepare bias matrix with appropriate broadcasting
-      bias_vec <- as.numeric(self$biases)
-      if (length(bias_vec) == 1) {
-        bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(bias_vec) == output_cols) {
-        bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else if (length(bias_vec) < output_cols) {
-        bias_matrix <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      } else {
-        bias_matrix <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-      }
-      
-      # Linear transformation
-      Z <- Rdata %*% as.matrix(self$weights) + bias_matrix
-      
-      # Apply activation function if provided and valid
-      predicted_output_learn <- if (!is.null(activation_functions[[1]]) &&
-                                    is.function(activation_functions[[1]])) {
-        activation_functions[[1]](Z)
-      } else {
-        Z
-      }
+      stop(sprintf("SL NN: invalid bias shape: length = %d", length(bias_vec)))
     }
     
-
+    Z <- Rdata %*% weights_matrix + bias_matrix
+    Z_mean_abs <- mean(abs(Z))
+    if (Z_mean_abs > 3) Z <- Z * (3 / Z_mean_abs) else if (Z_mean_abs < 1) Z <- Z * (1 / Z_mean_abs)
     
-
-
-
-    
-
-    # Apply dropout if dropout_rates_learn is provided
-    if (!is.null(dropout_rates_learn)) {
-        # Assuming 'layer_index' is the current layer number
-        predicted_output_learn <- self$dropout(predicted_output_learn, dropout_rates_learn[[1]])
-    }
-
-    if (ML_NN) {
-        hidden_outputs <- list()
-        hidden_outputs[[1]] <- predicted_output_learn
-
-        predicted_output_learn_hidden <- vector("list", self$num_layers)
-        predicted_output_learn_hidden[[1]] <- hidden_outputs[[1]]
-
-        for (layer in 2:self$num_layers) {
-
-          if (!is.null(activation_functions_learn[[layer]]) &&
-              is.function(tryCatch(get(activation_functions_learn[[layer]]), error = function(e) NULL))) {
-            activation_function_learn <- get(activation_functions_learn[[layer]])
-          } else {
-            activation_function_learn <- NULL
-          }
-          
-          
-
-            dropout_rate_learn <- self$dropout_rates_learn[[layer]]
-
-            # cat("Processing layer:", layer, "\n")
-            # cat("hidden_outputs[[layer - 1]] dimensions: ", dim(hidden_outputs[[layer - 1]]), "\n")
-            # cat("self$weights[[layer]] dimensions: ", dim(self$weights[[layer]]), "\n")
-
-            # Initialize bias matrix for the current layer
-            bias_len <- length(self$biases[[layer]])
-            n_rows <- nrow(hidden_outputs[[layer - 1]])
-            n_cols <- ncol(self$weights[[layer]])
-            
-            if (bias_len == 1) {
-              # Single scalar bias broadcasted across all neurons
-              biases <- matrix(self$biases[[layer]], nrow = n_rows, ncol = n_cols, byrow = TRUE)
-            } else if (bias_len == n_cols) {
-              # One bias per neuron
-              biases <- matrix(self$biases[[layer]], nrow = n_rows, ncol = n_cols, byrow = TRUE)
-            } else if (bias_len < n_cols) {
-              # Fewer biases than neurons — replicate
-              biases <- matrix(rep(self$biases[[layer]], length.out = n_cols), nrow = n_rows, ncol = n_cols, byrow = TRUE)
-            } else if (bias_len > n_cols) {
-              # Too many biases — truncate
-              biases <- matrix(self$biases[[layer]][1:n_cols], nrow = n_rows, ncol = n_cols, byrow = TRUE)
-            } else {
-              stop("Bias vector length does not align with number of neurons in layer ", layer)
-            }
-            
-
-            # cat("biases dimensions: ", dim(biases), "\n")
-
-            # Check for conformable dimensions between outputs and weights
-            if (ncol(hidden_outputs[[layer - 1]]) != nrow(self$weights[[layer]])) {
-                if (ncol(hidden_outputs[[layer - 1]]) == ncol(self$weights[[layer]])) {
-                    hidden_outputs[[layer]] <- hidden_outputs[[layer - 1]] %*% t(self$weights[[layer]]) + biases
-                } else {
-                    stop("Dimensions of hidden_outputs and weights are not conformable")
-                }
-            } else {
-                hidden_outputs[[layer]] <- hidden_outputs[[layer - 1]] %*% self$weights[[layer]] + biases
-            }
-
-            # cat("hidden_outputs[[layer]] dimensions: ", dim(hidden_outputs[[layer]]), "\n")
-
-            if (ncol(hidden_outputs[[layer]]) != ncol(biases)) {
-                stop("Dimensions of hidden_outputs and biases are not conformable")
-            }
-
-            if (!is.null(activation_function_learn)) {
-                hidden_outputs[[layer]] <- activation_function_learn(hidden_outputs[[layer]])
-            } else {
-                hidden_outputs[[layer]] <- hidden_outputs[[layer]]
-            }
-
-            # cat("hidden_outputs[[layer]] dimensions: ", dim(hidden_outputs[[layer]]), "\n")
-
-            if (layer != self$num_layers && !is.null(dropout_rate_learn)) {
-              hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], dropout_rate_learn)
-            }
-            
-            predicted_output_learn_hidden[[layer]] <- hidden_outputs[[layer]]
-
-            # Ensure predicted_output_learn_hidden[[layer]] is a matrix
-            if (is.vector(predicted_output_learn_hidden[[layer]])) {
-                predicted_output_learn_hidden[[layer]] <- as.matrix(predicted_output_learn_hidden[[layer]])
-                print("Ensure predicted_output_learn_hidden[[layer]] is a matrix")
-            }
-
-        }
-    }
-
-    # cat("Structure of hidden_outputs before code:\n")
-    # str(hidden_outputs)
-
-    if (ML_NN) {
-      errors <- vector("list", self$num_layers)
-      
-      for (layer in 1:self$num_layers) {
-        if (layer == 1) {
-          output <- predicted_output_learn_hidden[[1]]
-        } else if (layer == self$num_layers) {
-          output <- predicted_output_learn_hidden[[layer]]
-        } else {
-          output <- predicted_output_learn_hidden[[layer]]
-          prev_output <- predicted_output_learn_hidden[[layer - 1]]
-          
-          # Align prev_output to output
-          if (ncol(prev_output) != ncol(output)) {
-            if (ncol(prev_output) < ncol(output)) {
-              prev_output <- matrix(rep(prev_output, each = ceiling(ncol(output) / ncol(prev_output))),
-                                    nrow = nrow(prev_output), ncol = ncol(output))
-            } else {
-              prev_output <- prev_output[, 1:ncol(output), drop = FALSE]
-            }
-          }
-          if (nrow(prev_output) != nrow(output)) {
-            prev_output <- matrix(rep(prev_output, length.out = nrow(output) * ncol(prev_output)),
-                                  nrow = nrow(output), ncol = ncol(prev_output))
-          }
-          
-          error <- prev_output - output
-          errors[[layer]] <- error
-          print(paste("Error for layer", layer, ":", sum(error^2)))
-          next
-        }
-        
-        # Align output to labels
-        if (ncol(output) != ncol(labels)) {
-          if (ncol(output) < ncol(labels)) {
-            output <- matrix(rep(output, each = ceiling(ncol(labels) / ncol(output))),
-                             nrow = nrow(output), ncol = ncol(labels))
-          } else {
-            output <- output[, 1:ncol(labels), drop = FALSE]
-          }
-        }
-        if (nrow(output) != nrow(labels)) {
-          output <- matrix(rep(output, length.out = nrow(labels) * ncol(output)),
-                           nrow = nrow(labels), ncol = ncol(output))
-        }
-        
-        error <- labels - output
-        errors[[layer]] <- error
-        print(paste("Error for layer", layer, ":", sum(error^2)))
-      }
-    }
-    
- else {
-  output <- predicted_output_learn
-  
-  # Align output to labels
-  if (ncol(output) != ncol(labels)) {
-    if (ncol(output) < ncol(labels)) {
-      output <- matrix(
-        rep(output, each = ceiling(ncol(labels) / ncol(output))),
-        nrow = nrow(output),
-        ncol = ncol(labels)
-      )
+    if (is.function(activation_functions_learn)) {
+      activation_function <- activation_functions_learn
     } else {
-      output <- output[, 1:ncol(labels), drop = FALSE]
+      activation_function <- activation_functions_learn[[1]]
     }
+    
+    predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
+    error_learn <- predicted_output_learn - labels
+    dim_hidden_layers_learn[[1]] <- dim(predicted_output_learn)
   }
   
-  if (nrow(output) != nrow(labels)) {
-    output <- matrix(
-      rep(output, length.out = nrow(labels) * ncol(output)),
-      nrow = nrow(labels),
-      ncol = ncol(output)
-    )
-  }
+  learn_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+  print("------------------------learn-end-------------------------------------------------")
   
-  # Final error
-  error <- labels - output
+  return(list(
+    learn_output = predicted_output_learn,
+    learn_time = learn_time,
+    error = error_learn,
+    dim_hidden_layers = dim_hidden_layers_learn,
+    hidden_outputs = predicted_output_learn_hidden
+  ))
 }
 
 
-    # errors  <- replicate(self$num_layers, error, simplify = FALSE)
-
-###############################
-# Calculate the error for the output layer
-    # Initialize the error list
-    errors <- vector("list", self$num_layers)
-    errors[[self$num_layers]] <- error  # Only the output layer gets label-derived error
-    
-# Propagate the error backwards
-    # --------- Backpropagation Begins ---------
-    
-    if (self$ML_NN) {
-      for (layer in (self$num_layers - 1):1) {
-        next_error <- errors[[layer + 1]]
-        weight_next <- self$weights[[layer + 1]]
-        activation_input <- hidden_outputs[[layer]]
-        
-        # Safely retrieve activation derivative function for current layer
-        activation_derivative_function <- NULL
-        if (!is.null(activation_functions_learn[[layer]]) &&
-            is.function(tryCatch(get(activation_functions_learn[[layer]]), error = function(e) NULL))) {
-          
-          derivative_name <- paste0(activation_functions_learn[[layer]], "_derivative")
-          
-          if (exists(derivative_name, mode = "function")) {
-            activation_derivative_function <- get(derivative_name, mode = "function")
-          } else {
-            cat("Derivative function", derivative_name, "does not exist\n")
-          }
-        }
-        
-        # Compute local derivative and apply backpropagation
-        if (!is.null(activation_derivative_function)) {
-          local_deriv <- activation_derivative_function(activation_input)
-          propagated_error <- next_error %*% t(weight_next)
-          errors[[layer]] <- propagated_error * local_deriv
-        } else {
-          errors[[layer]] <- next_error %*% t(weight_next)
-        }
-      }
-      
-    } else {
-      cat("Single Layer Backpropagation\n")
-      
-      # Safely retrieve derivative function for single-layer case
-      activation_derivative_function <- NULL
-      if (!is.null(activation_functions_learn[[1]]) &&
-          is.function(tryCatch(get(activation_functions_learn[[1]]), error = function(e) NULL))) {
-        
-        derivative_name <- paste0(activation_functions_learn[[1]], "_derivative")
-        
-        if (exists(derivative_name, mode = "function")) {
-          activation_derivative_function <- get(derivative_name, mode = "function")
-        } else {
-          cat("Derivative function", derivative_name, "does not exist\n")
-        }
-      }
-      
-      # Use pre-activation input (Z + bias) for derivative
-      Z <- Rdata %*% self$weights
-      biases <- if (length(self$biases) == 1) {
-        matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
-      } else if (length(self$biases) == ncol(Z)) {
-        matrix(self$biases, nrow = nrow(Z), ncol = ncol(Z), byrow = TRUE)
-      } else {
-        stop("Bias dimension does not match output neurons for single-layer network")
-      }
-      
-      activation_input <- Z + biases
-      
-      if (!is.null(activation_derivative_function)) {
-        local_deriv <- activation_derivative_function(activation_input)
-      } else {
-        cat("No activation derivative provided — assuming identity gradient.\n")
-        local_deriv <- matrix(1, nrow = nrow(activation_input), ncol = ncol(activation_input))
-      }
-      
-      # Final error
-      errors <- list()
-      errors[[1]] <- error * local_deriv
-    }
-    
-
-
-
-
-
-
-##############################
-
-
-if (ML_NN) {
-  
-  # Ensure errors[[1]] has same shape as Rdata for the weight update
-  if (nrow(errors[[1]]) != nrow(Rdata)) {
-    if (nrow(errors[[1]]) > nrow(Rdata)) {
-      errors[[1]] <- errors[[1]][1:nrow(Rdata), , drop = FALSE]
-    } else {
-      errors[[1]] <- matrix(
-        rep(errors[[1]], length.out = nrow(Rdata) * ncol(errors[[1]])),
-        nrow = nrow(Rdata),
-        ncol = ncol(errors[[1]])
-      )
-    }
-  }
-  
-  if (ncol(errors[[1]]) != ncol(Rdata)) {
-    if (ncol(errors[[1]]) > ncol(Rdata)) {
-      errors[[1]] <- errors[[1]][, 1:ncol(Rdata), drop = FALSE]
-    } else {
-      errors[[1]] <- matrix(
-        rep(errors[[1]], length.out = nrow(errors[[1]]) * ncol(Rdata)),
-        nrow = nrow(errors[[1]]),
-        ncol = ncol(Rdata)
-      )
-    }
-  }
-  
-  # Calculate weight and bias update for first layer
-  weight_dim <- dim(self$weights[[1]])
-  grad_matrix <- t(errors[[1]]) %*% Rdata
-  
-  grad_matrix <- t(errors[[1]]) %*% Rdata
-  
-  # --- Gradient Clipping for first layer ---
-  # max_norm <- 5
-  # grad_norm <- sqrt(sum(grad_matrix^2))
-  # if (grad_norm > max_norm) {
-  #   grad_matrix <- grad_matrix * (max_norm / grad_norm)
-  #   cat("Clipped grad_matrix norm from", grad_norm, "to", max_norm, "at layer 1\n")
-  # }
-  
-  
-  if (ncol(self$weights[[1]]) == ncol(Rdata) && all(dim(grad_matrix) == weight_dim)) {
-    self$weights[[1]] <- self$weights[[1]] - (lr * grad_matrix)
-  } else if (nrow(self$weights[[1]]) == ncol(Rdata) && ncol(self$weights[[1]]) < ncol(Rdata)) {
-    self$weights[[1]] <- self$weights[[1]] - colMeans(lr * grad_matrix)
-  } else if (prod(weight_dim) == 1) {
-    self$weights[[1]] <- self$weights[[1]] - (lr * sum(grad_matrix))
-  } else {
-    self$weights[[1]] <- self$weights[[1]] - (lr * apply(grad_matrix, 2, mean))
-  }
-  
-  # Update biases for first layer
-  bias_len <- length(self$biases[[1]])
-  grad_bias <- colSums(errors[[1]])
-  
-  if (bias_len < length(grad_bias)) {
-    self$biases[[1]] <- self$biases[[1]] - (lr * grad_bias[1:bias_len])
-  } else if (bias_len > length(grad_bias)) {
-    grad_bias_extended <- rep(grad_bias, length.out = bias_len)
-    self$biases[[1]] <- self$biases[[1]] - (lr * grad_bias_extended)
-  } else {
-    self$biases[[1]] <- self$biases[[1]] - (lr * grad_bias)
-  }
-}
-else {
-  # Update weights for single-layer network
-  grad_matrix <- t(error) %*% Rdata
-  weight_dim <- dim(self$weights)
-  
-  if (all(dim(grad_matrix) == weight_dim)) {
-    self$weights <- self$weights - (lr * grad_matrix)
-  } else if (prod(weight_dim) == 1) {
-    self$weights <- self$weights - (lr * sum(grad_matrix))
-  } else {
-    self$weights <- self$weights - (lr * apply(grad_matrix, 2, mean))
-  }
-  
-  # Update biases for single-layer network
-  bias_len <- length(self$biases)
-  grad_bias <- colSums(error)
-  
-  if (bias_len < length(grad_bias)) {
-    self$biases <- self$biases - (lr * grad_bias[1:bias_len])
-  } else if (bias_len > length(grad_bias)) {
-    grad_bias_extended <- rep(grad_bias, length.out = bias_len)
-    self$biases <- self$biases - (lr * grad_bias_extended)
-  } else {
-    self$biases <- self$biases - (lr * grad_bias)
-  }
-}
-
-
-# If ML_NN is TRUE, update weights and biases for subsequent layers
-if (ML_NN) {
-  cat("Updating weights and biases for hidden layers...\n")
-  cat("Total layers:", self$num_layers, "\n")
-  
-  for (layer in 2:self$num_layers) {
-    prev_output <- hidden_outputs[[layer - 1]]
-    
-    # Align error dimensions for matrix multiplication
-    if (nrow(error) != nrow(prev_output)) {
-      error <- matrix(
-        rep(error, length.out = nrow(prev_output) * ncol(error)),
-        nrow = nrow(prev_output), ncol = ncol(error)
-      )
-    }
-    
-    if (ncol(error) != ncol(prev_output)) {
-      error <- matrix(
-        rep(error, length.out = nrow(error) * ncol(prev_output)),
-        nrow = nrow(error), ncol = ncol(prev_output)
-      )
-    }
-    
-    # Weight update
-    weight_grad <- t(prev_output) %*% error
-    
-    # --- Gradient Clipping for hidden layer ---
-    # grad_norm <- sqrt(sum(weight_grad^2))
-    # if (grad_norm > max_norm) {
-    #   weight_grad <- weight_grad * (max_norm / grad_norm)
-    #   cat("Clipped weight_grad norm from", grad_norm, "to", max_norm, "at layer", layer, "\n")
-    # }
-    
-    
-    weight_shape <- dim(self$weights[[layer]])
-    
-    if (all(dim(weight_grad) == weight_shape)) {
-      self$weights[[layer]] <- self$weights[[layer]] - (lr * weight_grad)
-    } else if (prod(weight_shape) == 1) {
-      self$weights[[layer]] <- self$weights[[layer]] - (lr * sum(weight_grad))
-    } else {
-      self$weights[[layer]] <- self$weights[[layer]] - (lr * apply(weight_grad, 2, mean))
-    }
-    
-    # Bias update
-    bias_grad <- colMeans(error)
-    bias_len <- length(self$biases[[layer]])
-    
-    if (bias_len < length(bias_grad)) {
-      self$biases[[layer]] <- self$biases[[layer]] - (lr * bias_grad[1:bias_len])
-    } else if (bias_len > length(bias_grad)) {
-      extended_grad <- rep(bias_grad, length.out = bias_len)
-      self$biases[[layer]] <- self$biases[[layer]] - (lr * extended_grad)
-    } else {
-      self$biases[[layer]] <- self$biases[[layer]] - (lr * bias_grad)
-    }
-    
-    cat("Updated biases for layer", layer, "\n")
-  }
-}
-
-
-
-    # if (ML_NN) {
-    #     for (m in 1:length(self$weights)) {
-    #         weight_name <- ifelse(m == 1, "weights", paste0("weights", m))
-    #         cat("Weight matrix", weight_name, ":\n")
-    #
-    #         if (length(self$weights) >= m && !is.null(self$weights[[m]])) {
-    #             print(self$weights[[m]])
-    #         } else {
-    #             cat("Weight matrix", weight_name, "is NULL or not initialized.\n")
-    #         }
-    #         cat("\n")
-    #     }
-    # } else {
-    #     print(self$weights)
-    # }
-
-# Final output selection
-if (ML_NN) {
-  predicted_output_learn <- predicted_output_learn_hidden[[self$num_layers]]
-}
-
-
-
-    # Dynamic assignment of weights and biases records
-    # for (i in 1:length(self$ensemble)) {
-    #     weight_record_name <- paste0("weights_record_learn_", i)
-    #     bias_record_name <- paste0("biases_record_learn_", i)
-    #     assign(weight_record_name, as.matrix(self$weights), envir = .GlobalEnv)
-    #     assign(bias_record_name, as.matrix(self$biases), envir = .GlobalEnv)
-    # }
-
-    end_time <- Sys.time()
-
-    # Calculate the prediction time
-    learn_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
-
-
-
-    print("------------------------learn-end-------------------------------------------------")
-
-    # Return the results
-    return(list(predicted_output_learn = predicted_output_learn, learn_time = learn_time))
-},# Method to perform prediction
+,# Method to perform prediction
 predict = function(Rdata, labels, activation_functions) {
     print("------------------------predict-begin-------------------------------------------------")
     start_time <- Sys.time()
@@ -1392,6 +979,17 @@ predict = function(Rdata, labels, activation_functions) {
         }
         
         Z <- as.matrix(Z)
+        
+        # --- Dynamic scaling of Z to control activation magnitude ---
+        Z_mean_abs <- mean(abs(Z))
+        if (Z_mean_abs > 3) {
+          scale_factor <- 3 / Z_mean_abs
+          Z <- Z * scale_factor
+        } else if (Z_mean_abs < 1) {
+          scale_factor <- 1 / Z_mean_abs
+          Z <- Z * scale_factor
+        }
+        
         
         # Prevent 1x1 collapse
         if (nrow(Z) == 1 && nrow(Rdata) > 1) {
@@ -1610,15 +1208,29 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     num_epochs_check <<- num_epochs
     
     # Run forward pass using centralized logic
-    start_time <- Sys.time()
-    predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions)
-    predicted_output_train_reg_prediction_time <- Sys.time() - start_time
+    # start_time <- Sys.time()
+    
+    learn_result <- self$learn(
+      Rdata = Rdata,
+      labels = labels,
+      lr = lr,
+      activation_functions_learn = activation_functions_learn,
+      dropout_rates_learn = dropout_rates_learn
+    )
+    
+    
+    predicted_output_train_reg <- learn_result
+    predicted_output_train_reg_prediction_time <- learn_result$learn_time
+    
+    
+    
+    # predicted_output_train_reg_prediction_time <- Sys.time() - start_time
     
     # Extract predicted output and error
     if (self$ML_NN) {
       predicted_output <- predicted_output_train_reg$hidden_outputs[[self$num_layers]]
     } else {
-      predicted_output <- predicted_output_train_reg$predicted_output
+      predicted_output <- predicted_output_train_reg$learn_output
     }
     
     error <- predicted_output_train_reg$error
@@ -3206,6 +2818,9 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   # weights_record <- lapply(weights_record, as.matrix)
   # biases_record <- lapply(biases_record, as.matrix)
   
+  
+  predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions)
+  
   if (self$ML_NN) {
     for (layer in 1:self$num_layers) {
       cat(sprintf("Layer %d weights summary:\n", layer))
@@ -3728,12 +3343,12 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
           all_model_iter_num[[i]] <- model_iter_num
           self$ensemble[[i]]$self_organize(Rdata, labels, lr)
           if (learnOnlyTrainingRun == FALSE) {
-            learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
+            # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             predicted_outputAndTime <- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
                 Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
               ))) #<<-
-            
+
             # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
             # if (is.null(predicted_outputAndTime$predicted_output_l2)) {
             #   predicted_outputAndTime$predicted_output_l2 <- list()

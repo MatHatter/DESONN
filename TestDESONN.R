@@ -81,16 +81,16 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 
 
-custom_scale <- .33
+custom_scale <- .01
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
 hidden_sizes <- c(16, 8)
-input_size <- 12
+
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu, relu, sigmoid)
+activation_functions <- list(relu, relu, sigmoid) #hidden layers + output layer
 
 
 
@@ -129,10 +129,17 @@ data <- read.csv("C:/Users/wfky1/Downloads/heart_failure_clinical_records.csv")
 # Check for missing values
 sum(is.na(data))
 
+
 # Assuming there are no missing values, or handle them if they exist
 # Convert categorical variables to factors if any
 data <- data %>%
      mutate(across(where(is.character), as.factor))
+
+input_columns <- setdiff(colnames(data), "DEATH_EVENT")
+Rdata <- data[, input_columns]
+labels <- data$DEATH_EVENT
+input_size <- ncol(Rdata)
+
 
 # Split the data into features (X) and target (y)
 X <- data %>% dplyr::select(-DEATH_EVENT)
