@@ -74,13 +74,13 @@ batch_normalize_data <- FALSE
 shuffle_bn <- TRUE
 gamma_bn <- 1
 beta_bn <- 1
-epsilon_bn <- 1e-9  # Increase for numerical stability
+epsilon_bn <- 1e-12  # Increase for numerical stability
 momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
 beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 lr <- 0.1
-lambda <- 0.01
+lambda <- 0.008
 num_epochs <- 90
 custom_scale <- .1
 # epsilon <- 1e-5
@@ -97,7 +97,7 @@ activation_functions <- list(relu, bent_identity, relu, sigmoid) #hidden layers 
 
 activation_functions_learn <- list(relu, bent_identity, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-12
-loss_type <- "CategoricalCrossEntropy" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
