@@ -88,7 +88,7 @@ custom_scale <- .1
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 16, 12)
+hidden_sizes <- c(32, 1, 12)
 
 #, 1, 1, 10) #,2,1,, 1)
 activation_functions <- list(relu, bent_identity, relu, sigmoid) #hidden layers + output layer
