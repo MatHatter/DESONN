@@ -81,21 +81,21 @@ beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
 lr <- 0.01
 lambda <- 0.01
-num_epochs <- 5
-custom_scale <- 1
+num_epochs <- 1
+custom_scale <- 5
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(16, 8)
+hidden_sizes <- c(32, 16)
 
 #, 1, 1, 10) #,2,1,, 1)
 activation_functions <- list(leaky_relu, relu, sigmoid) #hidden layers + output layer
 
 
 
-activation_functions_learn <- list(leaky_relu, elu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(leaky_relu, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-12
 loss_type <- "CategoricalCrossEntropy" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
@@ -123,7 +123,7 @@ if(!ML_NN){
 }else{
      N <- input_size + sum(hidden_sizes) + output_size
 }
-threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
+# threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
 
 # Load the dataset
 data <- read.csv("C:/Users/wfky1/Downloads/heart_failure_clinical_records.csv")
@@ -187,19 +187,30 @@ y_train <- y[train_indices, ]
 X_validation <- X[validation_indices, ]
 y_validation <- y[validation_indices, ]
 
-X_test <- X[test_indices, ]
-y_test <- y[test_indices, ]
-
-#$$$$$$$$$$$$$ Feature scaling without leakage
+# $$$$$$$$$$$$$ Feature scaling without leakage
 X_train_scaled <- scale(X_train)
 center <- attr(X_train_scaled, "scaled:center")
 scale_ <- attr(X_train_scaled, "scaled:scale")
-X_test_scaled <- scale(X_test, center = center, scale = scale_)
-X_validation_scaled <- scale(X_validation, center = center, scale = scale_)
 
-#$$$$$$$$$$$$$ Overwrite training matrix for model training
-X <- as.matrix(X_train_scaled)
+X_validation_scaled <- scale(X_validation, center = center, scale = scale_)
+X_test_scaled <- scale(X_test, center = center, scale = scale_)
+
+# $$$$$$$$$$$$$ Sanity check of unscaled and scaled data
+cat("=== Unscaled Rdata summary (X_train) ===\n")
+print(summary(as.vector(X_train)))
+cat("First 5 rows of unscaled X_train:\n")
+print(X_train[1:5, 1:min(5, ncol(X_train))])
+
+cat("=== Scaled Rdata summary (X_train_scaled) ===\n")
+print(summary(as.vector(X_train_scaled)))
+cat("First 5 rows of scaled X_train_scaled:\n")
+print(X_train_scaled[1:5, 1:min(5, ncol(X_train_scaled))])
+
+# $$$$$$$$$$$$$ Overwrite training matrix for model training
+# If needed, amplify to ensure meaningful activation flow
+X <- as.matrix(X_train_scaled * 3)  # ← Multiply by 10 here if range is too small
 y <- as.matrix(y_train)
+
 
 
 # X <- as.matrix(X_test)

@@ -168,54 +168,54 @@ initialize_weights = function(input_size, hidden_sizes, output_size, method = in
   
   init_weight <- function(fan_in, fan_out, method, custom_scale) {
     if (method == "xavier") {
-      scale <- ifelse(is.null(custom_scale), 0.05, custom_scale)  # LOWER DEFAULT SCALE
+      scale <- ifelse(is.null(custom_scale), 0.5, custom_scale)
       sd <- sqrt(2 / (fan_in + fan_out)) * scale
-      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), nrow = fan_in, ncol = fan_out)
     } else if (method == "he") {
-      sd <- sqrt(2 / fan_in)
-      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
+      scale <- ifelse(is.null(custom_scale), 1.0, custom_scale)
+      sd <- sqrt(2 / fan_in) * scale
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), nrow = fan_in, ncol = fan_out)
     } else if (method == "lecun") {
-      sd <- sqrt(1 / fan_in)
-      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
+      scale <- ifelse(is.null(custom_scale), 1.0, custom_scale)
+      sd <- sqrt(1 / fan_in) * scale
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), nrow = fan_in, ncol = fan_out)
     } else if (method == "orthogonal") {
-      A <- matrix(rnorm(fan_in * fan_out), ncol = fan_out, nrow = fan_in)
+      A <- matrix(rnorm(fan_in * fan_out), nrow = fan_in, ncol = fan_out)
       Q <- qr.Q(qr(A))
       if (ncol(Q) < fan_out) {
         Q <- cbind(Q, matrix(0, nrow = fan_in, ncol = fan_out - ncol(Q)))
       }
-      W <- as.matrix(Q)
+      W <- Q
     } else if (method == "variance_scaling") {
-      scale <- ifelse(is.null(custom_scale), 0.05, custom_scale)
-      sd_raw <- sqrt(1 / (fan_in + fan_out)) * scale
-      sd <- min(sd_raw, 0.2)  # Cap at 0.2
-      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
+      scale <- ifelse(is.null(custom_scale), 0.5, custom_scale)
+      sd <- sqrt(1 / (fan_in + fan_out)) * scale
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = min(sd, 0.2)), nrow = fan_in, ncol = fan_out)
     } else if (method == "glorot_uniform") {
       limit <- sqrt(6 / (fan_in + fan_out))
-      W <- matrix(runif(fan_in * fan_out, min = -limit, max = limit), ncol = fan_out, nrow = fan_in)
+      W <- matrix(runif(fan_in * fan_out, min = -limit, max = limit), nrow = fan_in, ncol = fan_out)
     } else {
-      # Default fallback: small standard deviation
       sd <- 0.01
-      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), ncol = fan_out, nrow = fan_in)
+      W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), nrow = fan_in, ncol = fan_out)
     }
-    return(clip_weights(W))  # Apply weight clipping
+    
+    return(clip_weights(W, limit = 5))
   }
   
-  # First hidden layer
+  # Initialize first hidden layer
   weights[[1]] <- init_weight(input_size, hidden_sizes[1], method, custom_scale)
-  biases[[1]] <- matrix(rnorm(hidden_sizes[1], mean = 0, sd = 0.01), ncol = 1)
+  biases[[1]] <- matrix(rnorm(hidden_sizes[1], mean = 0, sd = 0.05), ncol = 1)  # slightly higher bias init
   
   # Intermediate hidden layers
   for (layer in 2:length(hidden_sizes)) {
     weights[[layer]] <- init_weight(hidden_sizes[layer - 1], hidden_sizes[layer], method, custom_scale)
-    biases[[layer]] <- matrix(rnorm(hidden_sizes[layer], mean = 0, sd = 0.01), ncol = 1)
+    biases[[layer]] <- matrix(rnorm(hidden_sizes[layer], mean = 0, sd = 0.05), ncol = 1)
   }
   
   # Output layer
   last_hidden_size <- hidden_sizes[[length(hidden_sizes)]]
   weights[[length(hidden_sizes) + 1]] <- init_weight(last_hidden_size, output_size, method, custom_scale)
-  biases[[length(hidden_sizes) + 1]] <- matrix(rnorm(output_size, mean = 0, sd = 0.01), ncol = 1)
+  biases[[length(hidden_sizes) + 1]] <- matrix(rnorm(output_size, mean = 0, sd = 0.05), ncol = 1)
   
-  # Assign to self
   self$weights <- weights
   self$biases <- biases
   
@@ -767,10 +767,10 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       
       Z_max <- max(Z)
       Z_min <- min(Z)
-      if (Z_max > 30 || Z_min < -30) {
+      if (Z_max > 100 || Z_min < -100) {
         cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f]\n", layer, Z_min, Z_max))
       }
-      Z <- pmin(pmax(Z, -30), 30)
+      Z <- pmin(pmax(Z, -100), 100)
       
       cat(sprintf("[Debug] Layer %d : Z summary BEFORE scaling:\n", layer))
       print(summary(as.vector(Z)))
@@ -843,10 +843,10 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     
     Z_max <- max(Z)
     Z_min <- min(Z)
-    if (Z_max > 30 || Z_min < -30) {
+    if (Z_max > 100 || Z_min < -100) {
       cat(sprintf("[Debug] SL : Z clipped. Pre-clip range: [%.2f, %.2f]\n", Z_min, Z_max))
     }
-    Z <- pmin(pmax(Z, -30), 30)
+    Z <- pmin(pmax(Z, -100), 100)
     
     if (is.function(activation_functions_learn)) {
       activation_function <- activation_functions_learn
@@ -1019,10 +1019,10 @@ predict = function(Rdata, labels, activation_functions) {
         # ----- Clipping Extreme Z Values -----
         Z_max <- max(Z)
         Z_min <- min(Z)
-        if (Z_max > 30 || Z_min < -30) {
+        if (Z_max > 100 || Z_min < -100) {
           cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f]\n", layer, Z_min, Z_max))
         }
-        Z <- pmin(pmax(Z, -30), 30)
+        Z <- pmin(pmax(Z, -100), 100)
         
         # --- Dynamic scaling of Z to control activation magnitude ---
         # Z_mean_abs <- mean(abs(Z))
@@ -1162,7 +1162,7 @@ predict = function(Rdata, labels, activation_functions) {
                     }
                   }
                   
-                  error_prediction <- labels - final_output
+                  error_prediction <- final_output - labels
                 }
               }
             }
@@ -1185,7 +1185,7 @@ predict = function(Rdata, labels, activation_functions) {
               }
               
               # Compute prediction error
-              error_prediction <- labels - predicted_output_matrix
+              error_prediction <- predicted_output_matrix - labels
               predicted_output_predict <- predicted_output_matrix
             }
             
@@ -1247,7 +1247,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   optimizer_params_biases <- vector("list", self$num_layers)
   
   for (epoch in 1:epoch_in_list) {
-    lr <- lr_scheduler(epoch, initial_lr = 0.01, decay_rate = 0.15, decay_epoch = 10)
+    # lr <- lr_scheduler(epoch, initial_lr = 0.01, decay_rate = 0.15, decay_epoch = 10)
     
     
     # lr <- lr_scheduler(i, initial_lr = lr)
@@ -1317,92 +1317,55 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       dim_hidden_layers <- predicted_output_train_reg$hidden_outputs #This = NULL, I could've set to NULL, but I instead passed the NULL from predict() through this variable.
     }
     
-    
-    
+    # --- Regularization Loss Computation Only ---
     if (self$ML_NN) {
       reg_loss_total <- 0
-      errors <- list()
       
       for (layer in 1:self$num_layers) {
-        # Regularization loss
+        weights_layer <- self$weights[[layer]]
+        
         if (reg_type == "L1") {
-          reg_loss <- self$lambda * sum(abs(self$weights[[layer]]), na.rm = TRUE)
+          reg_loss <- self$lambda * sum(abs(weights_layer), na.rm = TRUE)
         } else if (reg_type == "L2") {
-          reg_loss <- self$lambda * sum(self$weights[[layer]]^2, na.rm = TRUE)
+          reg_loss <- self$lambda * sum(weights_layer^2, na.rm = TRUE)
         } else if (reg_type == "L1_L2") {
           l1_ratio <- 0.5
           reg_loss <- self$lambda * (
-            l1_ratio * sum(abs(self$weights[[layer]]), na.rm = TRUE) +
-              (1 - l1_ratio) * sum(self$weights[[layer]]^2, na.rm = TRUE)
+            l1_ratio * sum(abs(weights_layer), na.rm = TRUE) +
+              (1 - l1_ratio) * sum(weights_layer^2, na.rm = TRUE)
           )
         } else {
           reg_loss <- 0
         }
-        reg_loss_total <- reg_loss_total + reg_loss
         
-        # Output layer: use labels
-        if (layer == self$num_layers) {
-          predicted <- hidden_outputs[[layer]]
-          
-          # Adjust to match label dimensions
-          if (!all(dim(predicted) == dim(labels))) {
-            predicted <- matrix(rep(predicted, length.out = nrow(labels) * ncol(labels)),
-                                nrow = nrow(labels), ncol = ncol(labels))
-          }
-          
-          error <- labels - predicted
-          errors[[layer]] <- error
-          
-        } else {
-          # Hidden layers: reconstruction error
-          prev <- hidden_outputs[[layer]]
-          next_layer <- hidden_outputs[[layer + 1]]
-          
-          # Determine target shape
-          target_rows <- max(nrow(prev), nrow(next_layer))
-          target_cols <- max(ncol(prev), ncol(next_layer))
-          
-          # Adjust both matrices to same shape
-          prev <- matrix(rep(prev, length.out = target_rows * target_cols),
-                         nrow = target_rows, ncol = target_cols)
-          next_layer <- matrix(rep(next_layer, length.out = target_rows * target_cols),
-                               nrow = target_rows, ncol = target_cols)
-          
-          error <- prev - next_layer
-          errors[[layer]] <- error
-        }
+        reg_loss_total <- reg_loss_total + reg_loss
       }
-    }
-    
-    
-    
-    
-    else {  # Single-layer NN case
+      
+    } else {  # --- Single-layer Neural Network ---
       
       reg_loss_total <- 0
+      weights_layer <- self$weights[[1]]
       
-      # Compute regularization loss
       if (reg_type == "L1") {
-        reg_loss_total <- self$lambda * sum(abs(self$weights[[1]]), na.rm = TRUE)
+        reg_loss_total <- self$lambda * sum(abs(weights_layer), na.rm = TRUE)
       } else if (reg_type == "L2") {
-        reg_loss_total <- self$lambda * sum(self$weights[[1]]^2, na.rm = TRUE)
+        reg_loss_total <- self$lambda * sum(weights_layer^2, na.rm = TRUE)
       } else if (reg_type == "L1_L2") {
         l1_ratio <- 0.5
         reg_loss_total <- self$lambda * (
-          l1_ratio * sum(abs(self$weights[[1]]), na.rm = TRUE) +
-            (1 - l1_ratio) * sum(self$weights[[1]]^2, na.rm = TRUE)
+          l1_ratio * sum(abs(weights_layer), na.rm = TRUE) +
+            (1 - l1_ratio) * sum(weights_layer^2, na.rm = TRUE)
         )
       } else if (reg_type == "Group_Lasso") {
-        self$groups <- list(1)
+        self$groups <- list(1)  # Treat entire layer as one group
         reg_loss_total <- self$lambda * sum(sapply(self$groups, function(group) {
-          group_norm <- sqrt(sum(sapply(group, function(idx) {
+          sqrt(sum(sapply(group, function(idx) {
             if (idx <= length(self$weights)) {
-              sqrt(sum(self$weights[[idx]]^2, na.rm = TRUE))
+              sum(self$weights[[idx]]^2, na.rm = TRUE)
             } else {
               0
             }
-          })^2, na.rm = TRUE))
-          group_norm
+          })))
         }))
       } else if (reg_type == "Max_Norm") {
         max_norm <- 1.0
@@ -1416,47 +1379,10 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       } else {
         stop("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'.")
       }
-      
-      # Get predicted output
-      predicted_output <- predicted_output_train_reg$predicted_output
-      
-      # Align column dimensions
-      if (ncol(predicted_output) != ncol(labels)) {
-        if (ncol(predicted_output) < ncol(labels)) {
-          predicted_output <- matrix(
-            rep(predicted_output, length.out = nrow(labels) * ncol(labels)),
-            nrow = nrow(labels), ncol = ncol(labels)
-          )
-        } else {
-          predicted_output <- predicted_output[, 1:ncol(labels), drop = FALSE]
-        }
-      }
-      
-      # Align row dimensions
-      if (nrow(predicted_output) != nrow(labels)) {
-        if (nrow(predicted_output) < nrow(labels)) {
-          predicted_output <- matrix(
-            rep(predicted_output, length.out = nrow(labels) * ncol(predicted_output)),
-            nrow = nrow(labels), ncol = ncol(predicted_output)
-          )
-        } else {
-          predicted_output <- predicted_output[1:nrow(labels), , drop = FALSE]
-        }
-      }
-      
-      # Compute error
-      error_1000x1 <- labels - predicted_output
     }
     
-    # Set final error depending on architecture
-    if (self$ML_NN) {
-      error_last_layer <- errors[[self$num_layers]]
-    } else {
-      error_last_layer <- error_1000x1
-      errors <- list()
-    }
-    errors[[self$num_layers]] <- error_last_layer
     
+
     
     
     # Record the loss for this epoch
@@ -1510,6 +1436,10 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             
             # Get weight gradients from learn()
             grads_matrix <- weight_gradients[[layer]]
+            
+            # Clip weight gradient
+            grads_matrix <- clip_gradient_norm(grads_matrix)
+            
             
             # Apply regularization to gradient if L2 or L1_L2
             if (reg_type == "L2" || reg_type == "L1_L2") {
@@ -2188,7 +2118,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       weights_record <- as.matrix(self$weights)
     }
     
-    # Update biases for the first layer
+    # Update biases
     if (update_biases) {
       if (self$ML_NN) {
         for (layer in 1:self$num_layers) {
@@ -2204,6 +2134,48 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
               )
             }
             
+            # Get bias gradients from learn()
+            grads_matrix <- bias_gradients[[layer]]
+            
+            # Clip bias gradient
+            grads_matrix <- clip_gradient_norm(grads_matrix)
+            
+            # --- Align dimensions if needed ---
+            bias_shape <- dim(as.matrix(self$biases[[layer]]))
+            grad_shape <- dim(grads_matrix)
+            
+            if (!all(bias_shape == grad_shape)) {
+              if (prod(grad_shape) == 1) {
+                grads_matrix <- matrix(grads_matrix, nrow = bias_shape[1], ncol = bias_shape[2])
+              } else if (prod(bias_shape) == 1) {
+                self$biases[[layer]] <- matrix(self$biases[[layer]], nrow = grad_shape[1], ncol = grad_shape[2])
+              } else {
+                grads_matrix <- matrix(rep(grads_matrix, length.out = prod(bias_shape)), 
+                                       nrow = bias_shape[1], ncol = bias_shape[2])
+              }
+            }
+            
+            # Apply regularization to gradient if L2 or L1_L2
+            if (reg_type == "L2" || reg_type == "L1_L2") {
+              bias_update <- lr * grads_matrix + self$lambda * self$biases[[layer]]
+            } else {
+              bias_update <- lr * grads_matrix
+            }
+            
+            # Apply bias update safely
+            if (all(dim(grads_matrix) == dim(self$biases[[layer]]))) {
+              self$biases[[layer]] <- self$biases[[layer]] - bias_update
+            } else if (prod(dim(self$biases[[layer]])) == 1) {
+              self$biases[[layer]] <- self$biases[[layer]] - sum(bias_update)
+            } else {
+              self$biases[[layer]] <- self$biases[[layer]] - apply(bias_update, 2, mean)
+            }
+            
+            cat(">> Bias gradients for layer", layer, "\n")
+            cat("grads_matrix dim:\n")
+            print(dim(grads_matrix))
+            cat("grads_matrix summary:\n")
+            print(summary(as.vector(grads_matrix)))
             
 
             # Apply optimizer update if optimizer is specified
@@ -4497,12 +4469,12 @@ adam_update <- function(params, grads, lr, beta1, beta2, epsilon, t) {
     params$v <- vector("list", length(grads))
   }
   
-  # Learning rate scheduler
-  lr_schedule <- function(t, initial_lr) {
-    decay_rate <- 0.01
-    initial_lr * exp(-decay_rate * t)
-  }
-  lr <- lr_schedule(t, lr)
+  # # Learning rate scheduler
+  # lr_schedule <- function(t, initial_lr) {
+  #   decay_rate <- 0.01
+  #   initial_lr * exp(-decay_rate * t)
+  # }
+  # lr <- lr_schedule(t, lr)
   
   # Update moment estimates
   for (i in seq_along(grads)) {
@@ -5275,7 +5247,7 @@ attr(maxout, "name") <- "maxout"
 
 
 
-lr_scheduler <- function(epoch, initial_lr = 0.01, decay_rate = 0.1, decay_epoch = 10, min_lr = 1e-5) {
+lr_scheduler <- function(epoch, initial_lr = 0.0001, decay_rate = 0.1, decay_epoch = 10, min_lr = 1e-5) {
   # Exponential decay: lr = initial_lr * exp(-decay_rate * floor(epoch / decay_epoch))
   decayed_lr <- initial_lr * exp(-decay_rate * floor(epoch / decay_epoch))
   return(max(min_lr, decayed_lr))  # Prevent learning rate from becoming too small
@@ -6476,7 +6448,7 @@ MSE <- function(SONN, Rdata, labels, predicted_output) {
   }
   
   # Calculate the error
-  error_prediction <- labels - predicted_output_matrix
+  error_prediction <- predicted_output_matrix - labels
   
   # Calculate the classification accuracy on the  Rdata
   accuracy <- mean((error_prediction)^2)
@@ -6597,7 +6569,7 @@ robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, pred
     }
     
     # Calculate the error
-    error_1000x1_r <- labels - predicted_output_matrix
+    error_1000x1_r <- predicted_output_matrix - labels
     
     
     # print("Calculation complete")
@@ -6626,7 +6598,7 @@ robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, pred
     }
     
     # Calculate the classification accuracy on the noisy Rdata
-    accuracy <<- mean((labels - noisy_Rdata_predictions$predicted_output)^2)
+    accuracy <<- mean((noisy_Rdata_predictions$predicted_output - labels)^2)
     
     
   }else if (learnOnlyTrainingRun == TRUE){
@@ -6701,7 +6673,7 @@ precision <- function(SONN, Rdata, labels, predicted_output, verbose = FALSE) {
   }
   
   # Calculate the error
-  error_prediction <- labels - predicted_output_matrix
+  error_prediction <- predicted_output_matrix - labels
   
   # Calculate percentage difference between actual and predicted values
   percentage_difference <<- abs(error_prediction) / abs(labels)
@@ -6792,7 +6764,7 @@ MAE <- function(SONN, Rdata, labels, predicted_output) {
   }
   
   # Calculate the error
-  error_prediction <- labels - predicted_output_matrix
+  error_prediction <- predicted_output_matrix - labels
   
   
   # Calculate the classification accuracy on the noisy Rdata
@@ -6879,7 +6851,7 @@ mean_precision <- function(SONN, Rdata, labels, predicted_output) {
   }
   
   # Calculate the error
-  error_prediction <- labels - predicted_output_matrix
+  error_prediction <- predicted_output_matrix - labels
   
   
   # Calculate percentage difference between actual and predicted values
