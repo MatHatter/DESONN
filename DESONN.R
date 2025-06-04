@@ -793,12 +793,11 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       Z <- pmin(pmax(Z, -clip_limit), clip_limit)
       
-      Z <- Z / 5
+      Z <- Z / 4
       
       
       cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
       print(summary(as.vector(Z)))
-      
       
       
       hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
@@ -895,7 +894,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     }
     Z <- pmin(pmax(Z, -clip_limit), clip_limit)
     
-    Z <- Z / 5
+    Z <- Z / 4
     
     
     cat("[Debug] SL NN : Z summary AFTER clipping:\n")
@@ -1085,7 +1084,7 @@ predict = function(Rdata, labels, activation_functions) {
         }
         Z <- pmin(pmax(Z, -clip_limit), clip_limit)
         
-        Z <- Z / 5
+        Z <- Z / 4
         
         
         cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
@@ -3372,93 +3371,37 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
               print(str(predicted_outputAndTime$predicted_output_l2$predicted_output))
             }
             
-            
-            # --- Safe prediction extraction and optional binarization ---
-            use_binary_predictions <- TRUE  # Toggle this flag
-            
-            # Extract predicted probabilities safely
-            hidden_outputs <- predicted_outputAndTime$predicted_output$hidden_outputs
-            
-            if (!is.null(hidden_outputs) &&
-                length(hidden_outputs) > 0 &&
-                is.matrix(hidden_outputs[[length(hidden_outputs)]]) &&
-                nrow(hidden_outputs[[length(hidden_outputs)]]) == nrow(Rdata)) {
+            probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
+            # binary_preds <- probs
+            binary_preds <- ifelse(probs >= 0.5, 1, 0)
               
-              probs <- hidden_outputs[[length(hidden_outputs)]]
-              cat(">>> Using last hidden_output. Shape:\n")
-              print(dim(probs))
-              
-            } else if (!is.null(predicted_outputAndTime$predicted_output$predicted_output)) {
-              
-              probs <- predicted_outputAndTime$predicted_output$predicted_output
-              cat(">>> Using predicted_output directly. Shape:\n")
-              print(length(probs))
-              
-              probs <- as.matrix(probs)
-              
-              if (nrow(probs) == 1 && ncol(probs) == nrow(Rdata)) {
-                probs <- t(probs)
-              }
-              
-            } else {
-              stop("ERROR: No valid predicted output found — both hidden_outputs and predicted_output are missing.")
-            }
-            
-            # Optional: handle multi-column case
-            if (is.matrix(probs) && ncol(probs) > 1) {
-              cat(">>> Multiple columns detected. Using only first column.\n")
-              probs <- probs[, 1, drop = FALSE]
-            }
-            
-            # Flatten to vector
-            probs <- as.vector(probs)
-            
-            # Final debug
-            cat(">>> Final probs length:", length(probs), "\n")
-            cat(">>> Number of rows in Rdata:", nrow(Rdata), "\n")
-            
-            # Use raw probabilities or convert to binary
-            if (use_binary_predictions) {
-              binary_preds <- ifelse(probs >= 0.5, 1, 0)
-              
-              if (length(binary_preds) != nrow(Rdata)) {
-                if (length(binary_preds) == 1) {
-                  binary_preds <- rep(binary_preds, nrow(Rdata))
-                } else {
-                  stop(paste("binary_preds length mismatch:", length(binary_preds), "vs expected", nrow(Rdata)))
-                }
-              }
-              final_output <- binary_preds
-            } else {
-              final_output <- probs
-            }
-            
+
             # Flatten actual labels
             labels_flat <- as.vector(labels)
-            
+            # print(head(binary_preds, 40))
             # Calculate accuracy
-            accuracy <- calculate_accuracy(final_output, labels_flat)
+            accuracy <- calculate_accuracy(binary_preds, labels_flat)
             print(paste("Accuracy:", accuracy))
             
             
             # Combine Rdata, labels, and predictions for export
             Rdata_df <- as.data.frame(Rdata)
             Rdata_with_labels <- cbind(Rdata_df, Label = labels_flat)
-            Rdata_predictions <- Rdata_with_labels %>%
+            Rdata_predictions <<- Rdata_with_labels %>%
               mutate(Predictions = binary_preds)
-            
+            stop()
             # Export to Excel
-            write_xlsx(Rdata_predictions, "Rdata_predictions3.xlsx")
+            write_xlsx(Rdata_predictions, "Rdata_predictions.xlsx")
             
             
             library(writexl)
             
             # Specify the path
-            file_path <- "C:/Users/wfky1/OneDrive/Documents/R/CopyOfDESONN11_20240622/Rdata_predictions3.xlsx"
-            
+            file_path <- "C:/Users/wfky1/OneDrive/Documents/R/DESONN/Rdata_predictions.xlsx"
+
             # Write the data to the specified folder
             write_xlsx(Rdata_predictions, file_path)
-            
+            stop()
             if(ML_NN){
               
               # Step 1: Extract predicted output
