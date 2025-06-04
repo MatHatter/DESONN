@@ -765,21 +765,41 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       
       Z <- input_data %*% weights_matrix + bias_matrix
       
-      Z_max <- max(Z)
-      Z_min <- min(Z)
-      if (Z_max > 100 || Z_min < -100) {
-        cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f]\n", layer, Z_min, Z_max))
-      }
-      Z <- pmin(pmax(Z, -100), 100)
+      cat(sprintf("[Debug] Layer %d : Z summary BEFORE clipping:\n", layer))
+      print(summary(as.vector(Z)))
       
-      cat(sprintf("[Debug] Layer %d : Z summary BEFORE scaling:\n", layer))
-      print(summary(as.vector(Z)))
-      cat(sprintf("[Debug] Layer %d : Z summary AFTER scaling:\n", layer))
-      print(summary(as.vector(Z)))
+
       
       activation_function <- activation_functions_learn[[layer]]
       activation_name <- if (!is.null(activation_function)) attr(activation_function, "name") else "none"
       cat(sprintf("[Debug] Layer %d : Activation Function = %s\n", layer, activation_name))
+      
+      
+      
+      # ----- Clipping Extreme Z Values (Activation-Aware) -----
+      clip_limit <- switch(activation_name,
+                           "sigmoid" = 20,
+                           "tanh" = 10,
+                           "softmax" = 15,
+                           "relu" = 100,
+                           "leaky_relu" = 100,
+                           50 # Default fallback
+      )
+      
+      Z_max <- max(Z)
+      Z_min <- min(Z)
+      if (Z_max > clip_limit || Z_min < -clip_limit) {
+        cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f] | Clip limit: ±%g\n", layer, Z_min, Z_max, clip_limit))
+      }
+      Z <- pmin(pmax(Z, -clip_limit), clip_limit)
+      
+      Z <- Z / 5
+      
+      
+      cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
+      print(summary(as.vector(Z)))
+      
+      
       
       hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
       cat(sprintf("[Debug] Layer %d : predicted_output_learn dim = %d x %d\n", layer, nrow(hidden_output), ncol(hidden_output)))
@@ -841,12 +861,11 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     
     Z <- Rdata %*% weights_matrix + bias_matrix
     
-    Z_max <- max(Z)
-    Z_min <- min(Z)
-    if (Z_max > 100 || Z_min < -100) {
-      cat(sprintf("[Debug] SL : Z clipped. Pre-clip range: [%.2f, %.2f]\n", Z_min, Z_max))
-    }
-    Z <- pmin(pmax(Z, -100), 100)
+    cat(sprintf("[Debug]: Z summary BEFORE clipping.\n"))
+    print(summary(as.vector(Z)))
+    
+
+    
     
     if (is.function(activation_functions_learn)) {
       activation_function <- activation_functions_learn
@@ -856,6 +875,33 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       activation_function <- activation_functions_learn[[1]]
     }
+    
+    
+    # ----- Clipping Extreme Z Values (Activation-Aware) for SL NN -----
+    activation_name <- attr(activation_function, "name")
+    clip_limit <- switch(activation_name,
+                         "sigmoid" = 20,
+                         "tanh" = 10,
+                         "softmax" = 15,
+                         "relu" = 100,
+                         "leaky_relu" = 100,
+                         50 # Default fallback
+    )
+    
+    Z_max <- max(Z)
+    Z_min <- min(Z)
+    if (Z_max > clip_limit || Z_min < -clip_limit) {
+      cat(sprintf("[Debug] SL NN : Z clipped. Pre-clip range: [%.2f, %.2f] | Clip limit: ±%g\n", Z_min, Z_max, clip_limit))
+    }
+    Z <- pmin(pmax(Z, -clip_limit), clip_limit)
+    
+    Z <- Z / 5
+    
+    
+    cat("[Debug] SL NN : Z summary AFTER clipping:\n")
+    print(summary(as.vector(Z)))
+    
+    
     
     predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
     error_learn <- predicted_output_learn - labels
@@ -1016,13 +1062,35 @@ predict = function(Rdata, labels, activation_functions) {
         
         Z <- as.matrix(Z)
         
-        # ----- Clipping Extreme Z Values -----
+        cat(sprintf("[Debug] Layer %d : Z summary BEFORE clipping:\n", layer))
+        print(summary(as.vector(Z)))
+        
+        activation_name <- if (!is.null(activation_function)) attr(activation_function, "name") else "none"
+        cat(sprintf("[Debug] Layer %d : Activation Function = %s\n", layer, activation_name))
+        
+        # ----- Clipping Extreme Z Values (Activation-Aware) -----
+        clip_limit <- switch(activation_name,
+                             "sigmoid" = 20,
+                             "tanh" = 10,
+                             "softmax" = 15,
+                             "relu" = 100,
+                             "leaky_relu" = 100,
+                             50 # Default fallback
+        )
+        
         Z_max <- max(Z)
         Z_min <- min(Z)
-        if (Z_max > 100 || Z_min < -100) {
-          cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f]\n", layer, Z_min, Z_max))
+        if (Z_max > clip_limit || Z_min < -clip_limit) {
+          cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f] | Clip limit: ±%g\n", layer, Z_min, Z_max, clip_limit))
         }
-        Z <- pmin(pmax(Z, -100), 100)
+        Z <- pmin(pmax(Z, -clip_limit), clip_limit)
+        
+        Z <- Z / 5
+        
+        
+        cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
+        print(summary(as.vector(Z)))
+        
         
         # --- Dynamic scaling of Z to control activation magnitude ---
         # Z_mean_abs <- mean(abs(Z))
@@ -1438,7 +1506,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             grads_matrix <- weight_gradients[[layer]]
             
             # Clip weight gradient
-            grads_matrix <- clip_gradient_norm(grads_matrix)
+            grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5)
             
             
             # Apply regularization to gradient if L2 or L1_L2
@@ -1495,6 +1563,11 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                   layer = layer,
                   target = "weights"
                 )
+                
+                cat(">> Updated weights summary (post-Adam): min =", min(updated_optimizer$updated_weights_or_biases), 
+                    ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                    ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+          
                 
                 self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
                 optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
@@ -5011,13 +5084,16 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
 
 
 
-clip_gradient_norm <- function(gradient, max_norm = 5) {
+clip_gradient_norm <- function(gradient, min_norm = 1e-3, max_norm = 5) {
   grad_norm <- sqrt(sum(gradient^2))
   if (grad_norm > max_norm) {
     gradient <- gradient * (max_norm / grad_norm)
+  } else if (grad_norm < min_norm && grad_norm > 0) {
+    gradient <- gradient * (min_norm / grad_norm)
   }
   return(gradient)
 }
+
 
 
 

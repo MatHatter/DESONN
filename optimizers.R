@@ -72,11 +72,11 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     cat("Updated", target, "summary (layer", layer, "): min =", min(updated), 
         ", mean =", mean(updated), ", max =", max(updated), "\n")
     
-    # Assign updated weights or biases back to self
+    # Assign updated weights or biases back to self using subtraction
     if (target == "weights") {
-      self$weights[[layer]] <- updated
+      self$weights[[layer]] <- self$weights[[layer]] - updated
     } else if (target == "biases") {
-      self$biases[[layer]] <- updated
+      self$biases[[layer]] <- self$biases[[layer]] - updated
     }
   }
 

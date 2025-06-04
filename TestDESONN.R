@@ -82,28 +82,28 @@ beta2 <- 0.999  # Slightly lower for better adaptabilit
 lr <- 0.01
 lambda <- 0.01
 num_epochs <- 1
-custom_scale <- 5
+custom_scale <- .5
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 16)
+hidden_sizes <- c(8, 16)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(leaky_relu, relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(relu, leaky_relu, sigmoid) #hidden layers + output layer
 
 
 
-activation_functions_learn <- list(leaky_relu, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(relu, leaky_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-12
-loss_type <- "CategoricalCrossEntropy" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0, 0)
+dropout_rates <- list(0.2, 0.1)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
@@ -187,13 +187,23 @@ y_train <- y[train_indices, ]
 X_validation <- X[validation_indices, ]
 y_validation <- y[validation_indices, ]
 
-# $$$$$$$$$$$$$ Feature scaling without leakage
+# $$$$$$$$$$$$$ Feature scaling without leakage (standardization first)
 X_train_scaled <- scale(X_train)
 center <- attr(X_train_scaled, "scaled:center")
 scale_ <- attr(X_train_scaled, "scaled:scale")
 
 X_validation_scaled <- scale(X_validation, center = center, scale = scale_)
 X_test_scaled <- scale(X_test, center = center, scale = scale_)
+
+# $$$$$$$$$$$$$ Further rescale to prevent exploding activations
+max_val <- max(abs(X_train_scaled))
+if (max_val > 10) {
+  Rdata <- Rdata / max_val  # range will be roughly [-1, 1]
+}
+
+X_train_scaled <- X_train_scaled / max_val
+X_validation_scaled <- X_validation_scaled / max_val
+X_test_scaled <- X_test_scaled / max_val
 
 # $$$$$$$$$$$$$ Sanity check of unscaled and scaled data
 cat("=== Unscaled Rdata summary (X_train) ===\n")
@@ -207,9 +217,9 @@ cat("First 5 rows of scaled X_train_scaled:\n")
 print(X_train_scaled[1:5, 1:min(5, ncol(X_train_scaled))])
 
 # $$$$$$$$$$$$$ Overwrite training matrix for model training
-# If needed, amplify to ensure meaningful activation flow
-X <- as.matrix(X_train_scaled * 3)  # ← Multiply by 10 here if range is too small
+X <- as.matrix(X_train_scaled)
 y <- as.matrix(y_train)
+
 
 
 
