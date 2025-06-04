@@ -1315,8 +1315,11 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   
   for (epoch in 1:epoch_in_list) {
     # lr <- lr_scheduler(epoch, initial_lr = 0.01, decay_rate = 0.15, decay_epoch = 10)
+
+    # lr <- lr_scheduler(epoch)
     
-    
+    # optional: log current lr
+    cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
     # lr <- lr_scheduler(i, initial_lr = lr)
     #print(paste("Epoch:", epoch))
     num_epochs_check <<- num_epochs
@@ -5266,11 +5269,11 @@ attr(maxout, "name") <- "maxout"
 
 
 
-lr_scheduler <- function(epoch, initial_lr = 0.0001, decay_rate = 0.1, decay_epoch = 10, min_lr = 1e-5) {
-  # Exponential decay: lr = initial_lr * exp(-decay_rate * floor(epoch / decay_epoch))
-  decayed_lr <- initial_lr * exp(-decay_rate * floor(epoch / decay_epoch))
-  return(max(min_lr, decayed_lr))  # Prevent learning rate from becoming too small
+lr_scheduler <- function(epoch, initial_lr = 0.1, decay_rate = 0.5, decay_epoch = 45, min_lr = 1e-5) {
+  decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
+  return(max(min_lr, decayed_lr))
 }
+
 
 
 

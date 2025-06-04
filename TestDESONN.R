@@ -79,7 +79,7 @@ momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
 beta1 <- 0.9  # Standard Adam value
 beta2 <- 0.999  # Slightly lower for better adaptabilit
-lr <- 0.1
+lr <- 0.11
 lambda <- 0.008
 num_epochs <- 90
 custom_scale <- .1
@@ -103,7 +103,7 @@ loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.2, 0.1)
+dropout_rates <- list(0.5, 0.3)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
