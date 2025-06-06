@@ -80,7 +80,7 @@ is_training_bn <- TRUE
 beta1 <- 0.97 # Standard Adam value
 beta2 <- 0.7 # Slightly lower for better adaptabilit
 lr <- 0.11
-lambda <- 0.01
+lambda <- 0.1
 num_epochs <- 88
 custom_scale <- .105
 # epsilon <- 1e-5
@@ -96,13 +96,13 @@ activation_functions <- list(relu, bent_identity, bent_relu, sigmoid) #hidden la
 
 activation_functions_learn <- list(relu, bent_identity, bent_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-1
-loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.9, 0.6)
+dropout_rates <- list(0.5, 0.4)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
@@ -282,7 +282,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = "L1" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = NULL #"L1" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2

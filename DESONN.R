@@ -1139,63 +1139,94 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     if (self$ML_NN) {
       reg_loss_total <- 0
       
-      for (layer in 1:self$num_layers) {
-        weights_layer <- self$weights[[layer]]
+      if (!is.null(reg_type)) {
+        for (layer in 1:self$num_layers) {
+          weights_layer <- self$weights[[layer]]
+          
+          if (reg_type == "L1") {
+            reg_loss <- self$lambda * sum(abs(weights_layer), na.rm = TRUE)
+            
+          } else if (reg_type == "L2") {
+            reg_loss <- self$lambda * sum(weights_layer^2, na.rm = TRUE)
+            
+          } else if (reg_type == "L1_L2") {
+            l1_ratio <- 0.5
+            reg_loss <- self$lambda * (
+              l1_ratio * sum(abs(weights_layer), na.rm = TRUE) +
+                (1 - l1_ratio) * sum(weights_layer^2, na.rm = TRUE)
+            )
+            
+          } else if (reg_type == "Group_Lasso") {
+            if (is.null(self$groups[[layer]])) {
+              self$groups[[layer]] <- list(1:ncol(weights_layer))
+            }
+            reg_loss <- self$lambda * sum(sapply(self$groups[[layer]], function(group) {
+              sqrt(sum(weights_layer[, group]^2, na.rm = TRUE))
+            }))
+            
+          } else if (reg_type == "Max_Norm") {
+            max_norm <- 1.0
+            norm_weight <- sqrt(sum(weights_layer^2, na.rm = TRUE))
+            reg_loss <- self$lambda * ifelse(norm_weight > max_norm, 1, 0)
+            
+          } else if (reg_type == "Sparse_Bayesian") {
+            stop("Sparse Bayesian Learning is not implemented in this code.")
+            
+          } else {
+            print("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'. However, NULL is acceptable.")
+            reg_loss <- 0
+          }
+          
+          reg_loss_total <- reg_loss_total + reg_loss
+        }
+      } else {
+        reg_loss_total <- 0
+      }
+    }
+    
+    else {
+      reg_loss_total <- 0
+      
+      if (!is.null(reg_type)) {
+        # Ensure self$weights is treated as a list
+        weights_list <- if (is.list(self$weights)) self$weights else list(self$weights)
+        weights_layer <- weights_list[[1]]
         
         if (reg_type == "L1") {
-          reg_loss <- self$lambda * sum(abs(weights_layer), na.rm = TRUE)
+          reg_loss_total <- self$lambda * sum(abs(weights_layer), na.rm = TRUE)
+          
         } else if (reg_type == "L2") {
-          reg_loss <- self$lambda * sum(weights_layer^2, na.rm = TRUE)
+          reg_loss_total <- self$lambda * sum(weights_layer^2, na.rm = TRUE)
+          
         } else if (reg_type == "L1_L2") {
           l1_ratio <- 0.5
-          reg_loss <- self$lambda * (
+          reg_loss_total <- self$lambda * (
             l1_ratio * sum(abs(weights_layer), na.rm = TRUE) +
               (1 - l1_ratio) * sum(weights_layer^2, na.rm = TRUE)
           )
+          
+        } else if (reg_type == "Group_Lasso") {
+          if (is.null(self$groups)) {
+            self$groups <- list(1:ncol(weights_layer))
+          }
+          reg_loss_total <- self$lambda * sum(sapply(self$groups, function(group) {
+            sqrt(sum(weights_layer[, group]^2, na.rm = TRUE))
+          }))
+          
+        } else if (reg_type == "Max_Norm") {
+          max_norm <- 1.0
+          norm_weight <- sqrt(sum(weights_layer^2, na.rm = TRUE))
+          reg_loss_total <- self$lambda * ifelse(norm_weight > max_norm, 1, 0)
+          
+        } else if (reg_type == "Sparse_Bayesian") {
+          stop("Sparse Bayesian Learning is not implemented in this code.")
+          
         } else {
-          reg_loss <- 0
+          print("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'. However, NULL is acceptable.")
+          reg_loss_total <- 0
         }
-        
-        reg_loss_total <- reg_loss_total + reg_loss
-      }
-      
-    } else {  # --- Single-layer Neural Network ---
-      
-      reg_loss_total <- 0
-      weights_layer <- self$weights[[1]]
-      
-      if (reg_type == "L1") {
-        reg_loss_total <- self$lambda * sum(abs(weights_layer), na.rm = TRUE)
-      } else if (reg_type == "L2") {
-        reg_loss_total <- self$lambda * sum(weights_layer^2, na.rm = TRUE)
-      } else if (reg_type == "L1_L2") {
-        l1_ratio <- 0.5
-        reg_loss_total <- self$lambda * (
-          l1_ratio * sum(abs(weights_layer), na.rm = TRUE) +
-            (1 - l1_ratio) * sum(weights_layer^2, na.rm = TRUE)
-        )
-      } else if (reg_type == "Group_Lasso") {
-        self$groups <- list(1)  # Treat entire layer as one group
-        reg_loss_total <- self$lambda * sum(sapply(self$groups, function(group) {
-          sqrt(sum(sapply(group, function(idx) {
-            if (idx <= length(self$weights)) {
-              sum(self$weights[[idx]]^2, na.rm = TRUE)
-            } else {
-              0
-            }
-          })))
-        }))
-      } else if (reg_type == "Max_Norm") {
-        max_norm <- 1.0
-        reg_loss_total <- self$lambda * sum(sapply(self$weights, function(w) {
-          norm_weight <- sqrt(sum(w^2, na.rm = TRUE))
-          if (is.na(norm_weight)) norm_weight <- 0
-          if (norm_weight > max_norm) 1 else 0
-        }))
-      } else if (reg_type == "Sparse_Bayesian") {
-        stop("Sparse Bayesian Learning is not implemented in this code.")
       } else {
-        stop("Invalid regularization type. Choose 'L1', 'L2', 'L1_L2', 'Group_Lasso', 'Max_Norm', or 'Sparse_Bayesian'.")
+        reg_loss_total <- 0
       }
     }
     
@@ -1259,12 +1290,53 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5)
             
             
-            # Apply regularization to gradient if L2 or L1_L2
-            if (reg_type == "L2" || reg_type == "L1_L2") {
-              weight_update <- lr * grads_matrix + self$lambda * self$weights[[layer]]
+            # --------- Apply Regularization to Weight Gradient ---------
+            if (!is.null(reg_type)) {
+              if (reg_type == "L2") {
+                weight_update <- lr * grads_matrix + self$lambda * self$weights[[layer]]
+                
+              } else if (reg_type == "L1") {
+                l1_grad <- self$lambda * sign(self$weights[[layer]])
+                weight_update <- lr * grads_matrix + l1_grad
+                
+              } else if (reg_type == "L1_L2") {
+                l1_ratio <- 0.5
+                l1_grad <- l1_ratio * sign(self$weights[[layer]])
+                l2_grad <- (1 - l1_ratio) * self$weights[[layer]]
+                weight_update <- lr * grads_matrix + self$lambda * (l1_grad + l2_grad)
+                
+              } else if (reg_type == "Group_Lasso") {
+                if (is.null(self$groups)) self$groups <- list(1:ncol(self$weights[[layer]]))  # treat all columns as one group
+                group_lasso_grad <- matrix(0, nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]))
+                for (group in self$groups) {
+                  group_weights <- self$weights[[layer]][, group, drop = FALSE]
+                  norm_group <- sqrt(sum(group_weights^2, na.rm = TRUE)) + 1e-8
+                  group_lasso_grad[, group] <- group_weights / norm_group
+                }
+                weight_update <- lr * grads_matrix + self$lambda * group_lasso_grad
+                
+              } else if (reg_type == "Max_Norm") {
+                max_norm <- 1.0
+                weight_norms <- sqrt(colSums(self$weights[[layer]]^2, na.rm = TRUE))
+                clipped_weights <- self$weights[[layer]]
+                for (j in seq_along(weight_norms)) {
+                  if (weight_norms[j] > max_norm) {
+                    clipped_weights[, j] <- (clipped_weights[, j] / weight_norms[j]) * max_norm
+                  }
+                }
+                weight_update <- lr * grads_matrix + self$lambda * (self$weights[[layer]] - clipped_weights)
+                
+              } else {
+                # Unknown reg_type → fall back
+                cat("Warning: Unknown reg_type provided. No regularization applied.\n")
+                weight_update <- lr * grads_matrix
+              }
             } else {
+              # No regularization type specified → default to pure gradient descent
               weight_update <- lr * grads_matrix
             }
+            
+            
             
             # Apply weight update safely
             if (all(dim(grads_matrix) == dim(self$weights[[layer]]))) {
@@ -1872,66 +1944,102 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
               
             }}
         }}
-       else {
-         # ---------------- SINGLE-LAYER NN ----------------
-         if (!is.null(self$weights) && !is.null(optimizer)) {
-           
-           # Init optimizer params if needed
-           if (is.null(optimizer_params_weights[[1]])) {
-             optimizer_params_weights[[1]] <- initialize_optimizer_params(
-               optimizer,
-               list(dim(self$weights)),
-               lookahead_step,
-               1
-             )
-           }
-           
-           grads_matrix <- weight_gradients[[1]]
-           
-           # --- Regularization ---
-           if (reg_type == "L2" || reg_type == "L1_L2") {
-             weight_update <- lr * grads_matrix + self$lambda * self$weights
-           } else {
-             weight_update <- lr * grads_matrix
-           }
-           
-           # --- Debug print ---
-           cat(">> SL grads_matrix dim:\n")
-           print(dim(grads_matrix))
-           cat("SL grads_matrix summary:\n")
-           print(summary(as.vector(grads_matrix)))
-           
-           # --- Apply Optimizer ---
-           if (!is.null(optimizer_params_weights[[1]]) && optimizer == "adam") {
-             updated_optimizer <- apply_optimizer_update(
-               optimizer = optimizer,
-               optimizer_params = optimizer_params_weights,
-               grads_matrix = grads_matrix,
-               lr = lr,
-               beta1 = beta1,
-               beta2 = beta2,
-               epsilon = epsilon,
-               epoch = epoch,
-               self = self,
-               layer = 1,
-               target = "weights"
-             )
-             
-             self$weights <- updated_optimizer$updated_weights_or_biases
-             optimizer_params_weights[[1]] <- updated_optimizer$updated_optimizer_params
-             
-           } else {
-             # Fallback update
-             if (all(dim(grads_matrix) == dim(self$weights))) {
-               self$weights <- self$weights - weight_update
-             } else if (prod(dim(self$weights)) == 1) {
-               self$weights <- self$weights - sum(weight_update)
-             } else {
-               self$weights <- self$weights - apply(weight_update, 2, mean)
-             }
-           }
-         }
-       }}
+      else {
+        # ---------------- SINGLE-LAYER NN ----------------
+        if (!is.null(self$weights) && !is.null(optimizer)) {
+          
+          # Init optimizer params if needed
+          if (is.null(optimizer_params_weights[[1]])) {
+            optimizer_params_weights[[1]] <- initialize_optimizer_params(
+              optimizer,
+              list(dim(self$weights)),
+              lookahead_step,
+              1
+            )
+          }
+          
+          grads_matrix <- weight_gradients[[1]]
+          
+          # ------------------- REGULARIZATION -------------------
+          if (!is.null(reg_type)) {
+            if (reg_type == "L2") {
+              reg_term <- self$lambda * self$weights
+              weight_update <- lr * grads_matrix + reg_term
+              
+            } else if (reg_type == "L1") {
+              reg_term <- self$lambda * sign(self$weights)
+              weight_update <- lr * grads_matrix + reg_term
+              
+            } else if (reg_type == "L1_L2") {
+              l1_ratio <- 0.5
+              reg_term <- self$lambda * (l1_ratio * sign(self$weights) + (1 - l1_ratio) * self$weights)
+              weight_update <- lr * grads_matrix + reg_term
+              
+            } else if (reg_type == "Group_Lasso") {
+              norm_weights <- sqrt(sum(self$weights^2, na.rm = TRUE)) + 1e-8
+              reg_term <- self$lambda * (self$weights / norm_weights)
+              weight_update <- lr * grads_matrix + reg_term
+              
+            } else if (reg_type == "Max_Norm") {
+              max_norm <- 1.0
+              norm_weights <- sqrt(sum(self$weights^2, na.rm = TRUE))
+              clipped_weights <- if (norm_weights > max_norm) {
+                (self$weights / norm_weights) * max_norm
+              } else {
+                self$weights
+              }
+              reg_term <- self$lambda * (self$weights - clipped_weights)
+              weight_update <- lr * grads_matrix + reg_term
+              
+            } else {
+              cat("Warning: Unknown reg_type in SL. No regularization applied.\n")
+              weight_update <- lr * grads_matrix
+            }
+            
+          } else {
+            # Default case: no regularization
+            weight_update <- lr * grads_matrix
+          }
+          
+          
+          # ------------------- DEBUG -------------------
+          cat(">> SL grads_matrix dim:\n")
+          print(dim(grads_matrix))
+          cat("SL grads_matrix summary:\n")
+          print(summary(as.vector(grads_matrix)))
+          
+          # ------------------- OPTIMIZER -------------------
+          if (!is.null(optimizer_params_weights[[1]]) && optimizer == "adam") {
+            updated_optimizer <- apply_optimizer_update(
+              optimizer = optimizer,
+              optimizer_params = optimizer_params_weights,
+              grads_matrix = grads_matrix,
+              lr = lr,
+              beta1 = beta1,
+              beta2 = beta2,
+              epsilon = epsilon,
+              epoch = epoch,
+              self = self,
+              layer = 1,
+              target = "weights"
+            )
+            
+            self$weights <- updated_optimizer$updated_weights_or_biases
+            optimizer_params_weights[[1]] <- updated_optimizer$updated_optimizer_params
+            
+          } else {
+            # ------------- FALLBACK: SGD or others -------------
+            if (all(dim(grads_matrix) == dim(self$weights))) {
+              self$weights <- self$weights - weight_update
+            } else if (prod(dim(self$weights)) == 1) {
+              self$weights <- self$weights - sum(weight_update)
+            } else {
+              self$weights <- self$weights - apply(weight_update, 2, mean)
+            }
+          }
+        }
+      }
+    }
     # Record the updated weight matrix
     if (self$ML_NN) {
       for (layer in 1:self$num_layers) {
@@ -1978,12 +2086,50 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
               }
             }
             
-            # Apply regularization to gradient if L2 or L1_L2
-            if (reg_type == "L2" || reg_type == "L1_L2") {
-              bias_update <- lr * grads_matrix + self$lambda * self$biases[[layer]]
+            # --------- Apply Regularization to Bias Gradient ---------
+            if (!is.null(reg_type)) {
+              if (reg_type == "L2") {
+                reg_term <- self$lambda * self$biases[[layer]]
+                bias_update <- lr * grads_matrix + reg_term
+                
+              } else if (reg_type == "L1") {
+                reg_term <- self$lambda * sign(self$biases[[layer]])
+                bias_update <- lr * grads_matrix + reg_term
+                
+              } else if (reg_type == "L1_L2") {
+                l1_ratio <- 0.5
+                l1_grad <- l1_ratio * sign(self$biases[[layer]])
+                l2_grad <- (1 - l1_ratio) * self$biases[[layer]]
+                reg_term <- self$lambda * (l1_grad + l2_grad)
+                bias_update <- lr * grads_matrix + reg_term
+                
+              } else if (reg_type == "Group_Lasso") {
+                norm_bias <- sqrt(sum(self$biases[[layer]]^2, na.rm = TRUE)) + 1e-8
+                reg_term <- self$lambda * (self$biases[[layer]] / norm_bias)
+                bias_update <- lr * grads_matrix + reg_term
+                
+              } else if (reg_type == "Max_Norm") {
+                max_norm <- 1.0
+                norm_bias <- sqrt(sum(self$biases[[layer]]^2, na.rm = TRUE))
+                clipped_bias <- if (norm_bias > max_norm) {
+                  (self$biases[[layer]] / norm_bias) * max_norm
+                } else {
+                  self$biases[[layer]]
+                }
+                reg_term <- self$lambda * (self$biases[[layer]] - clipped_bias)
+                bias_update <- lr * grads_matrix + reg_term
+                
+              } else {
+                cat("Warning: Unknown reg_type in ML bias update. No regularization applied.\n")
+                bias_update <- lr * grads_matrix
+              }
+              
             } else {
+              # Default: No regularization
               bias_update <- lr * grads_matrix
             }
+            
+            
             
             # Apply bias update safely
             if (all(dim(grads_matrix) == dim(self$biases[[layer]]))) {
@@ -2299,7 +2445,8 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                     }
                   }
                 }
-              }else if (optimizer == "lookahead") {
+              }
+              else if (optimizer == "lookahead") {
                 # Ensure gradients for biases are properly initialized
                 grads_biases <- lapply(self$biases, function(biases) {
                   grad_vector <- runif(n = length(biases))  # Generate random gradients
@@ -2378,13 +2525,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                   optimizer_params_biases[[layer]]$lookahead_counter <- new_lookahead_counter
                 }
               }
-              
-              
-              
-              
-              
-              
-              
+
               
               else if (optimizer == "adagrad") {
                 optimizer_params_biases[[layer]] <- adagrad_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr)
@@ -2526,15 +2667,59 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                 
                 self$biases <- updated_optimizer$updated_weights_or_biases
                 optimizer_params_biases <- updated_optimizer$updated_optimizer_params
+                
               } else {
-                # Fallback to SGD update if no optimizer
-                self$biases <- self$biases - lr * bias_update
+                # --------- Apply Regularization to Bias Gradient (SL) ---------
+                if (!is.null(reg_type)) {
+                  if (reg_type == "L2") {
+                    reg_term <- self$lambda * self$biases
+                    bias_update <- lr * bias_update + reg_term
+                    
+                  } else if (reg_type == "L1") {
+                    reg_term <- self$lambda * sign(self$biases)
+                    bias_update <- lr * bias_update + reg_term
+                    
+                  } else if (reg_type == "L1_L2") {
+                    l1_ratio <- 0.5
+                    l1_grad <- l1_ratio * sign(self$biases)
+                    l2_grad <- (1 - l1_ratio) * self$biases
+                    reg_term <- self$lambda * (l1_grad + l2_grad)
+                    bias_update <- lr * bias_update + reg_term
+                    
+                  } else if (reg_type == "Group_Lasso") {
+                    norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE)) + 1e-8
+                    reg_term <- self$lambda * (self$biases / norm_bias)
+                    bias_update <- lr * bias_update + reg_term
+                    
+                  } else if (reg_type == "Max_Norm") {
+                    max_norm <- 1.0
+                    norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE))
+                    clipped_bias <- if (norm_bias > max_norm) {
+                      (self$biases / norm_bias) * max_norm
+                    } else {
+                      self$biases
+                    }
+                    reg_term <- self$lambda * (self$biases - clipped_bias)
+                    bias_update <- lr * bias_update + reg_term
+                    
+                  } else {
+                    cat("Warning: Unknown reg_type in SL bias update. No regularization applied.\n")
+                    bias_update <- lr * bias_update
+                  }
+                  
+                } else {
+                  # Default: No regularization
+                  bias_update <- lr * bias_update
+                }
+                
+                # --------- Apply Final Bias Update ---------
+                self$biases <- self$biases - bias_update
+                
+      
+      
+      
               }
             }
-      
-      
-      
-      
       
     }
     
@@ -5921,30 +6106,45 @@ prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
 
 # Loss Function: Computes the loss based on the type specified and includes regularization term
 loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
+  # Default reg_loss_total to 0 if NULL
+  if (is.null(reg_loss_total)) reg_loss_total <- 0
+  
   print(dim(predictions))
   print(dim(labels))
-  if (loss_type == "MSE") {
-    # Mean Squared Error
-    loss <- mean((predictions - labels)^2)
-  } else if (loss_type == "MAE") {
-    # Mean Absolute Error
-    loss <- mean(abs(predictions - labels))
-  } else if (loss_type == "CrossEntropy") {
-    # Cross-Entropy Loss (Binary Classification)
-    epsilon <- 1e-15  # Small value to avoid log(0)
-    predictions <- pmax(pmin(predictions, 1 - epsilon), epsilon)  # Clip predictions
-    loss <- -mean(labels * log(predictions) + (1 - labels) * log(1 - predictions))
-  } else if (loss_type == "CategoricalCrossEntropy") {
-    # Categorical Cross-Entropy Loss (Multi-Class Classification)
-    epsilon <- 1e-15  # Small value to avoid log(0)
-    predictions <- pmax(pmin(predictions, 1 - epsilon), epsilon)  # Clip predictions
-    loss <- -mean(rowSums(labels * log(predictions)))
-  } else {
-    stop("Invalid loss type. Choose from 'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'.")
+  
+  # Handle missing or NULL loss_type gracefully
+  if (is.null(loss_type)) {
+    print("Loss type is NULL. Please specify 'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'.")
+    return(NA)
   }
-  total_loss <- loss + reg_loss_total  # Add regularization term
+  
+  # Compute loss based on type
+  if (loss_type == "MSE") {
+    loss <- mean((predictions - labels)^2)
+    
+  } else if (loss_type == "MAE") {
+    loss <- mean(abs(predictions - labels))
+    
+  } else if (loss_type == "CrossEntropy") {
+    epsilon <- 1e-15
+    predictions <- pmax(pmin(predictions, 1 - epsilon), epsilon)
+    loss <- -mean(labels * log(predictions) + (1 - labels) * log(1 - predictions))
+    
+  } else if (loss_type == "CategoricalCrossEntropy") {
+    epsilon <- 1e-15
+    predictions <- pmax(pmin(predictions, 1 - epsilon), epsilon)
+    loss <- -mean(rowSums(labels * log(predictions)))
+    
+  } else {
+    print("Invalid loss type. Choose from 'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'.")
+    return(NA)
+  }
+  
+  total_loss <- loss + reg_loss_total
   return(total_loss)
 }
+
+
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 #        _     _      _     _      _     _      _     _      _     _      _     _      _     _ $$$$$$$$$$$$$$$$$$$$$$$
