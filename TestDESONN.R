@@ -102,7 +102,7 @@ loss_type <- NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntr
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.5, 0.4)
+dropout_rates <- list(0.1, 0.09)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates

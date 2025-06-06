@@ -823,6 +823,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       
       
       hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
+      hidden_outputs[[layer]] <- hidden_output
       
       if (is.list(self$dropout_rates_learn) &&
           length(self$dropout_rates_learn) >= layer &&
@@ -831,12 +832,15 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
           self$dropout_rates_learn[[layer]] < 1) {
         
         cat(sprintf("\n[Debug] Layer %d : Hidden output BEFORE dropout (sample):\n", layer))
-        print(head(hidden_outputs[[layer]], 3))
+        print(head(hidden_output, 3))
+        
+        hidden_output <- self$dropout(hidden_output, self$dropout_rates_learn[[layer]])
+        hidden_outputs[[layer]] <- hidden_output
         
         hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], self$dropout_rates_learn[[layer]])
         
         cat(sprintf("[Debug] Layer %d : Hidden output AFTER  dropout (sample):\n", layer))
-        print(head(hidden_outputs[[layer]], 3))
+        print(head(hidden_output, 3))
       }
       
       
