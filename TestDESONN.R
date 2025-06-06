@@ -77,33 +77,32 @@ beta_bn <- 1
 epsilon_bn <- 1e-12  # Increase for numerical stability
 momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
-beta1 <- 0.9  # Standard Adam value
-beta2 <- 0.999  # Slightly lower for better adaptabilit
+beta1 <- 0.97 # Standard Adam value
+beta2 <- 0.7 # Slightly lower for better adaptabilit
 lr <- 0.11
-lambda <- 0.008
-num_epochs <- 90
-custom_scale <- .1
+lambda <- 0.01
+num_epochs <- 88
+custom_scale <- .105
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
 
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 1, 12)
+hidden_sizes <- c(32, 8, 12)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu, bent_identity, relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(relu, bent_identity, bent_relu, sigmoid) #hidden layers + output layer
 
 
-
-activation_functions_learn <- list(relu, bent_identity, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
-epsilon <- 1e-12
+activation_functions_learn <- list(relu, bent_identity, bent_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+epsilon <- 1e-1
 loss_type <- "MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.5, 0.3)
+dropout_rates <- list(0.9, 0.6)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
@@ -118,9 +117,9 @@ num_networks <- 1  # Number of trees in the Random Forest
 # if (length(hidden_sizes) + 1 != length(activation_functions)) {
 #     stop("Length of hidden_sizes and activation_functions must be equal")
 # }
-if(!ML_NN){
+if(!ML_NN) {
      N <- input_size + output_size  # Multiplier for data generation (not directly applicable here)
-}else{
+} else {
      N <- input_size + sum(hidden_sizes) + output_size
 }
 # threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
@@ -186,6 +185,17 @@ y_train <- y[train_indices, ]
 
 X_validation <- X[validation_indices, ]
 y_validation <- y[validation_indices, ]
+
+X_test <- X[test_indices, ]
+y_test <- y[test_indices, ]
+
+# ===== APPLY LOG TRANSFORMATION =====
+# Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
+X_train$creatinine_phosphokinase <- pmin(X_train$creatinine_phosphokinase, 3000)
+X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
+X_test$creatinine_phosphokinase <- pmin(X_test$creatinine_phosphokinase, 3000)
+
+
 
 # $$$$$$$$$$$$$ Feature scaling without leakage (standardization first)
 X_train_scaled <- scale(X_train)
@@ -272,8 +282,8 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = "L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
-olr <- FALSE
+reg_type = "L1" #Max_Norm" #"Group_Lasso" #"L1_L2"
+
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
 loading_ensemble_1_run_ids <- FALSE

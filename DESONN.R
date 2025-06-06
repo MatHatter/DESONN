@@ -715,6 +715,28 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
   print("------------------------learn-begin-------------------------------------------------")
   start_time <- Sys.time()
   
+  if (!is.numeric(labels) || !is.matrix(labels) || ncol(labels) != 1) {
+    labels <- matrix(as.numeric(labels), ncol = 1)
+  }
+  
+  # ----- Class Weights Based on Label Frequency -----
+  num_pos <- sum(labels == 1)
+  num_neg <- sum(labels == 0)
+  total_samples <- num_pos + num_neg
+  
+  # Inverse frequency: weight more for minority class
+  # pos_weight <- total_samples / (2 * num_pos)
+  # neg_weight <- total_samples / (2 * num_neg)
+  
+  pos_weight <- 2
+  neg_weight <- 1
+  
+  
+  # Build sample weight vector
+  sample_weights <- ifelse(labels == 1, pos_weight, neg_weight)
+  sample_weights <- matrix(sample_weights, nrow = nrow(labels), ncol = 1)
+
+  
   self$dropout_rates_learn <- dropout_rates_learn
   
   if (!is.matrix(labels)) labels <- as.matrix(labels)
@@ -778,12 +800,12 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       
       # ----- Clipping Extreme Z Values (Activation-Aware) -----
       clip_limit <- switch(activation_name,
-                           "sigmoid" = 20,
+                           "sigmoid" = 50,
                            "tanh" = 10,
                            "softmax" = 15,
                            "relu" = 100,
                            "leaky_relu" = 100,
-                           50 # Default fallback
+                           300 # Default fallback
       )
       
       Z_max <- max(Z)
@@ -801,6 +823,26 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       
       
       hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
+      
+      if (is.list(self$dropout_rates_learn) &&
+          length(self$dropout_rates_learn) >= layer &&
+          !is.null(self$dropout_rates_learn[[layer]]) &&
+          self$dropout_rates_learn[[layer]] > 0 &&
+          self$dropout_rates_learn[[layer]] < 1) {
+        
+        cat(sprintf("\n[Debug] Layer %d : Hidden output BEFORE dropout (sample):\n", layer))
+        print(head(hidden_outputs[[layer]], 3))
+        
+        hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], self$dropout_rates_learn[[layer]])
+        
+        cat(sprintf("[Debug] Layer %d : Hidden output AFTER  dropout (sample):\n", layer))
+        print(head(hidden_outputs[[layer]], 3))
+      }
+      
+      
+ 
+      
+      
       cat(sprintf("[Debug] Layer %d : predicted_output_learn dim = %d x %d\n", layer, nrow(hidden_output), ncol(hidden_output)))
       
       if (activation_name != "none") {
@@ -821,7 +863,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     
     predicted_output_learn <- hidden_outputs[[self$num_layers]]
     predicted_output_learn_hidden <- hidden_outputs
-    error_learn <- predicted_output_learn - labels
+    error_learn <- (predicted_output_learn - labels) * sample_weights
     
     error_backprop <- error_learn
     for (layer in self$num_layers:1) {
@@ -858,6 +900,16 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       stop(sprintf("SL NN: invalid bias shape: length = %d", length(bias_vec)))
     }
     
+    # ----- Apply dropout using self$dropout for SL NN -----
+    if (!is.list(self$dropout_rates_learn)) {
+      self$dropout_rates_learn <- list(self$dropout_rates_learn)
+    }
+    rate <- self$dropout_rates_learn[[1]]
+    if (!is.null(rate) && rate > 0 && rate < 1) {
+      cat(sprintf("[Debug] SL NN : Applying dropout with rate = %.2f\n", rate))
+      Rdata <- self$dropout(Rdata, rate)
+    }
+    
     Z <- Rdata %*% weights_matrix + bias_matrix
     
     cat(sprintf("[Debug]: Z summary BEFORE clipping.\n"))
@@ -867,24 +919,24 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     
     
     if (is.function(activation_functions_learn)) {
-      activation_function <- activation_functions_learn
+        activation_function <- activation_functions_learn
     } else {
       if (!is.list(activation_functions_learn)) {
         activation_functions_learn <- list(activation_functions_learn)
       }
-      activation_function <- activation_functions_learn[[1]]
+        activation_function <- activation_functions_learn[[1]]
     }
     
     
     # ----- Clipping Extreme Z Values (Activation-Aware) for SL NN -----
     activation_name <- attr(activation_function, "name")
     clip_limit <- switch(activation_name,
-                         "sigmoid" = 20,
+                         "sigmoid" = 50,
                          "tanh" = 10,
                          "softmax" = 15,
                          "relu" = 100,
                          "leaky_relu" = 100,
-                         50 # Default fallback
+                         300 # Default fallback
     )
     
     Z_max <- max(Z)
@@ -903,7 +955,8 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     
     
     predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
-    error_learn <- predicted_output_learn - labels
+    error_learn <- (predicted_output_learn - labels) * sample_weights
+    
     dim_hidden_layers_learn[[1]] <- dim(predicted_output_learn)
     
     activation_deriv <- if (!is.null(activation_function)) {
@@ -926,352 +979,47 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
 
 
 ,# Method to perform prediction
-predict = function(Rdata, labels, activation_functions) {
-    print("------------------------predict-begin-------------------------------------------------")
-    start_time <- Sys.time()
+predict = function(Rdata, weights, biases, activation_functions) {
+  # Ensure weights, biases, activation_functions are lists
+  if (!is.list(weights)) weights <- list(weights)
+  if (!is.list(biases)) biases <- list(biases)
+  if (!is.list(activation_functions)) activation_functions <- list(activation_functions)
+  
+  start_time <- Sys.time()
+  
+  output <- as.matrix(Rdata)
+  num_layers <- length(weights)
+  
+  for (layer in seq_len(num_layers)) {
+    w <- as.matrix(weights[[layer]])
+    b <- as.numeric(unlist(biases[[layer]]))
     
-    if (!is.list(activation_functions)) activation_functions <- list(activation_functions)
-    
-
-    # Retrieve activation function for layer 1
-    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
-      activation_function <- activation_functions[[1]]
+    # Create bias matrix with broadcasting
+    n_samples <- nrow(output)
+    n_units <- ncol(w)
+    if (length(b) == 1) {
+      bias_mat <- matrix(b, nrow = n_samples, ncol = n_units, byrow = TRUE)
+    } else if (length(b) == n_units) {
+      bias_mat <- matrix(b, nrow = n_samples, ncol = n_units, byrow = TRUE)
     } else {
-      activation_function <- NULL
+      bias_mat <- matrix(rep(b, length.out = n_units), nrow = n_samples,
+                         ncol = n_units, byrow = TRUE)
     }
     
+    # Linear transformation
+    output <- output %*% w + bias_mat
     
-    # Debugging: Log dimensions of Rdata, weights, and biases
-    cat("Rdata dimensions: ", dim(Rdata), "\n")
-    cat("Weights dimensions: ", dim(as.matrix(self$weights)), "\n")
-    cat("Biases dimensions: ", length(self$biases[[1]]), "\n")
-    
-    # -------- Bias broadcasting for layer 1 --------
-    weights_matrix <- if (self$ML_NN) as.matrix(self$weights[[1]]) else as.matrix(self$weights)
-    bias_vec <- if (self$ML_NN) self$biases[[1]] else self$biases
-    
-    if (is.list(bias_vec)) bias_vec <- unlist(bias_vec)
-    bias_vec <- as.numeric(bias_vec)
-    
-    input_rows <- nrow(Rdata)
-    output_cols <- ncol(weights_matrix)
-    
-    if (length(bias_vec) == 1) {
-      biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else if (length(bias_vec) == output_cols) {
-      biases <- matrix(bias_vec, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else if (length(bias_vec) < output_cols) {
-      biases <- matrix(rep(bias_vec, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-    } else {
-      biases <- matrix(bias_vec[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+    # Apply activation if provided
+    if (length(activation_functions) >= layer &&
+        is.function(activation_functions[[layer]])) {
+      output <- activation_functions[[layer]](output)
     }
-    
-    Z <- as.matrix(Rdata) %*% weights_matrix + biases
-    
-    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
-      predicted_output_predict <- activation_functions[[1]](Z)
-    } else {
-      predicted_output_predict <- Z
-    }
-    
-    
-    #Print to console
-    if (!is.null(activation_functions[[1]]) && is.function(activation_functions[[1]])) {
-      activation_function <- activation_functions[[1]]
-      
-      cat("Layer 1 activation function:", attr(activation_function, "name"),
-          "| Z range before:", range(Z), "\n")
-      
-      predicted_output_predict <- activation_function(Z)
-      
-      cat("Layer 1 activation applied:", attr(activation_function, "name"),
-          "| Z range after:", range(predicted_output_predict), "\n")
-      
-    } else {
-      cat("Layer 1 has no valid activation function. Skipping activation.",
-          "| Z range:", range(Z), "\n")
-      predicted_output_predict <- Z
-    }
-    
-    
-    # ------------------------ Multi-layer Forward Pass ------------------------
-    if (self$ML_NN) {
-      hidden_outputs <- vector("list", self$num_layers)
-      hidden_outputs[[1]] <- predicted_output_predict
-      predicted_output_predict_hidden <- vector("list", self$num_layers)
-      predicted_output_predict_hidden[[1]] <- predicted_output_predict
-      dim_hidden_layers_predicted <- vector("list", self$num_layers)
-      dim_hidden_layers_predicted[[1]] <- dim(predicted_output_predict)
-      
-      for (layer in 2:self$num_layers) {
-        cat("\n---------- FORWARD PASS: LAYER", layer, "----------\n")
-        
-        cat("Input to layer", layer, "from hidden_outputs[[", layer - 1, "]] dim:", paste(dim(hidden_outputs[[layer - 1]]), collapse = " x "), "\n")
-        
-        
-        if (is.list(activation_functions) && length(activation_functions) >= layer && is.function(activation_functions[[layer]])) {
-          activation_function <- activation_functions[[layer]]
-        } else {
-          activation_function <- NULL
-        }
-        
-        
-        input <- as.matrix(hidden_outputs[[layer - 1]])
-        cat("DEBUG: Input dim before fix:", paste(dim(input), collapse = " x "), "\n")
-        
-        if (nrow(input) == 1 && nrow(Rdata) > 1) {
-          cat("WARNING: Expanding single-row input to match", nrow(Rdata), "rows\n")
-          input <- matrix(rep(input, each = nrow(Rdata)), nrow = nrow(Rdata), byrow = TRUE)
-        }
-        cat("DEBUG: Input dim after fix:", paste(dim(input), collapse = " x "), "\n")
-        
-        weights <- self$weights[[layer]]
-        weights_rows <- if (!is.null(dim(weights))) nrow(weights) else length(weights)
-        weights_cols <- if (!is.null(dim(weights))) ncol(weights) else 1
-        cat("Weights dim:", weights_rows, "x", weights_cols, "\n")
-        
-        bias_vec <- self$biases[[layer]]
-        if (is.list(bias_vec)) bias_vec <- unlist(bias_vec)
-        bias_vec <- as.numeric(bias_vec)
-        input_rows <- nrow(input)
-        input_cols <- ncol(input)
-        
-        num_neurons <- if (input_cols == weights_rows) weights_cols else weights_rows
-        
-        if (length(bias_vec) == 1) {
-          biases <- matrix(bias_vec, nrow = input_rows, ncol = num_neurons, byrow = TRUE)
-        } else if (length(bias_vec) == num_neurons) {
-          biases <- matrix(bias_vec, nrow = input_rows, ncol = num_neurons, byrow = TRUE)
-        } else if (length(bias_vec) < num_neurons) {
-          biases <- matrix(rep(bias_vec, length.out = num_neurons), nrow = input_rows, ncol = num_neurons, byrow = TRUE)
-        } else {
-          biases <- matrix(bias_vec[1:num_neurons], nrow = input_rows, ncol = num_neurons, byrow = TRUE)
-        }
-        
-        if (input_cols == weights_rows) {
-          Z <- input %*% weights + biases
-        } else if (input_cols == weights_cols) {
-          Z <- input %*% t(weights) + biases
-        } else {
-          stop(paste("Incompatible dimensions at layer", layer,
-                     "| input_cols =", input_cols,
-                     "| weights_rows =", weights_rows,
-                     "| weights_cols =", weights_cols))
-        }
-        
-        Z <- as.matrix(Z)
-        
-        cat(sprintf("[Debug] Layer %d : Z summary BEFORE clipping:\n", layer))
-        print(summary(as.vector(Z)))
-        
-        activation_name <- if (!is.null(activation_function)) attr(activation_function, "name") else "none"
-        cat(sprintf("[Debug] Layer %d : Activation Function = %s\n", layer, activation_name))
-        
-        # ----- Clipping Extreme Z Values (Activation-Aware) -----
-        clip_limit <- switch(activation_name,
-                             "sigmoid" = 20,
-                             "tanh" = 10,
-                             "softmax" = 15,
-                             "relu" = 100,
-                             "leaky_relu" = 100,
-                             50 # Default fallback
-        )
-        
-        Z_max <- max(Z)
-        Z_min <- min(Z)
-        if (Z_max > clip_limit || Z_min < -clip_limit) {
-          cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f] | Clip limit: ±%g\n", layer, Z_min, Z_max, clip_limit))
-        }
-        Z <- pmin(pmax(Z, -clip_limit), clip_limit)
-        
-        Z <- Z / 4
-        
-        
-        cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
-        print(summary(as.vector(Z)))
-        
-        
-        # --- Dynamic scaling of Z to control activation magnitude ---
-        # Z_mean_abs <- mean(abs(Z))
-        # if (Z_mean_abs > 20) {
-        #   scale_factor <- 20 / Z_mean_abs
-        #   Z <- Z * scale_factor
-        # } else if (Z_mean_abs < 1) {
-        #   scale_factor <- 1 / Z_mean_abs
-        #   Z <- Z * scale_factor
-        # }
-        
-        
-        # Prevent 1x1 collapse
-        if (nrow(Z) == 1 && nrow(Rdata) > 1) {
-          cat("WARNING: Z became 1-row. Expanding to", nrow(Rdata), "rows for layer", layer, "\n")
-          Z <- matrix(rep(Z, each = nrow(Rdata)), nrow = nrow(Rdata), byrow = TRUE)
-        }
-        
-        if (!is.null(activation_function)) {
-          cat("Activation function:", attr(activation_function, "name"),
-              "| Z range before activation:", paste(range(Z), collapse = " to "), "\n")
-          Z <- activation_function(Z)
-          Z <- as.matrix(Z)  # Ensure it's a matrix
-          cat("Z range after activation:", paste(range(Z), collapse = " to "), "\n")
-        } else {
-          cat("No activation function specified. Skipping activation.\n")
-        }
-        
-        if (nrow(Z) == 1 && nrow(Rdata) > 1) {
-          cat("WARNING: Activated output became 1-row. Expanding to", nrow(Rdata), "rows for layer", layer, "\n")
-          Z <- matrix(rep(Z, each = nrow(Rdata)), nrow = nrow(Rdata), byrow = TRUE)
-        }
-        
-        if (layer == self$num_layers) {
-          cat("Final layer reached. Output dim:", paste(dim(Z), collapse = " x "), "\n")
-        } else {
-          cat("Layer", layer, "output dim (after activation):", paste(dim(Z), collapse = " x "), "\n")
-        }
-        
-        hidden_outputs[[layer]] <- Z
-        predicted_output_predict_hidden[[layer]] <- hidden_outputs[[layer]]
-        dim_hidden_layers_predicted[[layer]] <- dim(Z)
-      }
-      
-      cat("\n---------- DEBUG: POST FORWARD PASS ----------\n")
-      cat("self$num_layers:", self$num_layers, "\n")
-      cat("Final layer output type:", typeof(hidden_outputs[[self$num_layers]]), "\n")
-      cat("Final layer output dim:", paste(dim(hidden_outputs[[self$num_layers]]), collapse = " x "), "\n")
-      cat("Final layer first 5 rows:\n")
-      print(head(hidden_outputs[[self$num_layers]], 5))
-    }
-    
-    
-    
-    else {
-      dim_hidden_layers_predicted <- NULL
-      predicted_output_predict_hidden <- NULL
-    }
-    cat("---------- DEBUG: POST FORWARD PASS ----------\n")
-    cat("self$num_layers:", self$num_layers, "\n")
-    
-    final_layer_output <- predicted_output_predict_hidden[[self$num_layers]]
-    cat("Final layer output type:", class(final_layer_output), "\n")
-    cat("Final layer output dim:", ifelse(is.null(dim(final_layer_output)), "NULL", paste(dim(final_layer_output), collapse = " x ")), "\n")
-    
-    # Show first few values
-    if (is.matrix(final_layer_output) || is.data.frame(final_layer_output)) {
-      cat("Final layer first 5 rows:\n")
-      print(head(final_layer_output, 5))
-    } else {
-      cat("Final layer output (vector):\n")
-      print(head(final_layer_output, 5))
-    }
-    
-
-            end_time <- Sys.time()
-
-
-            if (self$ML_NN) {
-              for (layer in 2:self$num_layers) {
-                current_output <- predicted_output_predict_hidden[[layer]]
-                previous_output <- predicted_output_predict_hidden[[layer - 1]]
-                
-                # Align previous_output to match current_output
-                if (ncol(previous_output) != ncol(current_output)) {
-                  previous_output <- if (ncol(previous_output) < ncol(current_output)) {
-                    matrix(
-                      rep(previous_output, each = ceiling(ncol(current_output) / ncol(previous_output))),
-                      nrow = nrow(previous_output),
-                      ncol = ncol(current_output)
-                    )
-                  } else {
-                    previous_output[, 1:ncol(current_output), drop = FALSE]
-                  }
-                }
-                
-                if (nrow(previous_output) != nrow(current_output)) {
-                  previous_output <- if (nrow(previous_output) < nrow(current_output)) {
-                    matrix(
-                      rep(previous_output, length.out = nrow(current_output) * ncol(previous_output)),
-                      nrow = nrow(current_output),
-                      ncol = ncol(previous_output)
-                    )
-                  } else {
-                    previous_output[1:nrow(current_output), , drop = FALSE]
-                  }
-                }
-                
-                if (layer != self$num_layers) {
-                  # Hidden layer comparison
-                  error_prediction <- previous_output - current_output
-                } else {
-                  # Final layer comparison against labels
-                  final_output <- current_output
-                  
-                  if (ncol(final_output) != ncol(labels)) {
-                    final_output <- if (ncol(labels) < ncol(final_output)) {
-                      final_output[, 1:ncol(labels), drop = FALSE]
-                    } else {
-                      matrix(
-                        rep(final_output, each = ceiling(ncol(labels) / ncol(final_output))),
-                        nrow = nrow(final_output),
-                        ncol = ncol(labels)
-                      )
-                    }
-                  }
-                  
-                  if (nrow(final_output) != nrow(labels)) {
-                    final_output <- if (nrow(labels) < nrow(final_output)) {
-                      final_output[1:nrow(labels), , drop = FALSE]
-                    } else {
-                      matrix(
-                        rep(final_output, length.out = nrow(labels) * ncol(final_output)),
-                        nrow = nrow(labels),
-                        ncol = ncol(final_output)
-                      )
-                    }
-                  }
-                  
-                  error_prediction <- final_output - labels
-                }
-              }
-            }
-            else{
-              # Align predicted_output_predict to match labels
-              if (ncol(predicted_output_predict) != ncol(labels)) {
-                if (ncol(predicted_output_predict) < ncol(labels)) {
-                  # Expand columns
-                  rep_factor <- ceiling((nrow(labels) * ncol(labels)) / length(predicted_output_predict))
-                  expanded <- rep(predicted_output_predict, rep_factor)
-                  predicted_output_matrix <- matrix(expanded[1:(nrow(labels) * ncol(labels))],
-                                                    nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
-                } else {
-                  # Truncate columns
-                  predicted_output_matrix <- matrix(predicted_output_predict[, 1:ncol(labels)],
-                                                    nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
-                }
-              } else {
-                predicted_output_matrix <- predicted_output_predict
-              }
-              
-              # Compute prediction error
-              error_prediction <- predicted_output_matrix - labels
-              predicted_output_predict <- predicted_output_matrix
-            }
-            
-            if (self$ML_NN) {
-              predicted_output_predict <- predicted_output_predict_hidden[[self$num_layers]]
-            } else {
-              predicted_output_predict <- predicted_output_predict_hidden
-            }
-            
-            
-
-            # Calculate the prediction time
-            prediction_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
-
-
-            print("------------------------predict-end-------------------------------------------------")
-
-            return(list(predicted_output = predicted_output_predict, prediction_time = prediction_time, error = error_prediction, dim_hidden_layers = dim_hidden_layers_predicted, hidden_outputs = predicted_output_predict_hidden))
-
+  }
+  
+  end_time <- Sys.time()
+  prediction_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
+  
+  return(list(predicted_output = output, prediction_time = prediction_time))
 },# Method for training the SONN with L2 regularization
 train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type) {
   
@@ -2806,7 +2554,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   # biases_record <- lapply(biases_record, as.matrix)
   
   
-  predicted_output_train_reg <- self$predict(Rdata, labels, activation_functions)
+  predicted_output_train_reg <- self$predict(Rdata, weights = weights_record, biases = biases_record, activation_functions)
   
   if (self$ML_NN) {
     for (layer in 1:self$num_layers) {
@@ -3153,7 +2901,7 @@ normalize_data = function(Rdata, numeric_columns) {
     
     ,
     # Function to perform batch normalization on specific columns in the data
-batch_normalize_data = function(Rdata, numeric_columns, gamma_bn, beta_bn, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE) {
+batch_normalize_data = function(Rdata, numeric_columns, gamma_bn, beta_bn, epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn) {
       
       if (is_training_bn) {
         # Training mode: Compute mean and variance from the current batch
@@ -3376,28 +3124,51 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             
             probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
             # binary_preds <- probs
-            binary_preds <- ifelse(probs >= 0.5, 1, 0)
-              
-
-            # Flatten actual labels
+            # binary_preds <- ifelse(probs >= 0.5, 1, 0)
+            # binary_preds <- ifelse(probs >= 0.1, 1, 0)
+            
+            
+            # === Auto-tune threshold based on F1 ===
+            threshold_result <- tune_threshold(probs, labels)
+            best_threshold <- threshold_result$best_threshold
+            print(paste("Best F1 threshold:", best_threshold))
+            
+            # === Binary prediction using best threshold ===
+            predict_with_threshold <- function(probs, threshold) {
+              ifelse(probs >= threshold, 1, 0)
+            }
+            
+            binary_preds <- predict_with_threshold(probs, best_threshold)
+            
+            # === Accuracy Evaluation ===
             labels_flat <- as.vector(labels)
-            # print(head(binary_preds, 40))
-            # Calculate accuracy
             accuracy <- calculate_accuracy(binary_preds, labels_flat)
             print(paste("Accuracy:", accuracy))
             
+            # === Precision / Recall / F1 ===
+            metrics <- evaluate_classification_metrics(binary_preds, labels_flat)
+            print(metrics)
             
-            # Combine Rdata, labels, and predictions for export
+            # === Identify Misclassified Samples ===
+            wrong <- which(binary_preds != labels_flat)
+            
+            misclassified <- data.frame(
+              predicted_prob = probs[wrong],
+              predicted_label = binary_preds[wrong],
+              actual_label = labels_flat[wrong],
+              X_validation[wrong, ]
+            )
+            
+            # === Combine Full Rdata, Labels, Predictions ===
             Rdata_df <- as.data.frame(Rdata)
             Rdata_with_labels <- cbind(Rdata_df, Label = labels_flat)
-            Rdata_predictions <<- Rdata_with_labels %>%
+            Rdata_predictions <- Rdata_with_labels %>%
               mutate(Predictions = binary_preds)
-            stop()
-            # Export to Excel
-            write_xlsx(Rdata_predictions, "Rdata_predictions.xlsx")
             
-            
+            # === Export to Excel ===
             library(writexl)
+            write_xlsx(Rdata_predictions, "Rdata_predictions.xlsx")
+            write_xlsx(misclassified, "misclassified_cases.xlsx")
             
             # Specify the path
             file_path <- "C:/Users/wfky1/OneDrive/Documents/R/DESONN/Rdata_predictions.xlsx"
@@ -5140,6 +4911,21 @@ softmax_derivative <- function(x) {
   return(s * (1 - s))  # Only valid when loss is MSE, not cross-entropy
 }
 
+bent_relu_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  base_deriv <- (x / (2 * sqrt(x^2 + 1))) + 1
+  return(ifelse(x > 0, base_deriv, 0))
+}
+
+bent_sigmoid_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  bent_part <- ((sqrt(x^2 + 1) - 1) / 2 + x)
+  sigmoid_out <- 1 / (1 + exp(-bent_part))
+  dbent_dx <- (x / (2 * sqrt(x^2 + 1))) + 1
+  out <- sigmoid_out * (1 - sigmoid_out) * dbent_dx
+  dim(out) <- dim(x)
+  return(out)
+}
 
 
 ###################################################################################################################################################################
@@ -5266,6 +5052,62 @@ maxout <- function(x, w1 = 0.5, b1 = 1.0, w2 = -0.5, b2 = 0.5) {
   return(pmax(w1 * x + b1, w2 * x + b2))
 }
 attr(maxout, "name") <- "maxout"
+
+bent_relu <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  out <- pmax(0, ((sqrt(x^2 + 1) - 1) / 2 + x))
+  dim(out) <- dim(x)
+  return(out)
+}
+attr(bent_relu, "name") <- "bent_relu"
+
+bent_sigmoid <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  bent_part <- ((sqrt(x^2 + 1) - 1) / 2 + x)
+  return(1 / (1 + exp(-bent_part)))
+}
+attr(bent_sigmoid, "name") <- "bent_sigmoid"
+
+
+tune_threshold <- function(predicted_output, labels) {
+  thresholds <- seq(0.05, 0.95, by = 0.01)
+  
+  f1_scores <- sapply(thresholds, function(t) {
+    preds <- ifelse(predicted_output >= t, 1, 0)
+    TP <- sum(preds == 1 & labels == 1)
+    FP <- sum(preds == 1 & labels == 0)
+    FN <- sum(preds == 0 & labels == 1)
+    precision <- TP / (TP + FP + 1e-8)
+    recall <- TP / (TP + FN + 1e-8)
+    f1 <- 2 * precision * recall / (precision + recall + 1e-8)
+    return(f1)
+  })
+  
+  best_threshold <- thresholds[which.max(f1_scores)]
+  binary_preds <- ifelse(predicted_output >= best_threshold, 1, 0)
+  
+  return(list(
+    best_threshold = best_threshold,
+    binary_preds = binary_preds,
+    f1_scores = f1_scores
+  ))
+}
+
+evaluate_classification_metrics <- function(preds, labels) {
+  labels <- as.vector(labels)
+  preds <- as.vector(preds)
+  
+  TP <- sum(preds == 1 & labels == 1)
+  FP <- sum(preds == 1 & labels == 0)
+  FN <- sum(preds == 0 & labels == 1)
+  
+  precision <- TP / (TP + FP + 1e-8)
+  recall <- TP / (TP + FN + 1e-8)
+  F1 <- 2 * precision * recall / (precision + recall + 1e-8)
+  
+  return(list(precision = precision, recall = recall, F1 = F1))
+}
+
 
 
 
