@@ -24,6 +24,7 @@ library(tidyr)
 library(purrr)
 library(pracma)
 library(randomForest)
+library(openxlsx)
 }
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -711,7 +712,7 @@ print(str(errors[[self$num_layers]]))
 
 },
 # Method to perform learning
-learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn) {
+learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn, sample_weights) {
   print("------------------------learn-begin-------------------------------------------------")
   start_time <- Sys.time()
   
@@ -727,15 +728,17 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
   # Inverse frequency: weight more for minority class
   # pos_weight <- total_samples / (2 * num_pos)
   # neg_weight <- total_samples / (2 * num_neg)
-  
+
   pos_weight <- 2
   neg_weight <- 1
   
   
-  # Build sample weight vector
-  sample_weights <- ifelse(labels == 1, pos_weight, neg_weight)
+  # If custom sample_weights provided, use it; otherwise use class-based weights
+  if (is.null(sample_weights)) {
+    sample_weights <- ifelse(labels == 1, pos_weight, neg_weight)
+  }
   sample_weights <- matrix(sample_weights, nrow = nrow(labels), ncol = 1)
-
+  
   
   self$dropout_rates_learn <- dropout_rates_learn
   
@@ -805,7 +808,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
                            "softmax" = 15,
                            "relu" = 100,
                            "leaky_relu" = 100,
-                           300 # Default fallback
+                           100 # Default fallback
       )
       
       Z_max <- max(Z)
@@ -815,7 +818,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       Z <- pmin(pmax(Z, -clip_limit), clip_limit)
       
-      Z <- Z / 4
+      Z <- Z / 4.0
       
       
       cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
@@ -940,7 +943,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
                          "softmax" = 15,
                          "relu" = 100,
                          "leaky_relu" = 100,
-                         300 # Default fallback
+                         100 # Default fallback
     )
     
     Z_max <- max(Z)
@@ -950,7 +953,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     }
     Z <- pmin(pmax(Z, -clip_limit), clip_limit)
     
-    Z <- Z / 4
+    Z <- Z / 4.0
     
     
     cat("[Debug] SL NN : Z summary AFTER clipping:\n")
@@ -1025,7 +1028,7 @@ predict = function(Rdata, weights, biases, activation_functions) {
   
   return(list(predicted_output = output, prediction_time = prediction_time))
 },# Method for training the SONN with L2 regularization
-train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type) {
+train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights) {
   
   # Initialize learning rate scheduler
   # lr_scheduler <- function(epoch, initial_lr = lr) {
@@ -1065,6 +1068,8 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   optimizer_params_weights <- vector("list", self$num_layers)
   optimizer_params_biases <- vector("list", self$num_layers)
   
+
+  
   for (epoch in 1:epoch_in_list) {
     # lr <- lr_scheduler(epoch, initial_lr = 0.01, decay_rate = 0.15, decay_epoch = 10)
 
@@ -1079,13 +1084,18 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     # Run forward pass using centralized logic
     # start_time <- Sys.time()
     
+
+    
+    
     learn_result <- self$learn(
       Rdata = Rdata,
       labels = labels,
       lr = lr,
       activation_functions_learn = activation_functions_learn,
-      dropout_rates_learn = dropout_rates_learn
+      dropout_rates_learn = dropout_rates_learn,
+      sample_weights = sample_weights
     )
+    
     
     
     predicted_output_train_reg <- learn_result
@@ -1161,14 +1171,15 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             )
             
           } else if (reg_type == "Group_Lasso") {
-            if (is.null(self$groups[[layer]])) {
+            if (is.null(self$groups) || is.null(self$groups[[layer]])) {
+              self$groups <- if (is.null(self$groups)) vector("list", self$num_layers) else self$groups
               self$groups[[layer]] <- list(1:ncol(weights_layer))
             }
             reg_loss <- self$lambda * sum(sapply(self$groups[[layer]], function(group) {
               sqrt(sum(weights_layer[, group]^2, na.rm = TRUE))
             }))
-            
-          } else if (reg_type == "Max_Norm") {
+          }
+          else if (reg_type == "Max_Norm") {
             max_norm <- 1.0
             norm_weight <- sqrt(sum(weights_layer^2, na.rm = TRUE))
             reg_loss <- self$lambda * ifelse(norm_weight > max_norm, 1, 0)
@@ -1210,14 +1221,17 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
           )
           
         } else if (reg_type == "Group_Lasso") {
+          weights_layer <- self$weights
+          
           if (is.null(self$groups)) {
-            self$groups <- list(1:ncol(weights_layer))
+            self$groups <- list(1:ncol(weights_layer))  # Treat entire layer as one group
           }
+          
           reg_loss_total <- self$lambda * sum(sapply(self$groups, function(group) {
             sqrt(sum(weights_layer[, group]^2, na.rm = TRUE))
           }))
-          
-        } else if (reg_type == "Max_Norm") {
+        }
+        else if (reg_type == "Max_Norm") {
           max_norm <- 1.0
           norm_weight <- sqrt(sum(weights_layer^2, na.rm = TRUE))
           reg_loss_total <- self$lambda * ifelse(norm_weight > max_norm, 1, 0)
@@ -1241,7 +1255,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     # Record the loss for this epoch
     # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
     predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$predicted_output
-    
+   
     # Ensure predictions match label dimensions before loss calculation
     if (!all(dim(predictions) == dim(labels))) {
       predictions <- matrix(rep(predictions, length.out = length(labels)),
@@ -1254,7 +1268,6 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       reg_loss_total = reg_loss_total,
       loss_type = loss_type
     )
-    
     
     
     
@@ -1310,16 +1323,21 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                 weight_update <- lr * grads_matrix + self$lambda * (l1_grad + l2_grad)
                 
               } else if (reg_type == "Group_Lasso") {
-                if (is.null(self$groups)) self$groups <- list(1:ncol(self$weights[[layer]]))  # treat all columns as one group
+                if (is.null(self$groups) || is.null(self$groups[[layer]])) {
+                  self$groups[[layer]] <- list(1:ncol(self$weights[[layer]]))  # Default: entire layer as one group
+                }
+                
                 group_lasso_grad <- matrix(0, nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]))
-                for (group in self$groups) {
+                
+                for (group in self$groups[[layer]]) {
                   group_weights <- self$weights[[layer]][, group, drop = FALSE]
                   norm_group <- sqrt(sum(group_weights^2, na.rm = TRUE)) + 1e-8
                   group_lasso_grad[, group] <- group_weights / norm_group
                 }
-                weight_update <- lr * grads_matrix + self$lambda * group_lasso_grad
                 
-              } else if (reg_type == "Max_Norm") {
+                weight_update <- lr * grads_matrix + self$lambda * group_lasso_grad
+              }
+              else if (reg_type == "Max_Norm") {
                 max_norm <- 1.0
                 weight_norms <- sqrt(colSums(self$weights[[layer]]^2, na.rm = TRUE))
                 clipped_weights <- self$weights[[layer]]
@@ -2053,6 +2071,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       weights_record <- as.matrix(self$weights)
     }
     
+
     # Update biases
     if (update_biases) {
       if (self$ML_NN) {
@@ -2111,8 +2130,8 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
                 norm_bias <- sqrt(sum(self$biases[[layer]]^2, na.rm = TRUE)) + 1e-8
                 reg_term <- self$lambda * (self$biases[[layer]] / norm_bias)
                 bias_update <- lr * grads_matrix + reg_term
-                
-              } else if (reg_type == "Max_Norm") {
+              }
+                else if (reg_type == "Max_Norm") {
                 max_norm <- 1.0
                 norm_bias <- sqrt(sum(self$biases[[layer]]^2, na.rm = TRUE))
                 clipped_bias <- if (norm_bias > max_norm) {
@@ -2737,13 +2756,51 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       biases_record <- as.matrix(self$biases)
     }
     
+    # assign("final_weights_record", weights_record, envir = .GlobalEnv)
+    # assign("final_biases_record", biases_record, envir = .GlobalEnv)
+
     
-  }                # Convert weights_record and biases_record to matrices if necessary
+    predicted_output_train_reg <- self$predict(Rdata, weights = final_weights_record, biases = final_biases_record, activation_functions)
+    probs_train <- predicted_output_train_reg$predicted_output
+    # 🔒 Debug: Check predicted_output
+    cat("Debug: length(probs_train) =", length(probs_train), "\n")
+    if (length(probs_train) == 0) {
+      stop("learn_result$predicted_output is empty — check your learn() output")
+    }
+    
+    # 🔒 Debug: Check labels alignment
+    cat("Debug: length(labels) =", length(labels), "\n")
+    if (length(probs_train) != length(labels)) {
+      stop(paste("Length mismatch: probs =", length(probs_train), ", labels =", length(labels)))
+    }
+    
+    # Binary thresholding
+    binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
+    
+    # Calculate training accuracy
+    train_accuracy <- mean(binary_preds_train == labels, na.rm = TRUE)
+    
+    # Initialize accuracy log if not already
+    if (!exists("train_accuracy_log")) train_accuracy_log <- c()
+    train_accuracy_log <- c(train_accuracy_log, train_accuracy)
+    
+    # Track best training accuracy
+    if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
+      best_train_acc <- train_accuracy
+      best_epoch <- epoch
+    }
+    
+    
+  }                
+  cat("✅ Best Epoch (training accuracy):", best_epoch, "\n")
+  cat("📈 Best Training Accuracy:", round(100 * best_train_acc, 2), "%\n")
+  
+  # Convert weights_record and biases_record to matrices if necessary
   # weights_record <- lapply(weights_record, as.matrix)
   # biases_record <- lapply(biases_record, as.matrix)
   
   
-  predicted_output_train_reg <- self$predict(Rdata, weights = weights_record, biases = biases_record, activation_functions)
+  predicted_output_train_reg <- self$predict(Rdata, weights = final_weights_record, biases = final_biases_record, activation_functions)
   
   if (self$ML_NN) {
     for (layer in 1:self$num_layers) {
@@ -3160,7 +3217,7 @@ calculate_batch_size = function(data_size, max_batch_size = 512, min_batch_size 
     },
     
     
-train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type) {
+train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3270,7 +3327,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             predicted_outputAndTime <- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights
               ))) #<<-
 
             # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
@@ -3318,9 +3375,11 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             
             
             # === Auto-tune threshold based on F1 ===
-            threshold_result <- tune_threshold(probs, labels)
+            # threshold_result <- tune_threshold(probs, labels)
+            threshold_result <- tune_threshold_accuracy(probs, labels)
             best_threshold <- threshold_result$best_threshold
-            print(paste("Best F1 threshold:", best_threshold))
+            # print(paste("Best F1 threshold:", best_threshold))
+            print(paste("Best threshold (accuracy-optimized):", best_threshold))
             
             # === Binary prediction using best threshold ===
             predict_with_threshold <- function(probs, threshold) {
@@ -3334,362 +3393,517 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             accuracy <- calculate_accuracy(binary_preds, labels_flat)
             print(paste("Accuracy:", accuracy))
             
+            
+            
             # === Precision / Recall / F1 ===
             metrics <- evaluate_classification_metrics(binary_preds, labels_flat)
             print(metrics)
             
+            # === Accuracy & Confusion Matrix ===
+            TP <- sum(binary_preds == 1 & labels_flat == 1)
+            TN <- sum(binary_preds == 0 & labels_flat == 0)
+            FP <- sum(binary_preds == 1 & labels_flat == 0)
+            FN <- sum(binary_preds == 0 & labels_flat == 1)
+            accuracy <- (TP + TN) / length(labels_flat)
+            
             # === Identify Misclassified Samples ===
             wrong <- which(binary_preds != labels_flat)
             
-            misclassified <- data.frame(
+            misclassified <- cbind(
               predicted_prob = probs[wrong],
               predicted_label = binary_preds[wrong],
               actual_label = labels_flat[wrong],
-              X_validation[wrong, ]
+              as.data.frame(Rdata)[wrong, , drop = FALSE]
             )
+            
             
             # === Combine Full Rdata, Labels, Predictions ===
             Rdata_df <- as.data.frame(Rdata)
             Rdata_with_labels <- cbind(Rdata_df, Label = labels_flat)
             Rdata_predictions <- Rdata_with_labels %>%
-              mutate(Predictions = binary_preds)
+              mutate(
+                Predictions = binary_preds,
+                Predicted_Prob = as.vector(probs)
+              )
             
-            # === Export to Excel ===
-            library(writexl)
-            write_xlsx(Rdata_predictions, "Rdata_predictions.xlsx")
-            write_xlsx(misclassified, "misclassified_cases.xlsx")
-            
-            # Specify the path
-            file_path <- "C:/Users/wfky1/OneDrive/Documents/R/DESONN/Rdata_predictions.xlsx"
 
-            # Write the data to the specified folder
-            write_xlsx(Rdata_predictions, file_path)
-            stop()
-            if(ML_NN){
-              
-              # Step 1: Extract predicted output
-              predicted_output_raw <- predicted_outputAndTime$predicted_output_l2$predicted_output
-              cat("Type of predicted_output:", typeof(predicted_output_raw), "\n")
-              cat("Is list of layers?", is.list(predicted_output_raw), "\n")
-              
-              # Step 2: Normalize predicted output to list format
-              if (!is.list(predicted_output_raw)) {
-                all_layer_outputs <- list(predicted_output_raw)
-              } else {
-                all_layer_outputs <- predicted_output_raw
-              }
-              
-              # Step 3: Extract dim_hidden_sizes
-              dim_hidden_sizes <- predicted_outputAndTime$dim_hidden_layers
-              if (is.null(dim_hidden_sizes) || length(dim_hidden_sizes) == 0 || all(sapply(dim_hidden_sizes, is.null))) {
-                dim_hidden_sizes <- lapply(predicted_outputAndTime$weights_record, function(w) {
-                  if (!is.null(w)) dim(w) else NULL
-                })
-                cat("dim_hidden_sizes reconstructed from weights_record\n")
-              }
-              
-              # Debug structure lengths
-              cat("Post-wrap: all_layer_outputs length = ", length(all_layer_outputs), "\n")
-              cat("Post-wrap: dim_hidden_sizes length = ", length(dim_hidden_sizes), "\n")
-              
-              # Ensure valid types
-              valid_outputs_logical <- sapply(all_layer_outputs, function(x) is.matrix(x) || is.vector(x))
-              valid_dims_logical <- sapply(dim_hidden_sizes, function(x) is.numeric(x) && is.atomic(x) && length(x) >= 2)
-              
-              # Pad shorter vector if needed to prevent filtering everything
-              len_diff <- length(dim_hidden_sizes) - length(all_layer_outputs)
-              if (len_diff > 0) {
-                all_layer_outputs <- c(all_layer_outputs, rep(list(NULL), len_diff))
-                valid_outputs_logical <- c(valid_outputs_logical, rep(FALSE, len_diff))
-              }
-              
-              # Filter only matched valid indices
-              min_len <- min(length(valid_outputs_logical), length(valid_dims_logical))
-              valid_indices <- which(valid_outputs_logical[1:min_len] & valid_dims_logical[1:min_len])
-              
-              # If nothing matched, fallback to first valid output and full dim list
-              if (length(valid_indices) == 0 && length(all_layer_outputs) == 1 && length(dim_hidden_sizes) >= 1) {
-                all_layer_outputs <- all_layer_outputs[1]
-                dim_hidden_sizes <- dim_hidden_sizes
-                cat("⚠️ Using fallback path: single output, full dim list\n")
-              } else {
-                all_layer_outputs <- all_layer_outputs[valid_indices]
-                dim_hidden_sizes <- dim_hidden_sizes[valid_indices]
-              }
-              
-              # Final checks
-              cat("Filtered dim_hidden_sizes structure:\n")
-              str(dim_hidden_sizes)
-              cat("Filtered all_layer_outputs length =", length(all_layer_outputs), "\n")
-              cat("Filtered dim_hidden_sizes length =", length(dim_hidden_sizes), "\n")
-              
-              stopifnot(length(all_layer_outputs) == length(dim_hidden_sizes))
-              
-              # Compute total hidden size
-              total_hidden_size <- sum(sapply(dim_hidden_sizes, function(x) x[2]))
-              
-              
-              weighted_sum_output <- NULL
-              
-              for (l in seq_along(all_layer_outputs)) {
-                layer_output <- all_layer_outputs[[l]]
-                if (is.null(dim(layer_output))) {
-                  layer_output <- matrix(layer_output, ncol = 1)
-                }
-                
-                if (is.null(weighted_sum_output)) {
-                  weighted_sum_output <- matrix(0, nrow = nrow(layer_output), ncol = ncol(layer_output))
-                }
-                
-                layer_weight <- dim_hidden_sizes[[l]][2] / total_hidden_size
-                weighted_sum_output <- weighted_sum_output + layer_output * layer_weight
-              }
-              
-              
-              
-              
-              
-              final_layer_prediction_time <- predicted_outputAndTime$train_reg_prediction_time[[length(predicted_outputAndTime$train_reg_prediction_time)]]
-              
-              all_predicted_outputAndTime[[i]] <- list(
-                predicted_output = weighted_sum_output,
-                prediction_time = final_layer_prediction_time,
-                training_time = predicted_outputAndTime$training_time,
-                optimal_epoch = predicted_outputAndTime$optimal_epoch,
-                weights_record = predicted_outputAndTime$weights_record,
-                biases_record = predicted_outputAndTime$biases_record,
-                losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
-                loss_increase_flag = predicted_outputAndTime$loss_increase_flag
-              )
-              
-              # Store the weighted sum outputs and prediction times for this iteration
-              all_predicted_outputs[[i]] <- weighted_sum_output
-              all_prediction_times[[i]] <- final_layer_prediction_time
-            }else{
-              all_predicted_outputAndTime[[i]] <- list(
-                predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
-                prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
-                training_time = predicted_outputAndTime$training_time,
-                optimal_epoch = predicted_outputAndTime$optimal_epoch,
-                weights_record = predicted_outputAndTime$weights_record,
-                biases_record = predicted_outputAndTime$biases_record,
-                weights_record2 = predicted_outputAndTime$weights_record2,
-                biases_record2 = predicted_outputAndTime$biases_record2,
-                losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
-                loss_increase_flag = predicted_outputAndTime$loss_increase_flag
-              )
-              
-              # Store the predictions and prediction times for this iteration
-              all_predicted_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$predicted_output
-              all_prediction_times[[i]] <- predicted_outputAndTime$predicted_output_l2$prediction_time
-            }
-            my_optimal_epoch_out_vector[[i]] <- predicted_outputAndTime$optimal_epoch #<<-
-          } else if (learnOnlyTrainingRun == TRUE) {
-            learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
-            all_learn_times[[i]] <- learn_results$learn_time
-            all_predicted_outputs_learn[[i]] <- learn_results$predicted_output_learn
             
             
-          }
-        }
-        
-        if (learnOnlyTrainingRun == FALSE) {
-          all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name) #<<-
-          
-          
-          if(predicted_outputAndTime$loss_status == 'ok'){
-            performance_relevance_plots <- self$update_performance_and_relevance(
-              Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
-              learn_results = learn_results,
-              predicted_output_list = all_predicted_outputs,
-              learn_time = NULL,
-              prediction_time_list = all_prediction_times, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
+            library(openxlsx)
+            library(ggplot2)
+            library(dplyr)
+            library(tidyr)
+            
+            # === Metrics Summary Sheet ===
+            metrics_summary <- data.frame(
+              Accuracy = accuracy,
+              Precision = metrics$precision,
+              Recall = metrics$recall,
+              F1_Score = metrics$F1,
+              TP = TP,
+              TN = TN,
+              FP = FP,
+              FN = FN
             )
-            return(list(loss_status = loss_status, accuracy = accuracy))
-          } else {
-            return(list(loss_status = loss_status, accuracy = accuracy))
-          }
-        } else if (learnOnlyTrainingRun == TRUE) {
-          all_learn_times <- do.call(c, all_learn_times) #<<-
-          all_predicted_outputs_learn <- do.call(c, all_predicted_outputs_learn) #<<-
-          #all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
-          
-          if(predicted_outputAndTime$loss_status == 'ok'){
-            performance_relevance_plots <- self$update_performance_and_relevance(
-              Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
-              learn_results = learn_results,
-              predicted_output_list = all_predicted_outputs_learn,
-              learn_time = all_learn_times,
-              prediction_time_list = NULL, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
+            
+            # === Generate Metrics Interpretation ===
+            if (!is.na(accuracy) && !is.na(metrics$F1) && accuracy >= 0.93 && metrics$F1 >= 0.89) {
+              commentary_metrics <- "Excellent performance: model is highly accurate and balanced."
+            } else if (!is.na(metrics$Precision) && !is.na(metrics$Recall) &&
+                       metrics$Precision < 0.8 && metrics$Recall > 0.9) {
+              commentary_metrics <- "High recall but lower precision — model is identifying positives well, but may have false alarms."
+            } else if (!is.na(metrics$Recall) && !is.na(metrics$Precision) &&
+                       metrics$Recall < 0.8 && metrics$Precision > 0.9) {
+              commentary_metrics <- "High precision but lower recall — model is conservative, may miss true positives."
+            } else {
+              commentary_metrics <- "Moderate performance: review threshold or consider adding complexity to model."
+            }
+            commentary_df_metrics <- data.frame(Interpretation = commentary_metrics)
+            
+            # === Confusion Matrix Heatmap ===
+            conf_matrix <- matrix(c(TP, FP, FN, TN), nrow = 2, byrow = TRUE,
+                                  dimnames = list("Actual" = c("Positive (1)", "Negative (0)"),
+                                                  "Predicted" = c("Positive (1)", "Negative (0)")))
+            conf_matrix_df <- as.data.frame(conf_matrix)
+            conf_long <- reshape2::melt(conf_matrix)
+            colnames(conf_long) <- c("Actual", "Predicted", "Count")
+            
+            heatmap_plot <- ggplot(conf_long, aes(x = Predicted, y = Actual, fill = Count)) +
+              geom_tile() +
+              geom_text(aes(label = Count), color = "white", size = 5, fontface = "bold") +
+              scale_fill_gradient(low = "#4575b4", high = "#d73027") +
+              theme_minimal() +
+              ggtitle("Confusion Matrix Heatmap")
+            heatmap_path <- "confusion_heatmap.png"
+            ggsave(heatmap_path, heatmap_plot, width = 5, height = 4)
+            
+            # === Mean Predictions ===
+            mean_0 <- mean(Rdata_predictions$Predictions[Rdata_predictions$Label == 0])
+            mean_1 <- mean(Rdata_predictions$Predictions[Rdata_predictions$Label == 1])
+            prediction_means <- data.frame(
+              Mean_Predicted_Label_0 = mean_0,
+              Mean_Predicted_Label_1 = mean_1
             )
-            return(list(loss_status = loss_status, accuracy = accuracy))
-          } else {
-            return(list(loss_status = loss_status, accuracy = accuracy))
-          }
-        }
-        
-        
-      } else if (never_ran_flag == FALSE) {
-        for (i in 1:length(self$ensemble)) {
-          # Add Ensemble and Model names to performance_list
-          ensemble_name <- attr(self$ensemble[[i]], "ensemble_name")
-          model_name <- attr(self$ensemble[[i]], "model_name")
-          
-          ensemble_name_model_name <- paste("Ensemble:", ensemble_name, "Model:", model_name)
-          all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
-          model_iter_num <- i
-          all_model_iter_num[[i]] <- model_iter_num
-          
-          if (learnOnlyTrainingRun == FALSE) {
-            predicted_outputAndTime <- suppressMessages(invisible(
-              self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type
-              ))) #<<-
             
-            calculate_accuracy <- function(predictions, actual_labels) {
-              correct_predictions <- sum(predictions == actual_labels)
-              accuracy <- (correct_predictions / length(actual_labels)) * 100
-              return(accuracy)
+            # === Interpretation for prediction means ===
+            commentary_text <- if (mean_0 < 0.2 && mean_1 > 0.8) {
+              paste0("Since your model produces mean ", round(mean_0, 4), " for true label 0, and ",
+                     round(mean_1, 4), " for true label 1, it’s making sharp, confident, and accurate predictions.")
+            } else if (mean_0 > 0.35 && mean_1 < 0.65) {
+              paste0("Warning: predicted probabilities are close together (", round(mean_0, 4),
+                     " vs ", round(mean_1, 4), ") — model may not be separating classes clearly.")
+            } else {
+              paste0("Model separation is moderate (", round(mean_0, 4), " vs ", round(mean_1, 4),
+                     ") — might benefit from output sharpening or additional tuning.")
             }
+            commentary_df_means <- data.frame(Interpretation = commentary_text)
             
-            # Calculate and print the accuracy
-            accuracy <- calculate_accuracy(predicted_outputAndTime$predicted_output_l2$predicted_output[[num_layers]], labels)
+            # === Misclassification Tagging and Sorting ===
+            misclassified$Type <- ifelse(
+              misclassified$predicted_label == 1 & misclassified$actual_label == 0, "False Positive",
+              "False Negative"
+            )
+            misclassified_sorted <- misclassified[order(-misclassified$predicted_prob), ]
             
-            print(paste("Accuracy:", accuracy))
+            # === Summary by Type ===
+            summary_by_type <- misclassified_sorted %>%
+              group_by(Type) %>%
+              summarise(across(c(age, serum_creatinine, ejection_fraction, time), \(x) mean(x, na.rm = TRUE)))
             
-            if(ML_NN){
-              
-              
-              # Extract the outputs and their corresponding hidden sizes (weights)
-              all_layer_outputs <- predicted_outputAndTime$predicted_output_l2$predicted_output
-              dim_hidden_sizes <- predicted_outputAndTime$dim_hidden_layers
-              
-              # Compute the sum of all hidden sizes
-              total_hidden_size <- sum(sapply(dim_hidden_sizes, function(x) x[2]))
-              
-              # Loop through each layer output and compute weighted sum
-              for (l in seq_along(all_layer_outputs)) {
-                layer_output <- all_layer_outputs[[l]]
-                
-                # Initialize weighted_sum_output with dimensions of the current layer output
-                weighted_sum_output <- array(0, dim = dim(layer_output))
-                
-                # Use the second dimension of the hidden size as the weight, normalized by the total hidden size
-                layer_weight <- dim_hidden_sizes[[l]][2] / total_hidden_size
-                
-                # Compute weighted sum
-                weighted_sum_output <- weighted_sum_output + layer_output * layer_weight
-                
-                # Print dimensions for debugging
-                # cat("Dimensions of weighted_sum_output in iteration", i, ":\n")
-                # print(dim(weighted_sum_output))
-              }
-              
-              
-              
-              final_layer_prediction_time <- predicted_outputAndTime$train_reg_prediction_time[[length(predicted_outputAndTime$train_reg_prediction_time)]]
-              
-              all_predicted_outputAndTime[[i]] <- list(
-                predicted_output = weighted_sum_output,
-                prediction_time = final_layer_prediction_time,
-                training_time = predicted_outputAndTime$training_time,
-                optimal_epoch = predicted_outputAndTime$optimal_epoch,
-                weights_record = predicted_outputAndTime$weights_record,
-                biases_record = predicted_outputAndTime$biases_record,
-                losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
-                loss_increase_flag = predicted_outputAndTime$loss_increase_flag
-              )
-              
-              # Store the weighted sum outputs and prediction times for this iteration
-              all_predicted_outputs[[i]] <- weighted_sum_output
-              all_prediction_times[[i]] <- final_layer_prediction_time
-              
-            }else{
-              all_predicted_outputAndTime[[i]] <- list(
-                predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
-                prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
-                training_time = predicted_outputAndTime$training_time,
-                optimal_epoch = predicted_outputAndTime$optimal_epoch,
-                weights_record = predicted_outputAndTime$weights_record,
-                biases_record = predicted_outputAndTime$biases_record,
-                weights_record2 = predicted_outputAndTime$weights_record2,
-                biases_record2 = predicted_outputAndTime$biases_record2,
-                losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
-                loss_increase_flag = predicted_outputAndTime$loss_increase_flag
-              )
-              
-              # Store the predictions and prediction times for this iteration
-              all_predicted_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$predicted_output
-              all_prediction_times[[i]] <- predicted_outputAndTime$predicted_output_l2$prediction_time
-            }
             
-            if(hyperparameter_grid_setup){
-              my_optimal_epoch_out_vector[[i]] <- predicted_outputAndTime$optimal_epoch #<<-
-            }
+            # === Heatmap of Feature Averages ===
+            heat_data <- summary_by_type %>%
+              pivot_longer(cols = -Type, names_to = "Feature", values_to = "MeanValue")
             
-            all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name) #<<-
-            print("outside predict")
-            if(predict_models){
-              print("inside predict")
-              prediction <- self$ensemble[[i]]$predict(Rdata, labels, activation_functions, dropout_rates) #<<-
-              
-              # Extract the outputs and their corresponding hidden sizes (weights)
-              all_layer_predicted_outputs <- prediction$predicted_output #<<-
-              dim_hidden_sizes_predicted <- prediction$dim_hidden_layers
-              
-              # Compute the sum of all hidden sizes
-              total_hidden_size_predicted <- sum(sapply(dim_hidden_sizes_predicted, function(x) x[2]))
-              
-              # Loop through each layer output and compute weighted sum
-              for (l in seq_along(all_layer_predicted_outputs)) {
-                layer_predicted_output <- all_layer_predicted_outputs[[l]]
-                
-                # Initialize weighted_sum_predicted_output with dimensions of the current layer output
-                weighted_sum_predicted_output <- array(0, dim = dim(layer_predicted_output))
-                
-                # Use the second dimension of the hidden size as the weight, normalized by the total hidden size
-                layer_predicted_weight <- dim_hidden_sizes_predicted[[l]][2] / total_hidden_size_predicted
-                
-                # Compute weighted sum
-                weighted_sum_predicted_output <- weighted_sum_predicted_output + layer_predicted_output * layer_predicted_weight #<<-
-                
-                # Print dimensions for debugging
-                # cat("Dimensions of weighted_sum_output in iteration", i, ":\n")
-                # print(dim(weighted_sum_output))
-              }
-              
-              cat("___________________________prediction________________________________\n")
-              # print(head(prediction$error))
-              # calculate_performance(self$ensemble[[i]], Rdata, labels, lr, model_iter_num, num_epochs, threshold, prediction$predicted_output, prediction$prediction_time)
-              # calculate_relevance(self$ensemble[[i]], Rdata, labels, model_iter_num, prediction$predicted_output)
-              # print("___________________________prediction_end____________________________\n")
-            }
-          }
-        }
-        
-        if(predicted_outputAndTime$loss_status == 'ok'){
-          #I think this line below could be in the if statement
-          performance_relevance_plots <- self$update_performance_and_relevance(
-            Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
-            learn_results = learn_results,
-            predicted_output_list = all_predicted_outputs,
-            learn_time = NULL,
-            prediction_time_list = all_prediction_times, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
-          ) #<<-
-          return(list(loss_status = loss_status, accuracy = accuracy))
-        } else {
-          return(list(loss_status = loss_status, accuracy = accuracy))
-        }
-      }
-      
-      
-      
-      if (showMeanBoxPlots == TRUE) {
-        print(performance_relevance_plots$performance_high_mean_plots)
-        print(performance_relevance_plots$relevance_high_mean_plots)
-        print(performance_relevance_plots$relevance_low_mean_plots)
-      }
-    }, # Method for updating performance and relevance metrics
+            heatmap_misclass_plot <- ggplot(heat_data, aes(x = Feature, y = Type, fill = MeanValue)) +
+              geom_tile(color = "white") +
+              scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = mean(heat_data$MeanValue, na.rm = TRUE)) +
+              theme_minimal() +
+              labs(title = "Heatmap of Feature Averages by Misclassification Type")
+            ggsave("misclassification_heatmap.png", heatmap_misclass_plot, width = 6, height = 4)
+            
+            # === Boxplot of Serum Creatinine by Type ===
+            boxplot_sc <- ggplot(misclassified_sorted, aes(x = Type, y = serum_creatinine)) +
+              geom_boxplot() +
+              theme_minimal() +
+              labs(title = "Serum Creatinine by Misclassification Type")
+            ggsave("boxplot_serum_creatinine.png", boxplot_sc, width = 6, height = 4)
+            
+            # === Write All to Excel ===
+            wb <- createWorkbook()
+            
+            addWorksheet(wb, "Rdata_Predictions")
+            writeData(wb, "Rdata_Predictions", Rdata_predictions)
+            
+            addWorksheet(wb, "Metrics_Summary")
+            writeData(wb, "Metrics_Summary", metrics_summary)
+            writeData(wb, "Metrics_Summary", commentary_df_metrics, startRow = 10)
+            writeData(wb, "Metrics_Summary", conf_matrix_df, startRow = 13, rowNames = TRUE)
+            insertImage(wb, "Metrics_Summary", heatmap_path, startRow = 18, startCol = 1, width = 6, height = 4)
+            
+            addWorksheet(wb, "Prediction_Means")
+            writeData(wb, "Prediction_Means", prediction_means)
+            writeData(wb, "Prediction_Means", commentary_df_means, startRow = 5)
+            
+            addWorksheet(wb, "Misclassified")
+            writeData(wb, "Misclassified", misclassified_sorted)
+            
+            addWorksheet(wb, "Misclass_Summary")
+            writeData(wb, "Misclass_Summary", summary_by_type)
+            insertImage(wb, "Misclass_Summary", "misclassification_heatmap.png", startRow = 10, startCol = 1, width = 6, height = 4)
+            insertImage(wb, "Misclass_Summary", "boxplot_serum_creatinine.png", startRow = 25, startCol = 1, width = 6, height = 4)
+            
+            saveWorkbook(wb, "Rdata_predictions.xlsx", overwrite = TRUE)
+            
+            
+            
+            
+          }}       
+            # === Export to Excel ===
+      #       library(writexl)
+      #       write_xlsx(Rdata_predictions, "Rdata_predictions.xlsx")
+      #       write_xlsx(misclassified, "misclassified_cases.xlsx")
+      #       
+      #       # Specify the path
+      #       file_path <- "C:/Users/wfky1/OneDrive/Documents/R/DESONN/Rdata_predictions.xlsx"
+      # 
+      #       # Write the data to the specified folder
+      #       write_xlsx(Rdata_predictions, file_path)
+      #       stop()
+      #       if(ML_NN){
+      #         
+      #         # Step 1: Extract predicted output
+      #         predicted_output_raw <- predicted_outputAndTime$predicted_output_l2$predicted_output
+      #         cat("Type of predicted_output:", typeof(predicted_output_raw), "\n")
+      #         cat("Is list of layers?", is.list(predicted_output_raw), "\n")
+      #         
+      #         # Step 2: Normalize predicted output to list format
+      #         if (!is.list(predicted_output_raw)) {
+      #           all_layer_outputs <- list(predicted_output_raw)
+      #         } else {
+      #           all_layer_outputs <- predicted_output_raw
+      #         }
+      #         
+      #         # Step 3: Extract dim_hidden_sizes
+      #         dim_hidden_sizes <- predicted_outputAndTime$dim_hidden_layers
+      #         if (is.null(dim_hidden_sizes) || length(dim_hidden_sizes) == 0 || all(sapply(dim_hidden_sizes, is.null))) {
+      #           dim_hidden_sizes <- lapply(predicted_outputAndTime$weights_record, function(w) {
+      #             if (!is.null(w)) dim(w) else NULL
+      #           })
+      #           cat("dim_hidden_sizes reconstructed from weights_record\n")
+      #         }
+      #         
+      #         # Debug structure lengths
+      #         cat("Post-wrap: all_layer_outputs length = ", length(all_layer_outputs), "\n")
+      #         cat("Post-wrap: dim_hidden_sizes length = ", length(dim_hidden_sizes), "\n")
+      #         
+      #         # Ensure valid types
+      #         valid_outputs_logical <- sapply(all_layer_outputs, function(x) is.matrix(x) || is.vector(x))
+      #         valid_dims_logical <- sapply(dim_hidden_sizes, function(x) is.numeric(x) && is.atomic(x) && length(x) >= 2)
+      #         
+      #         # Pad shorter vector if needed to prevent filtering everything
+      #         len_diff <- length(dim_hidden_sizes) - length(all_layer_outputs)
+      #         if (len_diff > 0) {
+      #           all_layer_outputs <- c(all_layer_outputs, rep(list(NULL), len_diff))
+      #           valid_outputs_logical <- c(valid_outputs_logical, rep(FALSE, len_diff))
+      #         }
+      #         
+      #         # Filter only matched valid indices
+      #         min_len <- min(length(valid_outputs_logical), length(valid_dims_logical))
+      #         valid_indices <- which(valid_outputs_logical[1:min_len] & valid_dims_logical[1:min_len])
+      #         
+      #         # If nothing matched, fallback to first valid output and full dim list
+      #         if (length(valid_indices) == 0 && length(all_layer_outputs) == 1 && length(dim_hidden_sizes) >= 1) {
+      #           all_layer_outputs <- all_layer_outputs[1]
+      #           dim_hidden_sizes <- dim_hidden_sizes
+      #           cat("⚠️ Using fallback path: single output, full dim list\n")
+      #         } else {
+      #           all_layer_outputs <- all_layer_outputs[valid_indices]
+      #           dim_hidden_sizes <- dim_hidden_sizes[valid_indices]
+      #         }
+      #         
+      #         # Final checks
+      #         cat("Filtered dim_hidden_sizes structure:\n")
+      #         str(dim_hidden_sizes)
+      #         cat("Filtered all_layer_outputs length =", length(all_layer_outputs), "\n")
+      #         cat("Filtered dim_hidden_sizes length =", length(dim_hidden_sizes), "\n")
+      #         
+      #         stopifnot(length(all_layer_outputs) == length(dim_hidden_sizes))
+      #         
+      #         # Compute total hidden size
+      #         total_hidden_size <- sum(sapply(dim_hidden_sizes, function(x) x[2]))
+      #         
+      #         
+      #         weighted_sum_output <- NULL
+      #         
+      #         for (l in seq_along(all_layer_outputs)) {
+      #           layer_output <- all_layer_outputs[[l]]
+      #           if (is.null(dim(layer_output))) {
+      #             layer_output <- matrix(layer_output, ncol = 1)
+      #           }
+      #           
+      #           if (is.null(weighted_sum_output)) {
+      #             weighted_sum_output <- matrix(0, nrow = nrow(layer_output), ncol = ncol(layer_output))
+      #           }
+      #           
+      #           layer_weight <- dim_hidden_sizes[[l]][2] / total_hidden_size
+      #           weighted_sum_output <- weighted_sum_output + layer_output * layer_weight
+      #         }
+      #         
+      #         
+      #         
+      #         
+      #         
+      #         final_layer_prediction_time <- predicted_outputAndTime$train_reg_prediction_time[[length(predicted_outputAndTime$train_reg_prediction_time)]]
+      #         
+      #         all_predicted_outputAndTime[[i]] <- list(
+      #           predicted_output = weighted_sum_output,
+      #           prediction_time = final_layer_prediction_time,
+      #           training_time = predicted_outputAndTime$training_time,
+      #           optimal_epoch = predicted_outputAndTime$optimal_epoch,
+      #           weights_record = predicted_outputAndTime$weights_record,
+      #           biases_record = predicted_outputAndTime$biases_record,
+      #           losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
+      #           loss_increase_flag = predicted_outputAndTime$loss_increase_flag
+      #         )
+      #         
+      #         # Store the weighted sum outputs and prediction times for this iteration
+      #         all_predicted_outputs[[i]] <- weighted_sum_output
+      #         all_prediction_times[[i]] <- final_layer_prediction_time
+      #       }else{
+      #         all_predicted_outputAndTime[[i]] <- list(
+      #           predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
+      #           prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
+      #           training_time = predicted_outputAndTime$training_time,
+      #           optimal_epoch = predicted_outputAndTime$optimal_epoch,
+      #           weights_record = predicted_outputAndTime$weights_record,
+      #           biases_record = predicted_outputAndTime$biases_record,
+      #           weights_record2 = predicted_outputAndTime$weights_record2,
+      #           biases_record2 = predicted_outputAndTime$biases_record2,
+      #           losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
+      #           loss_increase_flag = predicted_outputAndTime$loss_increase_flag
+      #         )
+      #         
+      #         # Store the predictions and prediction times for this iteration
+      #         all_predicted_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$predicted_output
+      #         all_prediction_times[[i]] <- predicted_outputAndTime$predicted_output_l2$prediction_time
+      #       }
+      #       my_optimal_epoch_out_vector[[i]] <- predicted_outputAndTime$optimal_epoch #<<-
+      #     } else if (learnOnlyTrainingRun == TRUE) {
+      #       learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
+      #       all_learn_times[[i]] <- learn_results$learn_time
+      #       all_predicted_outputs_learn[[i]] <- learn_results$predicted_output_learn
+      #       
+      #       
+      #     }
+      #   }
+      #   
+      #   if (learnOnlyTrainingRun == FALSE) {
+      #     all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name) #<<-
+      #     
+      #     
+      #     if(predicted_outputAndTime$loss_status == 'ok'){
+      #       performance_relevance_plots <- self$update_performance_and_relevance(
+      #         Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
+      #         learn_results = learn_results,
+      #         predicted_output_list = all_predicted_outputs,
+      #         learn_time = NULL,
+      #         prediction_time_list = all_prediction_times, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
+      #       )
+      #       return(list(loss_status = loss_status, accuracy = accuracy))
+      #     } else {
+      #       return(list(loss_status = loss_status, accuracy = accuracy))
+      #     }
+      #   } else if (learnOnlyTrainingRun == TRUE) {
+      #     all_learn_times <- do.call(c, all_learn_times) #<<-
+      #     all_predicted_outputs_learn <- do.call(c, all_predicted_outputs_learn) #<<-
+      #     #all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
+      #     
+      #     if(predicted_outputAndTime$loss_status == 'ok'){
+      #       performance_relevance_plots <- self$update_performance_and_relevance(
+      #         Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
+      #         learn_results = learn_results,
+      #         predicted_output_list = all_predicted_outputs_learn,
+      #         learn_time = all_learn_times,
+      #         prediction_time_list = NULL, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
+      #       )
+      #       return(list(loss_status = loss_status, accuracy = accuracy))
+      #     } else {
+      #       return(list(loss_status = loss_status, accuracy = accuracy))
+      #     }
+      #   }
+      #   
+      #   
+      # } else if (never_ran_flag == FALSE) {
+      #   for (i in 1:length(self$ensemble)) {
+      #     # Add Ensemble and Model names to performance_list
+      #     ensemble_name <- attr(self$ensemble[[i]], "ensemble_name")
+      #     model_name <- attr(self$ensemble[[i]], "model_name")
+      #     
+      #     ensemble_name_model_name <- paste("Ensemble:", ensemble_name, "Model:", model_name)
+      #     all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
+      #     model_iter_num <- i
+      #     all_model_iter_num[[i]] <- model_iter_num
+      #     
+      #     if (learnOnlyTrainingRun == FALSE) {
+      #       predicted_outputAndTime <- suppressMessages(invisible(
+      #         self$ensemble[[i]]$train_with_l2_regularization(
+      #           Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights
+      #         ))) #<<-
+      #       
+      #       calculate_accuracy <- function(predictions, actual_labels) {
+      #         correct_predictions <- sum(predictions == actual_labels)
+      #         accuracy <- (correct_predictions / length(actual_labels)) * 100
+      #         return(accuracy)
+      #       }
+      #       
+      #       # Calculate and print the accuracy
+      #       accuracy <- calculate_accuracy(predicted_outputAndTime$predicted_output_l2$predicted_output[[num_layers]], labels)
+      #       
+      #       print(paste("Accuracy:", accuracy))
+      #       
+      #       if(ML_NN){
+      #         
+      #         
+      #         # Extract the outputs and their corresponding hidden sizes (weights)
+      #         all_layer_outputs <- predicted_outputAndTime$predicted_output_l2$predicted_output
+      #         dim_hidden_sizes <- predicted_outputAndTime$dim_hidden_layers
+      #         
+      #         # Compute the sum of all hidden sizes
+      #         total_hidden_size <- sum(sapply(dim_hidden_sizes, function(x) x[2]))
+      #         
+      #         # Loop through each layer output and compute weighted sum
+      #         for (l in seq_along(all_layer_outputs)) {
+      #           layer_output <- all_layer_outputs[[l]]
+      #           
+      #           # Initialize weighted_sum_output with dimensions of the current layer output
+      #           weighted_sum_output <- array(0, dim = dim(layer_output))
+      #           
+      #           # Use the second dimension of the hidden size as the weight, normalized by the total hidden size
+      #           layer_weight <- dim_hidden_sizes[[l]][2] / total_hidden_size
+      #           
+      #           # Compute weighted sum
+      #           weighted_sum_output <- weighted_sum_output + layer_output * layer_weight
+      #           
+      #           # Print dimensions for debugging
+      #           # cat("Dimensions of weighted_sum_output in iteration", i, ":\n")
+      #           # print(dim(weighted_sum_output))
+      #         }
+      #         
+      #         
+      #         
+      #         final_layer_prediction_time <- predicted_outputAndTime$train_reg_prediction_time[[length(predicted_outputAndTime$train_reg_prediction_time)]]
+      #         
+      #         all_predicted_outputAndTime[[i]] <- list(
+      #           predicted_output = weighted_sum_output,
+      #           prediction_time = final_layer_prediction_time,
+      #           training_time = predicted_outputAndTime$training_time,
+      #           optimal_epoch = predicted_outputAndTime$optimal_epoch,
+      #           weights_record = predicted_outputAndTime$weights_record,
+      #           biases_record = predicted_outputAndTime$biases_record,
+      #           losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
+      #           loss_increase_flag = predicted_outputAndTime$loss_increase_flag
+      #         )
+      #         
+      #         # Store the weighted sum outputs and prediction times for this iteration
+      #         all_predicted_outputs[[i]] <- weighted_sum_output
+      #         all_prediction_times[[i]] <- final_layer_prediction_time
+      #         
+      #       }else{
+      #         all_predicted_outputAndTime[[i]] <- list(
+      #           predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
+      #           prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
+      #           training_time = predicted_outputAndTime$training_time,
+      #           optimal_epoch = predicted_outputAndTime$optimal_epoch,
+      #           weights_record = predicted_outputAndTime$weights_record,
+      #           biases_record = predicted_outputAndTime$biases_record,
+      #           weights_record2 = predicted_outputAndTime$weights_record2,
+      #           biases_record2 = predicted_outputAndTime$biases_record2,
+      #           losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch,
+      #           loss_increase_flag = predicted_outputAndTime$loss_increase_flag
+      #         )
+      #         
+      #         # Store the predictions and prediction times for this iteration
+      #         all_predicted_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$predicted_output
+      #         all_prediction_times[[i]] <- predicted_outputAndTime$predicted_output_l2$prediction_time
+      #       }
+      #       
+      #       if(hyperparameter_grid_setup){
+      #         my_optimal_epoch_out_vector[[i]] <- predicted_outputAndTime$optimal_epoch #<<-
+      #       }
+      #       
+      #       all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name) #<<-
+      #       print("outside predict")
+      #       if(predict_models){
+      #         print("inside predict")
+      #         prediction <- self$ensemble[[i]]$predict(Rdata, labels, activation_functions, dropout_rates) #<<-
+      #         
+      #         # Extract the outputs and their corresponding hidden sizes (weights)
+      #         all_layer_predicted_outputs <- prediction$predicted_output #<<-
+      #         dim_hidden_sizes_predicted <- prediction$dim_hidden_layers
+      #         
+      #         # Compute the sum of all hidden sizes
+      #         total_hidden_size_predicted <- sum(sapply(dim_hidden_sizes_predicted, function(x) x[2]))
+      #         
+      #         # Loop through each layer output and compute weighted sum
+      #         for (l in seq_along(all_layer_predicted_outputs)) {
+      #           layer_predicted_output <- all_layer_predicted_outputs[[l]]
+      #           
+      #           # Initialize weighted_sum_predicted_output with dimensions of the current layer output
+      #           weighted_sum_predicted_output <- array(0, dim = dim(layer_predicted_output))
+      #           
+      #           # Use the second dimension of the hidden size as the weight, normalized by the total hidden size
+      #           layer_predicted_weight <- dim_hidden_sizes_predicted[[l]][2] / total_hidden_size_predicted
+      #           
+      #           # Compute weighted sum
+      #           weighted_sum_predicted_output <- weighted_sum_predicted_output + layer_predicted_output * layer_predicted_weight #<<-
+      #           
+      #           # Print dimensions for debugging
+      #           # cat("Dimensions of weighted_sum_output in iteration", i, ":\n")
+      #           # print(dim(weighted_sum_output))
+      #         }
+      #         
+      #         cat("___________________________prediction________________________________\n")
+      #         # print(head(prediction$error))
+      #         # calculate_performance(self$ensemble[[i]], Rdata, labels, lr, model_iter_num, num_epochs, threshold, prediction$predicted_output, prediction$prediction_time)
+      #         # calculate_relevance(self$ensemble[[i]], Rdata, labels, model_iter_num, prediction$predicted_output)
+      #         # print("___________________________prediction_end____________________________\n")
+      #       }
+      #     }
+      #   }
+      #   
+      #   if(predicted_outputAndTime$loss_status == 'ok'){
+      #     #I think this line below could be in the if statement
+      #     performance_relevance_plots <- self$update_performance_and_relevance(
+      #       Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
+      #       learn_results = learn_results,
+      #       predicted_output_list = all_predicted_outputs,
+      #       learn_time = NULL,
+      #       prediction_time_list = all_prediction_times, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
+      #     ) #<<-
+      #     return(list(loss_status = loss_status, accuracy = accuracy))
+      #   } else {
+      #     return(list(loss_status = loss_status, accuracy = accuracy))
+      #   }
+      # }
+      # 
+      # 
+      # 
+      # if (showMeanBoxPlots == TRUE) {
+      #   print(performance_relevance_plots$performance_high_mean_plots)
+      #   print(performance_relevance_plots$relevance_high_mean_plots)
+      #   print(performance_relevance_plots$relevance_low_mean_plots)
+       }
+    
+return(list(
+  predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
+  threshold = best_threshold,
+  accuracy = accuracy,
+  metrics = metrics,
+  misclassified = misclassified
+))
+}
+, # Method for updating performance and relevance metrics
 
 update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime) {
       
@@ -4991,14 +5205,21 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
 
 
 clip_gradient_norm <- function(gradient, min_norm = 1e-3, max_norm = 5) {
-  grad_norm <- sqrt(sum(gradient^2))
+  if (any(is.na(gradient)) || all(gradient == 0)) return(gradient)
+  
+  grad_norm <- sqrt(sum(gradient^2, na.rm = TRUE))
+  
+  if (is.na(grad_norm)) return(gradient)  # added line
+  
   if (grad_norm > max_norm) {
     gradient <- gradient * (max_norm / grad_norm)
   } else if (grad_norm < min_norm && grad_norm > 0) {
     gradient <- gradient * (min_norm / grad_norm)
   }
+  
   return(gradient)
 }
+
 
 
 
@@ -5115,6 +5336,85 @@ bent_sigmoid_derivative <- function(x) {
   dim(out) <- dim(x)
   return(out)
 }
+
+arctangent_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(1 / (1 + x^2))
+}
+
+sinusoid_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(cos(x))
+}
+
+gaussian_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(-2 * x * exp(-x^2))
+}
+
+isrlu_derivative <- function(x, alpha = 1.0) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(ifelse(x >= 0, 1, (1 / sqrt(1 + alpha * x^2))^3))
+}
+
+bent_swish_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  bent <- ((sqrt(x^2 + 1) - 1) / 2 + x)
+  s <- 1 / (1 + exp(-x))
+  dbent <- (x / (2 * sqrt(x^2 + 1))) + 1
+  return(dbent * s + bent * s * (1 - s))
+}
+
+parametric_bent_relu_derivative <- function(x, beta = 1.0) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  
+  grad_bent <- (beta * x) / (2 * sqrt(beta * x^2 + 1)) + 1
+  mask <- x > 0
+  out <- matrix(0, nrow = nrow(x), ncol = ncol(x))
+  out[mask] <- grad_bent[mask]
+  return(out)
+}
+
+leaky_bent_derivative <- function(x, alpha = 0.01) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return((x / (2 * sqrt(x^2 + 1))) + alpha)
+}
+
+inverse_linear_unit_derivative <- function(x) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(1 / (1 + abs(x))^2)
+}
+
+tanh_relu_hybrid_derivative <- function(x) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  result <- matrix(0, nrow = nrow(x), ncol = ncol(x))
+  pos_mask <- x > 0
+  result[pos_mask] <- tanh(x[pos_mask]) + x[pos_mask] * (1 - tanh(x[pos_mask])^2)
+  return(result)
+}
+
+custom_bent_piecewise_derivative <- function(x, threshold = 0.5) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  dbent <- (x / (2 * sqrt(x^2 + 1))) + 1
+  result <- matrix(1, nrow = nrow(x), ncol = ncol(x))
+  below_mask <- x <= threshold
+  result[below_mask] <- dbent[below_mask]
+  return(result)
+}
+
+sigmoid_sharp_derivative <- function(x, temp = 5) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  s <- 1 / (1 + exp(-temp * x))
+  return(temp * s * (1 - s))
+}
+
+
+
 
 
 ###################################################################################################################################################################
@@ -5257,6 +5557,79 @@ bent_sigmoid <- function(x) {
 }
 attr(bent_sigmoid, "name") <- "bent_sigmoid"
 
+arctangent <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(atan(x))
+}
+attr(arctangent, "name") <- "arctangent"
+
+sinusoid <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(sin(x))
+}
+attr(sinusoid, "name") <- "sinusoid"
+
+gaussian <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(exp(-x^2))
+}
+attr(gaussian, "name") <- "gaussian"
+
+isrlu <- function(x, alpha = 1.0) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(ifelse(x >= 0, x, x / sqrt(1 + alpha * x^2)))
+}
+attr(isrlu, "name") <- "isrlu"
+
+bent_swish <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  bent <- ((sqrt(x^2 + 1) - 1) / 2 + x)
+  return(bent * sigmoid(x))
+}
+attr(bent_swish, "name") <- "bent_swish"
+
+parametric_bent_relu <- function(x, beta = 1.0) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  out <- pmax(0, ((sqrt(beta * x^2 + 1) - 1) / 2 + x))
+  dim(out) <- dim(x)  # <- enforce consistent dimensions
+  return(out)
+}
+attr(parametric_bent_relu, "name") <- "parametric_bent_relu"
+
+
+leaky_bent <- function(x, alpha = 0.01) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(((sqrt(x^2 + 1) - 1) / 2) + alpha * x)
+}
+attr(leaky_bent, "name") <- "leaky_bent"
+
+inverse_linear_unit <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(x / (1 + abs(x)))
+}
+attr(inverse_linear_unit, "name") <- "inverse_linear_unit"
+
+tanh_relu_hybrid <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(ifelse(x > 0, x * tanh(x), 0))
+}
+attr(tanh_relu_hybrid, "name") <- "tanh_relu_hybrid"
+
+custom_bent_piecewise <- function(x, threshold = 0.5) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(ifelse(x > threshold, x, (sqrt(x^2 + 1) - 1) / 2 + x))
+}
+attr(custom_bent_piecewise, "name") <- "custom_bent_piecewise"
+
+sigmoid_sharp <- function(x, temp = 5) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(1 / (1 + exp(-temp * x)))
+}
+attr(sigmoid_sharp, "name") <- "sigmoid_sharp"
+
+
+
+
 
 tune_threshold <- function(predicted_output, labels) {
   thresholds <- seq(0.05, 0.95, by = 0.01)
@@ -5281,6 +5654,25 @@ tune_threshold <- function(predicted_output, labels) {
     f1_scores = f1_scores
   ))
 }
+
+tune_threshold_accuracy <- function(predicted_output, labels) {
+  thresholds <- seq(0.05, 0.95, by = 0.01)
+  
+  accuracies <- sapply(thresholds, function(t) {
+    preds <- ifelse(predicted_output >= t, 1, 0)
+    sum(preds == labels) / length(labels)
+  })
+  
+  best_threshold <- thresholds[which.max(accuracies)]
+  binary_preds <- ifelse(predicted_output >= best_threshold, 1, 0)
+  
+  return(list(
+    best_threshold = best_threshold,
+    binary_preds = binary_preds,
+    accuracy_scores = accuracies
+  ))
+}
+
 
 evaluate_classification_metrics <- function(preds, labels) {
   labels <- as.vector(labels)

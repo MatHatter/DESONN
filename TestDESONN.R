@@ -71,7 +71,7 @@ init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogon
 optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
 lookahead_step <- 100
 batch_normalize_data <- FALSE
-shuffle_bn <- TRUE
+shuffle_bn <- FALSE
 gamma_bn <- 1
 beta_bn <- 1
 epsilon_bn <- 1e-12  # Increase for numerical stability
@@ -79,9 +79,9 @@ momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
 beta1 <- 0.97 # Standard Adam value
 beta2 <- 0.7 # Slightly lower for better adaptabilit
-lr <- 0.11
-lambda <- 0.1
-num_epochs <- 88
+lr <- 0.11 #0.11
+lambda <- 0.01
+num_epochs <- 1
 custom_scale <- .105
 # epsilon <- 1e-5
 # ML_NN <- TRUE
@@ -91,18 +91,18 @@ ML_NN <- TRUE
 hidden_sizes <- c(32, 8, 12)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu, bent_identity, bent_relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(relu , bent_identity, parametric_bent_relu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(relu, bent_identity, bent_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(relu , bent_identity, parametric_bent_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-1
-loss_type <- NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "CategoricalCrossEntropy" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- list(0.1, 0.09)
+dropout_rates <- NULL #list(0.1, 0.09)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
@@ -117,11 +117,7 @@ num_networks <- 1  # Number of trees in the Random Forest
 # if (length(hidden_sizes) + 1 != length(activation_functions)) {
 #     stop("Length of hidden_sizes and activation_functions must be equal")
 # }
-if(!ML_NN) {
-     N <- input_size + output_size  # Multiplier for data generation (not directly applicable here)
-} else {
-     N <- input_size + sum(hidden_sizes) + output_size
-}
+
 # threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
 
 # Load the dataset
@@ -141,6 +137,57 @@ Rdata <- data[, input_columns]
 labels <- data$DEATH_EVENT
 input_size <- ncol(Rdata)
 
+if(!ML_NN) {
+  N <- input_size + output_size  # Multiplier for data generation (not directly applicable here)
+} else {
+  N <- input_size + sum(hidden_sizes) + output_size
+}
+
+# Add a binary flag for 'deceptively healthy' patients
+Rdata$deceptively_healthy <- ifelse(
+  Rdata$serum_creatinine < quantile(Rdata$serum_creatinine, 0.25) &
+    Rdata$age < quantile(Rdata$age, 0.25) &
+    Rdata$ejection_fraction > quantile(Rdata$ejection_fraction, 0.75),
+  1, 0
+)
+
+# library(readxl)
+# Rdata_predictions <- read_excel("Rdata_predictions.xlsx", sheet = "Rdata_Predictions")  # or read.csv("...")
+# 
+# # Calculate absolute error from current predictions
+# errors <- abs(probs - labels)
+# 
+# # Safe base weights from training set
+# base_weights <- rep(1, length(labels))
+# 
+# # Use the training Rdata, not Rdata_predictions
+# if (!"deceptively_healthy" %in% names(Rdata)) {
+#   stop("Column 'deceptively_healthy' not found in Rdata")
+# }
+# 
+# # Domain rule: reduce weight for deceptive healthy class
+# base_weights[which(labels == 0 & Rdata$deceptively_healthy == 1)] <- 0.5
+# 
+# # Boost minority class 1 samples lightly
+# base_weights[labels == 1] <- base_weights[labels == 1] * 1.2
+# 
+# # Blend and clip
+# raw_weights <- base_weights * errors
+# raw_weights <- pmin(pmax(raw_weights, 0.1), 2.5)
+# 
+# # Final adaptive sample weights
+# sample_weights <- 0.7 * base_weights + 0.3 * raw_weights
+# 
+# # Normalize to mean = 1 (avoid division by 0)
+# mean_sw <- mean(sample_weights)
+# if (is.na(mean_sw) || mean_sw == 0) stop("Sample weights mean is zero or NA — check your weights")
+# sample_weights <- sample_weights / mean_sw
+# 
+# # Sanity check
+# if (length(sample_weights) != length(labels)) {
+#   stop(paste("Mismatch: sample_weights =", length(sample_weights), "labels =", length(labels)))
+# }
+sample_weights <- NULL
 
 # Split the data into features (X) and target (y)
 X <- data %>% dplyr::select(-DEATH_EVENT)
@@ -168,7 +215,7 @@ total_num_samples <- nrow(data)
 # Define num_samples
 num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
 num_validation_samples <- 500
-num_test_samples <- 500
+num_test_samples <- 800
 num_training_samples <- total_num_samples - num_validation_samples - num_test_samples
 
 # Create a random permutation of row indices
@@ -227,14 +274,15 @@ cat("First 5 rows of scaled X_train_scaled:\n")
 print(X_train_scaled[1:5, 1:min(5, ncol(X_train_scaled))])
 
 # $$$$$$$$$$$$$ Overwrite training matrix for model training
-X <- as.matrix(X_train_scaled)
-y <- as.matrix(y_train)
+# X <- as.matrix(X_train_scaled)
+# y <- as.matrix(y_train)
 
+X <- as.matrix(X_test_scaled)
+y <- as.matrix(y_test)
 
 
 
 # X <- as.matrix(X_test)
-# y <- as.matrix(y_test)
 colnames(y) <- colname_y
 
 binary_flag <- is_binary(y)
@@ -282,7 +330,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = NULL #"L1" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = NULL #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
@@ -597,7 +645,7 @@ if(!predict_models){
     DESONN_model <- DESONN_model_1
     FirstRunDESONN <- DESONN_model_1$train(X, y, lr, ensemble_number = j, num_epochs, threshold, reg_type, numeric_columns = numeric_columns, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions,
                                             dropout_rates_learn = dropout_rates_learn, dropout_rates = dropout_rates, optimizer = optimizer, beta1 = beta1, beta2 = beta2, epsilon = epsilon, lookahead_step = lookahead_step, batch_normalize_data = batch_normalize_data, gamma_bn = gamma_bn, beta_bn = beta_bn,
-                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type)
+                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type, sample_weights = sample_weights)
     if (FirstRunDESONN$loss_status == 'exceeds_10000') {
         next
     }
