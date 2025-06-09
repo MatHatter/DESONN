@@ -77,9 +77,9 @@ beta_bn <- 1
 epsilon_bn <- 1e-12  # Increase for numerical stability
 momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
-beta1 <- 0.9 # Standard Adam value
-beta2 <- 0.999 # Slightly lower for better adaptabilit
-lr <- 0.1
+beta1 <- .9 # Standard Adam value
+beta2 <- 0.9 # Slightly lower for better adaptabilit
+lr <- 0.5
 lambda <- 0.1
 num_epochs <- 90
 custom_scale <- .105
@@ -91,10 +91,10 @@ train <- TRUE
 hidden_sizes <- c(32, 8, 12)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu , bent_identity, relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(leaky_relu , NULL, relu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(relu , bent_identity, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(leaky_relu , NULL, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-12
 loss_type <- "CategoricalCrossEntropy" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
