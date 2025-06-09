@@ -69,40 +69,40 @@ function(test1){
 # # Define parameters
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
-lookahead_step <- 100
-batch_normalize_data <- FALSE
+lookahead_step <- 10
+batch_normalize_data <- TRUE
 shuffle_bn <- FALSE
 gamma_bn <- 1
 beta_bn <- 1
 epsilon_bn <- 1e-12  # Increase for numerical stability
 momentum_bn <- 1.9  # Improved convergence
 is_training_bn <- TRUE
-beta1 <- 0.97 # Standard Adam value
-beta2 <- 0.7 # Slightly lower for better adaptabilit
-lr <- 0.11 #0.11
-lambda <- 0.01
-num_epochs <- 1
+beta1 <- 0.9 # Standard Adam value
+beta2 <- 0.999 # Slightly lower for better adaptabilit
+lr <- 0.1
+lambda <- 0.1
+num_epochs <- 90
 custom_scale <- .105
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
-
+train <- TRUE
 # hidden_sizes <- NULL
 hidden_sizes <- c(32, 8, 12)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(relu , bent_identity, parametric_bent_relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(relu , bent_identity, relu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(relu , bent_identity, parametric_bent_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
-epsilon <- 1e-1
+activation_functions_learn <- list(relu , bent_identity, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+epsilon <- 1e-12
 loss_type <- "CategoricalCrossEntropy" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
 # Create a list of activation function names as strings
 # activation_functions <- NULL # list("relu", "relu",  "relu", "sigmoid", "sigmoid_binary", "relu", "sigmoid_binary")
 # activation_functions_learn <- activation_functions
-dropout_rates <- NULL #list(0.1, 0.09)
+dropout_rates <- list(0.2, 0.2)
 # NULL for output layer
 #c(0.2, 0.3, 0.3) #c(0.2, 0.3, 0.3) #c(0.5, 0.5, 0.5)#NULL #c(89.91, 90.48, 11)
 dropout_rates_learn <- dropout_rates
@@ -214,7 +214,7 @@ set.seed(1)
 total_num_samples <- nrow(data)
 # Define num_samples
 num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
-num_validation_samples <- 500
+num_validation_samples <- 800
 num_test_samples <- 800
 num_training_samples <- total_num_samples - num_validation_samples - num_test_samples
 
@@ -233,14 +233,14 @@ y_train <- y[train_indices, ]
 X_validation <- X[validation_indices, ]
 y_validation <- y[validation_indices, ]
 
-X_test <- X[test_indices, ]
-y_test <- y[test_indices, ]
+# X_test <- X[test_indices, ]
+# y_test <- y[test_indices, ]
 
 # ===== APPLY LOG TRANSFORMATION =====
 # Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
-X_train$creatinine_phosphokinase <- pmin(X_train$creatinine_phosphokinase, 3000)
-X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
-X_test$creatinine_phosphokinase <- pmin(X_test$creatinine_phosphokinase, 3000)
+# X_train$creatinine_phosphokinase <- pmin(X_train$creatinine_phosphokinase, 3000)
+# X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
+# X_test$creatinine_phosphokinase <- pmin(X_test$creatinine_phosphokinase, 3000)
 
 
 
@@ -274,11 +274,15 @@ cat("First 5 rows of scaled X_train_scaled:\n")
 print(X_train_scaled[1:5, 1:min(5, ncol(X_train_scaled))])
 
 # $$$$$$$$$$$$$ Overwrite training matrix for model training
-# X <- as.matrix(X_train_scaled)
-# y <- as.matrix(y_train)
+X <- as.matrix(X_train_scaled)
+y <- as.matrix(y_train)
 
-X <- as.matrix(X_test_scaled)
-y <- as.matrix(y_test)
+X_validation <- as.matrix(X_validation_scaled)
+y_validation <- as.matrix(y_validation)
+
+# X <- as.matrix(X_test_scaled)
+# y <- as.matrix(y_test)
+
 
 
 
@@ -330,7 +334,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = NULL #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = "L1_L2" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
@@ -539,82 +543,82 @@ if(never_ran_flag == FALSE) { #length(my_optimal_epoch_out_vector) > 1
 
 
 
-if(!predict_models){
-    if(hyperparameter_grid_setup){
-        ensembles_hyperparameter_grid[[j]] <- results_list
-    }else {
-        print("___________________________PRUNE_ADD________________________________")
-        prune_result <- prune_network_from_ensemble(ensembles, target_metric_name_worst) #<<-
-        main_ensemble_copy_return <- add_network_to_ensemble(prune_result$updated_ensemble, target_metric_name_best, prune_result$removed_network, ensemble_number = j, prune_result$worst_model_index) #<<-
-        print("___________________________PRUNE_ADD_end____________________________")
-
-        # Initialize lists to store run_ids and MSE performance metrics
-        run_ids <- list()
-        mse_metrics <- list()
-
-        # Loop over each ensemble
-        for (i in seq_along(ensembles$main_ensemble)) {
-            # Check if best_model_metadata exists in the i-th ensemble
-            if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-                # Extract run_id and MSE performance metric from best_model_metadata
-                run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
-                mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
-            } else {
-                # Extract run_id and MSE performance metric from the i-th ensemble
-                run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
-                mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
-            }
-        }
-
-        # Convert lists to dataframe
-        results_df <- data.frame(run_id = unlist(run_ids), mse_metric = unlist(mse_metrics))
-
-        # Print the dataframe
-        print("___________________________results_df________________________________")
-        print(results_df)
-        print("___________________________results_df_end____________________________")
-
-        # Save the dataframe as an RDS file
-        saveRDS(results_df, file = "results_df.rds")
-
-        # After finishing the inner loop, update the temporary ensemble (second list) in ensembles
-        ensembles[[2]] <- ensembles$temp_ensemble
-    }
-}else{
-    # Initialize lists to store run_ids and MSE performance metrics
-    run_ids <- list()
-    mse_metrics <- list()
-
-    # Loop over each ensemble
-    for (i in seq_along(ensembles$main_ensemble)) {
-        # Check if best_model_metadata exists in the i-th ensemble
-        if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-            # Extract run_id and MSE performance metric from best_model_metadata
-            run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
-            mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
-        } else {
-            # Extract run_id and MSE performance metric from the i-th ensemble
-            run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
-            mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
-        }
-    }
-
-    # Initialize lists to store run_ids and MSE performance metrics
-    run_ids <- list()
-    mse_metrics <- list()
-
-    # Convert lists to dataframe
-    results_df <- data.frame(run_id = unlist(run_ids), mse_metric = unlist(mse_metrics))
-
-    # Print the dataframe
-    print("___________________________results_df________________________________")
-    print(results_df)
-    print("___________________________results_df_end____________________________")
-
-    # Save the dataframe as an RDS file
-    saveRDS(results_df, file = "results_df_predict.rds")
-
-}
+# if(!predict_models){
+#     if(hyperparameter_grid_setup){
+#         ensembles_hyperparameter_grid[[j]] <- results_list
+#     }else {
+#         print("___________________________PRUNE_ADD________________________________")
+#         prune_result <- prune_network_from_ensemble(ensembles, target_metric_name_worst) #<<-
+#         main_ensemble_copy_return <- add_network_to_ensemble(prune_result$updated_ensemble, target_metric_name_best, prune_result$removed_network, ensemble_number = j, prune_result$worst_model_index) #<<-
+#         print("___________________________PRUNE_ADD_end____________________________")
+# 
+#         # Initialize lists to store run_ids and MSE performance metrics
+#         run_ids <- list()
+#         mse_metrics <- list()
+# 
+#         # Loop over each ensemble
+#         for (i in seq_along(ensembles$main_ensemble)) {
+#             # Check if best_model_metadata exists in the i-th ensemble
+#             if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
+#                 # Extract run_id and MSE performance metric from best_model_metadata
+#                 run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
+#                 mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
+#             } else {
+#                 # Extract run_id and MSE performance metric from the i-th ensemble
+#                 run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
+#                 mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
+#             }
+#         }
+# 
+#         # Convert lists to dataframe
+#         results_df <- data.frame(run_id = unlist(run_ids), mse_metric = unlist(mse_metrics))
+# 
+#         # Print the dataframe
+#         print("___________________________results_df________________________________")
+#         print(results_df)
+#         print("___________________________results_df_end____________________________")
+# 
+#         # Save the dataframe as an RDS file
+#         saveRDS(results_df, file = "results_df.rds")
+# 
+#         # After finishing the inner loop, update the temporary ensemble (second list) in ensembles
+#         ensembles[[2]] <- ensembles$temp_ensemble
+#     }
+# }else{
+#     # Initialize lists to store run_ids and MSE performance metrics
+#     run_ids <- list()
+#     mse_metrics <- list()
+# 
+#     # Loop over each ensemble
+#     for (i in seq_along(ensembles$main_ensemble)) {
+#         # Check if best_model_metadata exists in the i-th ensemble
+#         if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
+#             # Extract run_id and MSE performance metric from best_model_metadata
+#             run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
+#             mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
+#         } else {
+#             # Extract run_id and MSE performance metric from the i-th ensemble
+#             run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
+#             mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
+#         }
+#     }
+# 
+#     # Initialize lists to store run_ids and MSE performance metrics
+#     run_ids <- list()
+#     mse_metrics <- list()
+# 
+#     # Convert lists to dataframe
+#     results_df <- data.frame(run_id = unlist(run_ids), mse_metric = unlist(mse_metrics))
+# 
+#     # Print the dataframe
+#     print("___________________________results_df________________________________")
+#     print(results_df)
+#     print("___________________________results_df_end____________________________")
+# 
+#     # Save the dataframe as an RDS file
+#     saveRDS(results_df, file = "results_df_predict.rds")
+# 
+# }
     print("old vector used")
     #print(findout)
     # print(head(X))
@@ -645,7 +649,7 @@ if(!predict_models){
     DESONN_model <- DESONN_model_1
     FirstRunDESONN <- DESONN_model_1$train(X, y, lr, ensemble_number = j, num_epochs, threshold, reg_type, numeric_columns = numeric_columns, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions,
                                             dropout_rates_learn = dropout_rates_learn, dropout_rates = dropout_rates, optimizer = optimizer, beta1 = beta1, beta2 = beta2, epsilon = epsilon, lookahead_step = lookahead_step, batch_normalize_data = batch_normalize_data, gamma_bn = gamma_bn, beta_bn = beta_bn,
-                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type, sample_weights = sample_weights)
+                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type, sample_weights = sample_weights, X_validation = X_validation, y_validation = y_validation)
     if (FirstRunDESONN$loss_status == 'exceeds_10000') {
         next
     }

@@ -1028,7 +1028,7 @@ predict = function(Rdata, weights, biases, activation_functions) {
   
   return(list(predicted_output = output, prediction_time = prediction_time))
 },# Method for training the SONN with L2 regularization
-train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights) {
+train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation) {
   
   # Initialize learning rate scheduler
   # lr_scheduler <- function(epoch, initial_lr = lr) {
@@ -1068,25 +1068,24 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   optimizer_params_weights <- vector("list", self$num_layers)
   optimizer_params_biases <- vector("list", self$num_layers)
   
-
-  
+  best_val_acc <- -Inf
+  best_val_epoch <- NA
+  best_train_acc <- -Inf
+  best_epoch <- NA
+  val_accuracy_log <- c()
+  train_accuracy_log <- c()
+  if (train) {
   for (epoch in 1:epoch_in_list) {
-    # lr <- lr_scheduler(epoch, initial_lr = 0.01, decay_rate = 0.15, decay_epoch = 10)
-
-    # lr <- lr_scheduler(epoch)
+    lr <- lr_scheduler(epoch)
     
     # optional: log current lr
     cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
-    # lr <- lr_scheduler(i, initial_lr = lr)
-    #print(paste("Epoch:", epoch))
+
     num_epochs_check <<- num_epochs
     
-    # Run forward pass using centralized logic
     # start_time <- Sys.time()
     
-
-    
-    
+    # Train model and get predictions
     learn_result <- self$learn(
       Rdata = Rdata,
       labels = labels,
@@ -1096,12 +1095,26 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       sample_weights = sample_weights
     )
     
+    # Compute training accuracy from learn() predictions
+    probs_train <- learn_result$learn_output
+    binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
+    train_accuracy <- mean(binary_preds_train == labels, na.rm = TRUE)
+    train_accuracy_log <- c(train_accuracy_log, train_accuracy)
     
+    # Track best training accuracy and epoch
+    if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
+      best_train_acc <- train_accuracy
+      best_epoch_train <- epoch
+    }
+    
+    # Print current epoch training accuracy
+    cat(sprintf("Epoch %d | Training Accuracy: %.2f%%\n", epoch, 100 * train_accuracy))
+    
+    
+
     
     predicted_output_train_reg <- learn_result
     predicted_output_train_reg_prediction_time <- learn_result$learn_time
-    
-    
     
     # predicted_output_train_reg_prediction_time <- Sys.time() - start_time
     
@@ -1248,10 +1261,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       }
     }
     
-    
 
-    
-    
     # Record the loss for this epoch
     # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
     predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$predicted_output
@@ -1270,19 +1280,11 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     )
     
     
-    
-    
-    
-
-    
-    
     # Initialize records and optimizer parameters if ML_NN is TRUE
     if (self$ML_NN) {
       weights_record <- vector("list", self$num_layers)
       biases_record <- vector("list", self$num_layers)
     }
-    
-
     
     # Update weights
     if (update_weights) {
@@ -2071,7 +2073,6 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       weights_record <- as.matrix(self$weights)
     }
     
-
     # Update biases
     if (update_biases) {
       if (self$ML_NN) {
@@ -2756,52 +2757,79 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       biases_record <- as.matrix(self$biases)
     }
     
-    # assign("final_weights_record", weights_record, envir = .GlobalEnv)
-    # assign("final_biases_record", biases_record, envir = .GlobalEnv)
 
+
+      
+      predicted_output_val <- self$predict(Rdata = X_validation,
+                                           weights = weights_record,
+                                           biases = biases_record,
+                                           activation_functions = activation_functions)
+      
+      probs_val <- predicted_output_val$predicted_output
+      
+      # Debug: Check predicted_output
+      cat("Debug: length(probs_val) =", length(probs_val), "\n")
+      if (length(probs_val) == 0) {
+        stop("predicted_output is empty — check your predict() output")
+      }
+      
+      # Debug: Check labels alignment
+      cat("Debug: length(y_validation) =", length(y_validation), "\n")
+      if (length(probs_val) != length(y_validation)) {
+        stop(paste("Length mismatch: probs =", length(probs_val), ", y_validation =", length(y_validation)))
+      }
+      
+      # Binary thresholding
+      binary_preds_val <- ifelse(probs_val >= 0.5, 1, 0)
+      
+      # Calculate validation accuracy
+      val_accuracy <- mean(binary_preds_val == y_validation, na.rm = TRUE)
+      
+      # Initialize validation accuracy log if not already
+      if (!exists("val_accuracy_log")) val_accuracy_log <- c()
+      val_accuracy_log <- c(val_accuracy_log, val_accuracy)
+      
+      if (!exists("best_val_acc") || (!is.na(val_accuracy) && val_accuracy > best_val_acc)) {
+        best_val_acc <- val_accuracy
+        best_val_epoch <- epoch
+        
+        # Save best model
+        if (self$ML_NN) {
+          best_weights <- lapply(self$weights, function(w) as.matrix(w))
+          best_biases  <- lapply(self$biases,  function(b) as.matrix(b))
+        } else {
+          best_weights <- as.matrix(self$weights)
+          best_biases  <- as.matrix(self$biases)
+        }
+        
+
+        assign("final_weights_record", best_weights, envir = .GlobalEnv)
+        assign("final_biases_record", best_biases, envir = .GlobalEnv)
+        
+        cat("New best model saved at epoch", epoch, "| Val Acc:", round(100 * val_accuracy, 2), "%\n")
+      }
+      
+      
     
-    predicted_output_train_reg <- self$predict(Rdata, weights = final_weights_record, biases = final_biases_record, activation_functions)
-    probs_train <- predicted_output_train_reg$predicted_output
-    # 🔒 Debug: Check predicted_output
-    cat("Debug: length(probs_train) =", length(probs_train), "\n")
-    if (length(probs_train) == 0) {
-      stop("learn_result$predicted_output is empty — check your learn() output")
-    }
-    
-    # 🔒 Debug: Check labels alignment
-    cat("Debug: length(labels) =", length(labels), "\n")
-    if (length(probs_train) != length(labels)) {
-      stop(paste("Length mismatch: probs =", length(probs_train), ", labels =", length(labels)))
-    }
-    
-    # Binary thresholding
-    binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
-    
-    # Calculate training accuracy
-    train_accuracy <- mean(binary_preds_train == labels, na.rm = TRUE)
-    
-    # Initialize accuracy log if not already
-    if (!exists("train_accuracy_log")) train_accuracy_log <- c()
-    train_accuracy_log <- c(train_accuracy_log, train_accuracy)
-    
-    # Track best training accuracy
-    if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
-      best_train_acc <- train_accuracy
-      best_epoch <- epoch
-    }
     
     
-  }                
-  cat("✅ Best Epoch (training accuracy):", best_epoch, "\n")
-  cat("📈 Best Training Accuracy:", round(100 * best_train_acc, 2), "%\n")
+  }            
+  cat(sprintf("\nBest Training Accuracy: %.2f%% at Epoch %d\n", 100 * best_train_acc, best_epoch_train))
+    
+    
+  cat("Best Epoch (validation accuracy):", best_val_epoch, "\n")
+  cat("Best Validation Accuracy:", round(100 * best_val_acc, 2), "%\n")
   
-  # Convert weights_record and biases_record to matrices if necessary
-  # weights_record <- lapply(weights_record, as.matrix)
-  # biases_record <- lapply(biases_record, as.matrix)
-  
+  }else {predicted_output_train_reg_prediction_time <- NULL
+  weights_record <- NULL
+  biases_record <- NULL
+  dim_hidden_layers <- NULL}
+  if (!train) {
   
   predicted_output_train_reg <- self$predict(Rdata, weights = final_weights_record, biases = final_biases_record, activation_functions)
   
+  }
+  if (train) {
   if (self$ML_NN) {
     for (layer in 1:self$num_layers) {
       cat(sprintf("Layer %d weights summary:\n", layer))
@@ -2817,7 +2845,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     cat("Single-layer biases summary:\n")
     print(summary(as.vector(biases_record)))
   }
-  
+  }
   
   
   # Dynamic assignment of weights and biases records
@@ -3217,7 +3245,7 @@ calculate_batch_size = function(data_size, max_batch_size = 512, min_batch_size 
     },
     
     
-train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights) {
+train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3327,7 +3355,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             predicted_outputAndTime <- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation
               ))) #<<-
 
             # --- PATCH: If predicted_output_l2 is missing, construct it manually ---
@@ -3748,7 +3776,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
       #     if (learnOnlyTrainingRun == FALSE) {
       #       predicted_outputAndTime <- suppressMessages(invisible(
       #         self$ensemble[[i]]$train_with_l2_regularization(
-      #           Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights
+      #           Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation
       #         ))) #<<-
       #       
       #       calculate_accuracy <- function(predictions, actual_labels) {
@@ -5692,7 +5720,7 @@ evaluate_classification_metrics <- function(preds, labels) {
 
 
 
-lr_scheduler <- function(epoch, initial_lr = 0.1, decay_rate = 0.5, decay_epoch = 45, min_lr = 1e-5) {
+lr_scheduler <- function(epoch, initial_lr = 0.1, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-5) {
   decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
   return(max(min_lr, decayed_lr))
 }
