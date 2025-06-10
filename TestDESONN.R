@@ -69,33 +69,33 @@ function(test1){
 # # Define parameters
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
-lookahead_step <- 10
+lookahead_step <- 1
 batch_normalize_data <- TRUE
 shuffle_bn <- FALSE
-gamma_bn <- 1
-beta_bn <- 1
+gamma_bn <- .1
+beta_bn <- .1
 epsilon_bn <- 1e-12  # Increase for numerical stability
-momentum_bn <- 1.9  # Improved convergence
+momentum_bn <- 5 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.9 # Slightly lower for better adaptabilit
-lr <- 0.5
-lambda <- 0.1
+lr <- 0.15
+lambda <- .0001
 num_epochs <- 90
-custom_scale <- .105
+custom_scale <- .05
 # epsilon <- 1e-5
 # ML_NN <- TRUE
 ML_NN <- TRUE
 train <- TRUE
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 8, 12)
+hidden_sizes <- c(32, 64, 12)
 
 #, 1, 1, 10) #,2,1,, 1)
-activation_functions <- list(leaky_relu , NULL, relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(selu , NULL, leaky_relu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(leaky_relu , NULL, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
-epsilon <- 1e-12
+activation_functions_learn <- list(selu , NULL, leaky_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+epsilon <- 1e-8
 loss_type <- "CategoricalCrossEntropy" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
@@ -143,50 +143,68 @@ if(!ML_NN) {
   N <- input_size + sum(hidden_sizes) + output_size
 }
 
-# Add a binary flag for 'deceptively healthy' patients
-Rdata$deceptively_healthy <- ifelse(
-  Rdata$serum_creatinine < quantile(Rdata$serum_creatinine, 0.25) &
-    Rdata$age < quantile(Rdata$age, 0.25) &
-    Rdata$ejection_fraction > quantile(Rdata$ejection_fraction, 0.75),
+
+library(readxl)
+
+# Load file
+Rdata_predictions <- read_excel("Rdata_predictions.xlsx", sheet = "Rdata_Predictions")
+
+# Deceptively healthy flag
+Rdata_predictions$deceptively_healthy <- ifelse(
+  Rdata_predictions$serum_creatinine < quantile(Rdata_predictions$serum_creatinine, 0.10, na.rm = TRUE) &
+    Rdata_predictions$age < quantile(Rdata_predictions$age, 0.15, na.rm = TRUE) &
+    Rdata_predictions$creatinine_phosphokinase < quantile(Rdata_predictions$creatinine_phosphokinase, 0.20, na.rm = TRUE),
   1, 0
 )
 
-# library(readxl)
-# Rdata_predictions <- read_excel("Rdata_predictions.xlsx", sheet = "Rdata_Predictions")  # or read.csv("...")
-# 
-# # Calculate absolute error from current predictions
-# errors <- abs(probs - labels)
-# 
-# # Safe base weights from training set
-# base_weights <- rep(1, length(labels))
-# 
-# # Use the training Rdata, not Rdata_predictions
-# if (!"deceptively_healthy" %in% names(Rdata)) {
-#   stop("Column 'deceptively_healthy' not found in Rdata")
-# }
-# 
-# # Domain rule: reduce weight for deceptive healthy class
-# base_weights[which(labels == 0 & Rdata$deceptively_healthy == 1)] <- 0.5
-# 
-# # Boost minority class 1 samples lightly
-# base_weights[labels == 1] <- base_weights[labels == 1] * 1.2
-# 
-# # Blend and clip
-# raw_weights <- base_weights * errors
-# raw_weights <- pmin(pmax(raw_weights, 0.1), 2.5)
-# 
-# # Final adaptive sample weights
-# sample_weights <- 0.7 * base_weights + 0.3 * raw_weights
-# 
-# # Normalize to mean = 1 (avoid division by 0)
-# mean_sw <- mean(sample_weights)
-# if (is.na(mean_sw) || mean_sw == 0) stop("Sample weights mean is zero or NA — check your weights")
-# sample_weights <- sample_weights / mean_sw
-# 
-# # Sanity check
-# if (length(sample_weights) != length(labels)) {
-#   stop(paste("Mismatch: sample_weights =", length(sample_weights), "labels =", length(labels)))
-# }
+
+
+# Extract vectors
+probs            <- suppressWarnings(as.numeric(Rdata_predictions[[15]][1:800]))
+labels           <- suppressWarnings(as.numeric(Rdata_predictions[[13]][1:800]))
+deceptive_flags  <- suppressWarnings(as.numeric(Rdata_predictions$deceptively_healthy[1:800]))
+risky_flags      <- suppressWarnings(as.numeric(Rdata_predictions$risky[1:800]))  # <- You must have this column!
+
+# NA checks
+check_na <- function(vec, name) {
+  if (any(is.na(vec))) {
+    cat(paste0("❌ NA in '", name, "' at Excel rows:\n"))
+    print(which(is.na(vec)) + 1)
+    stop(paste("Fix NA in", name))
+  }
+}
+check_na(probs, "probs")
+check_na(labels, "labels")
+check_na(deceptive_flags, "deceptive_flags")
+check_na(risky_flags, "risky")
+
+# Error vector
+errors <- abs(probs - labels)
+
+# Base weights
+base_weights <- rep(1, length(labels))
+
+# 👇 Apply rule-based scaling
+# Boost deaths overall
+base_weights[labels == 1] <- base_weights[labels == 1] * 2
+
+# Strong boost for risky deaths
+base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(12) *2
+
+# Optional: boost deceptive healthy deaths (the hard cases)
+base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 5.8
+
+
+# Blend with error
+raw_weights <- base_weights * errors
+raw_weights <- pmin(pmax(raw_weights, 0.1), 2.5)
+
+# Final adaptive weights
+sample_weights <- 0.7 * base_weights + 0.3 * raw_weights
+sample_weights <- sample_weights / mean(sample_weights)
+
+stopifnot(length(sample_weights) == length(labels))
+cat("✅ Sample weights created with 'risky' boost. Mean:", round(mean(sample_weights), 4), "\n")
 sample_weights <- NULL
 
 # Split the data into features (X) and target (y)

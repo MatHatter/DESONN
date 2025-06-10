@@ -807,7 +807,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
                            "tanh" = 10,
                            "softmax" = 15,
                            "relu" = 100,
-                           "leaky_relu" = 100,
+                           "leaky_relu" = 200,
                            100 # Default fallback
       )
       
@@ -818,7 +818,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       }
       Z <- pmin(pmax(Z, -clip_limit), clip_limit)
       
-      Z <- Z / 4.0
+      Z <- Z  / 4
       
       
       cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
@@ -942,7 +942,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
                          "tanh" = 10,
                          "softmax" = 15,
                          "relu" = 100,
-                         "leaky_relu" = 100,
+                         "leaky_relu" = 200,
                          100 # Default fallback
     )
     
@@ -953,7 +953,7 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
     }
     Z <- pmin(pmax(Z, -clip_limit), clip_limit)
     
-    Z <- Z / 4.0
+    Z <- Z  / 4
     
     
     cat("[Debug] SL NN : Z summary AFTER clipping:\n")
@@ -1084,7 +1084,7 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
     num_epochs_check <<- num_epochs
     
     # start_time <- Sys.time()
-    
+
     # Train model and get predictions
     learn_result <- self$learn(
       Rdata = Rdata,
@@ -2806,6 +2806,9 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
         assign("final_weights_record", best_weights, envir = .GlobalEnv)
         assign("final_biases_record", best_biases, envir = .GlobalEnv)
         
+        assign("best_val_probs", probs_val, envir = .GlobalEnv)
+        assign("best_val_labels", y_validation, envir = .GlobalEnv)
+        
         cat("New best model saved at epoch", epoch, "| Val Acc:", round(100 * val_accuracy, 2), "%\n")
       }
       
@@ -3396,11 +3399,14 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
               print(str(predicted_outputAndTime$predicted_output_l2$predicted_output))
             }
             
-            probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
+            # probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
             # binary_preds <- probs
             # binary_preds <- ifelse(probs >= 0.5, 1, 0)
             # binary_preds <- ifelse(probs >= 0.1, 1, 0)
-            
+            if(train){
+              probs <- best_val_probs
+              labels <- best_val_labels
+            }
             
             # === Auto-tune threshold based on F1 ===
             # threshold_result <- tune_threshold(probs, labels)
@@ -3446,7 +3452,7 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             
             
             # === Combine Full Rdata, Labels, Predictions ===
-            Rdata_df <- as.data.frame(Rdata)
+            Rdata_df <- as.data.frame(X_validation)
             Rdata_with_labels <- cbind(Rdata_df, Label = labels_flat)
             Rdata_predictions <- Rdata_with_labels %>%
               mutate(
@@ -3477,11 +3483,11 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             # === Generate Metrics Interpretation ===
             if (!is.na(accuracy) && !is.na(metrics$F1) && accuracy >= 0.93 && metrics$F1 >= 0.89) {
               commentary_metrics <- "Excellent performance: model is highly accurate and balanced."
-            } else if (!is.na(metrics$Precision) && !is.na(metrics$Recall) &&
-                       metrics$Precision < 0.8 && metrics$Recall > 0.9) {
+            } else if (!is.na(metrics$precision) && !is.na(metrics$recall) &&
+                       metrics$precision < 0.8 && metrics$recall > 0.9) {
               commentary_metrics <- "High recall but lower precision — model is identifying positives well, but may have false alarms."
-            } else if (!is.na(metrics$Recall) && !is.na(metrics$Precision) &&
-                       metrics$Recall < 0.8 && metrics$Precision > 0.9) {
+            } else if (!is.na(metrics$recall) && !is.na(metrics$precision) &&
+                       metrics$recall < 0.8 && metrics$precision > 0.9) {
               commentary_metrics <- "High precision but lower recall — model is conservative, may miss true positives."
             } else {
               commentary_metrics <- "Moderate performance: review threshold or consider adding complexity to model."
