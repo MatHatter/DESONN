@@ -766,12 +766,14 @@ learn = function(Rdata, labels, lr, activation_functions_learn, dropout_rates_le
       weights_matrix <- as.matrix(self$weights[[layer]])
       bias_vec <- as.numeric(unlist(self$biases[[layer]]))
       input_data <- if (layer == 1) input_matrix else hidden_outputs[[layer - 1]]
+      input_data <- as.matrix(input_data)
       input_rows <- nrow(input_data)
       weights_rows <- nrow(weights_matrix)
       weights_cols <- ncol(weights_matrix)
       
       cat(sprintf("[Debug] Layer %d : input dim = %d x %d | weights dim = %d x %d\n",
                   layer, input_rows, ncol(input_data), weights_rows, weights_cols))
+      cat(sprintf("[Debug] Layer %d : class = %s | dim = %s\n", layer, class(input_data), paste(dim(input_data), collapse = " x ")))
       
       if (ncol(input_data) != weights_rows) {
         stop(sprintf("Layer %d: input cols (%d) do not match weights rows (%d)",
@@ -5310,8 +5312,14 @@ sigmoid_derivative <- function(x) {
 }
 
 hard_sigmoid_derivative <- function(x) {
-  return(ifelse(x > -2.5 & x < 2.5, 0.2, 0))
+  x <- as.matrix(x)
+  if (is.null(dim(x))) dim(x) <- c(length(x), 1)  # Force matrix shape if needed
+  deriv <- matrix(0, nrow = nrow(x), ncol = ncol(x))
+  deriv[which(x > -2.5 & x < 2.5, arr.ind = TRUE)] <- 0.2
+  return(deriv)
 }
+
+
 
 swish_derivative <- function(x) {
   s <- 1 / (1 + exp(-x))  # sigmoid(x)
@@ -5521,10 +5529,13 @@ sigmoid <- function(x) {
 attr(sigmoid, "name") <- "sigmoid"
 
 hard_sigmoid <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return(pmax(0, pmin(1, 0.2 * x + 0.5)))
+  x <- as.matrix(x)
+  out <- pmax(0, pmin(1, 0.2 * x + 0.5))
+  dim(out) <- dim(x)  # ✅ Preserve shape no matter what
+  return(out)
 }
 attr(hard_sigmoid, "name") <- "hard_sigmoid"
+
 
 swish <- function(x) {
   x <- as.matrix(x); dim(x) <- dim(x)

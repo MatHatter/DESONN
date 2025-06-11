@@ -75,7 +75,7 @@ shuffle_bn <- FALSE
 gamma_bn <- .1
 beta_bn <- .1
 epsilon_bn <- 1e-12  # Increase for numerical stability
-momentum_bn <- 5 # Improved convergence
+momentum_bn <- 50 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.9 # Slightly lower for better adaptabilit
@@ -95,7 +95,7 @@ activation_functions <- list(selu , NULL, leaky_relu, sigmoid) #hidden layers + 
 
 
 activation_functions_learn <- list(selu , NULL, leaky_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
-epsilon <- 1e-8
+epsilon <- 1e-6
 loss_type <- "CategoricalCrossEntropy" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 # activation_functions_learn <- list(NULL, "sigmoid", NULL, "sigmoid", NULL)
 # dropout_rates <- c(0.1,0.2,0.3)
@@ -251,8 +251,8 @@ y_train <- y[train_indices, ]
 X_validation <- X[validation_indices, ]
 y_validation <- y[validation_indices, ]
 
-# X_test <- X[test_indices, ]
-# y_test <- y[test_indices, ]
+X_test <- X[test_indices, ]
+y_test <- y[test_indices, ]
 
 # ===== APPLY LOG TRANSFORMATION =====
 # Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
