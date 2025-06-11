@@ -5737,7 +5737,7 @@ evaluate_classification_metrics <- function(preds, labels) {
 
 
 
-lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-7) {
+lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-5) {
   decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
   return(max(min_lr, decayed_lr))
 }

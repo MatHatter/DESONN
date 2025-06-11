@@ -192,7 +192,7 @@ base_weights[labels == 1] <- base_weights[labels == 1] * 2
 base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(12) *2
 
 # Optional: boost deceptive healthy deaths (the hard cases)
-base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 5.8
+base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 8
 
 
 # Blend with error
@@ -200,7 +200,7 @@ raw_weights <- base_weights * errors
 raw_weights <- pmin(pmax(raw_weights, 0.1), 2.5)
 
 # Final adaptive weights
-sample_weights <- 0.7 * base_weights + 0.3 * raw_weights
+sample_weights <- 0.8 * base_weights + 0.2 * raw_weights
 sample_weights <- sample_weights / mean(sample_weights)
 
 stopifnot(length(sample_weights) == length(labels))
@@ -352,7 +352,7 @@ metric_name <- 'MSE'
 nruns <- 5
 verbose <<- FALSE
 hyperparameter_grid_setup <- TRUE
-reg_type = "L1_L2" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
+reg_type = "Max_Norm" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
 # input_size <- 13 # This should match the actual number of features in your data
 # hidden_size <- 2
