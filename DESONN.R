@@ -1078,11 +1078,13 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   train_accuracy_log <- c()
   if (train) {
   for (epoch in 1:epoch_in_list) {
+    
     lr <- lr_scheduler(epoch)
     
-    # optional: log current lr
-    cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
 
+    
+    cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
+    
     num_epochs_check <<- num_epochs
     
     # start_time <- Sys.time()
@@ -1199,7 +1201,14 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
             norm_weight <- sqrt(sum(weights_layer^2, na.rm = TRUE))
             reg_loss <- self$lambda * ifelse(norm_weight > max_norm, 1, 0)
             
-          } else if (reg_type == "Sparse_Bayesian") {
+          }
+          else if (reg_type == "Orthogonality") {
+            WtW <- t(weights_layer) %*% weights_layer
+            I <- diag(ncol(WtW))
+            reg_loss <- self$lambda * sum((WtW - I)^2)
+          }
+          
+          else if (reg_type == "Sparse_Bayesian") {
             stop("Sparse Bayesian Learning is not implemented in this code.")
             
           } else {
@@ -1250,6 +1259,12 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
           max_norm <- 1.0
           norm_weight <- sqrt(sum(weights_layer^2, na.rm = TRUE))
           reg_loss_total <- self$lambda * ifelse(norm_weight > max_norm, 1, 0)
+          
+        } 
+        else if (reg_type == "Orthogonality") {
+          WtW <- t(weights_layer) %*% weights_layer
+          I <- diag(ncol(WtW))
+          reg_loss_total <- self$lambda * sum((WtW - I)^2)
           
         } else if (reg_type == "Sparse_Bayesian") {
           stop("Sparse Bayesian Learning is not implemented in this code.")
@@ -3410,6 +3425,8 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
               labels <- best_val_labels
             }
             
+
+            
             # === Auto-tune threshold based on F1 ===
             # threshold_result <- tune_threshold(probs, labels)
             threshold_result <- tune_threshold_accuracy(probs, labels)
@@ -3469,6 +3486,50 @@ train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_
             library(ggplot2)
             library(dplyr)
             library(tidyr)
+            
+            library(dplyr)
+            library(ggplot2)
+            
+            # Rename safely
+            Rdata_predictions <- Rdata_predictions %>%
+              rename(prob = Predicted_Prob, label = Label)
+            
+            # Ensure numeric 0 or 1
+            Rdata_predictions <- Rdata_predictions %>%
+              mutate(label = as.numeric(label),
+                     label = ifelse(label >= 1, 1, 0))
+            
+            # Create quantile bins
+            Rdata_predictions <- Rdata_predictions %>%
+              mutate(prob_bin = ntile(prob, 10)) %>%
+              group_by(prob_bin) %>%
+              mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
+              ungroup()
+            
+            # Compute observed death rate per bin
+            bin_summary <- Rdata_predictions %>%
+              group_by(prob_bin, bin_mid) %>%
+              summarise(actual_death_rate = mean(label, na.rm = TRUE), .groups = 'drop')
+            
+            # Check results before plotting
+            print(bin_summary)
+            
+            # Plot
+            p <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
+              geom_col(fill = "steelblue") +
+              geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+              labs(title = "Calibration Plot (Corrected)",
+                   x = "Average Predicted Probability",
+                   y = "Observed Death Rate") +
+              theme_minimal()
+            
+            print(p)
+            
+            
+            
+            ggsave("final_calibration_plot.png", plot = p, width = 6, height = 4)
+            
+            
             
             # === Metrics Summary Sheet ===
             metrics_summary <- data.frame(
@@ -5455,7 +5516,9 @@ sigmoid_sharp_derivative <- function(x, temp = 5) {
   return(temp * s * (1 - s))
 }
 
-
+leaky_selu_derivative <- function(x, alpha = 0.01, lambda = 1.0507) {
+  ifelse(x > 0, lambda, lambda * alpha * exp(x))
+}
 
 
 
@@ -5672,8 +5735,11 @@ sigmoid_sharp <- function(x, temp = 5) {
 }
 attr(sigmoid_sharp, "name") <- "sigmoid_sharp"
 
-
-
+leaky_selu <- function(x, alpha = 0.01, lambda = 1.0507) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(ifelse(x > 0, lambda * x, lambda * alpha * (exp(x) - 1)))
+}
+attr(leaky_selu, "name") <- "leaky_selu"
 
 
 tune_threshold <- function(predicted_output, labels) {
@@ -5737,7 +5803,7 @@ evaluate_classification_metrics <- function(preds, labels) {
 
 
 
-lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-5) {
+lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = .5, decay_epoch = 20, min_lr = 1e-6) {
   decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
   return(max(min_lr, decayed_lr))
 }
@@ -6571,11 +6637,6 @@ loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
     predictions <- pmax(pmin(predictions, 1 - epsilon), epsilon)
     loss <- -mean(labels * log(predictions) + (1 - labels) * log(1 - predictions))
     
-  } else if (loss_type == "CategoricalCrossEntropy") {
-    epsilon <- 1e-15
-    predictions <- pmax(pmin(predictions, 1 - epsilon), epsilon)
-    loss <- -mean(rowSums(labels * log(predictions)))
-    
   } else {
     print("Invalid loss type. Choose from 'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'.")
     return(NA)
@@ -6588,9 +6649,9 @@ loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
 
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-#        _     _      _     _      _     _      _     _      _     _      _     _      _     _ $$$$$$$$$$$$$$$$$$$$$$$
-#      (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c) $$$$$$$$$$$$$$$$$$$$$$$
-#      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \   $$$$$$$$$$$$$$$$$$$$$$$
+#     _     _      _     _      _     _      _     _      _     _      _     _      _     _    $$$$$$$$$$$$$$$$$$$$$$$
+#    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)   $$$$$$$$$$$$$$$$$$$$$$$
+#     / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \    $$$$$$$$$$$$$$$$$$$$$$$
 #   __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  $$$$$$$$$$$$$$$$$$$$$$$
 #  (_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._) $$$$$$$$$$$$$$$$$$$$$$$
 #    || M ||      || E ||      || T ||      || R ||      || I ||      || C ||      || S ||     $$$$$$$$$$$$$$$$$$$$$$$

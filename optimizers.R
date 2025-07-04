@@ -6,11 +6,14 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     cat("grads_matrix dim:\n")
     print(dim(grads_matrix))
     
+    # Boost learning rate for output layer
+    layer_boost <- if (layer == self$num_layers) 1 else 1
+    
     # Update optimizer params using Adam
     optimizer_params[[layer]] <- adam_update(
       optimizer_params[[layer]],
       grads = list(grads_matrix),
-      lr = lr,
+      lr = lr * layer_boost,
       beta1 = beta1,
       beta2 = beta2,
       epsilon = epsilon,
