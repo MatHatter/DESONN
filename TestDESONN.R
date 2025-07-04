@@ -90,7 +90,7 @@ train <- TRUE
 # hidden_sizes <- NULL
 hidden_sizes <- c(32, 64, 12)
 
-activation_functions <- list(selu , NULL, leaky_relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(selu , NULL, leaky_selu, sigmoid) #hidden layers + output layer
 
 
 activation_functions_learn <- list(selu , NULL, leaky_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
