@@ -1076,6 +1076,15 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
   best_epoch <- NA
   val_accuracy_log <- c()
   train_accuracy_log <- c()
+  loss_log <- c()
+  learning_rate_log <- c()
+  # Add tracking logs
+  val_loss_log <- c()
+  train_loss_log <- c()
+  mean_output_log <- c()
+  sd_output_log <- c()
+  max_weight_log <- c()
+  
   if (train) {
   for (epoch in 1:epoch_in_list) {
     
@@ -1099,23 +1108,87 @@ train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_ite
       sample_weights = sample_weights
     )
     
-    # Compute training accuracy from learn() predictions
+    # Training prediction and accuracy
     probs_train <- learn_result$learn_output
     binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
     train_accuracy <- mean(binary_preds_train == labels, na.rm = TRUE)
     train_accuracy_log <- c(train_accuracy_log, train_accuracy)
     
-    # Track best training accuracy and epoch
+    # Track best training accuracy
     if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
       best_train_acc <- train_accuracy
       best_epoch_train <- epoch
     }
     
-    # Print current epoch training accuracy
     cat(sprintf("Epoch %d | Training Accuracy: %.2f%%\n", epoch, 100 * train_accuracy))
     
+    predicted_output_train_reg <- learn_result
+    predicted_output_train_reg_prediction_time <- learn_result$learn_time
     
-
+    # Predicted output (use correct output layer)
+    if (self$ML_NN) {
+      predicted_output <- predicted_output_train_reg$hidden_outputs[[self$num_layers]]
+    } else {
+      predicted_output <- predicted_output_train_reg$learn_output
+    }
+    
+    # Output saturation diagnostics
+    mean_output <- mean(predicted_output)
+    sd_output <- sd(predicted_output)
+    cat("Mean Output:", round(mean_output, 4), "| StdDev:", round(sd_output, 4), "\n")
+    mean_output_log <- c(mean_output_log, mean_output)
+    sd_output_log <- c(sd_output_log, sd_output)
+    
+    # Optional: compute and store loss
+    train_loss <- mean((predicted_output - labels)^2, na.rm = TRUE)
+    train_loss_log <- c(train_loss_log, train_loss)
+    
+    # Weight explosion diagnostics
+    if (exists("weights_record")) {
+      max_weight <- max(sapply(weights_record, function(w) max(abs(w))))
+      cat("Max Weight Abs:", round(max_weight, 4), "\n")
+    } else {
+      max_weight <- NA
+    }
+    max_weight_log <- c(max_weight_log, max_weight)
+    
+  
+    
+    # Plot training accuracy
+    df <- data.frame(
+      Epoch = 1:length(train_accuracy_log),
+      Accuracy = train_accuracy_log,
+      Loss = train_loss_log,
+      MeanOutput = mean_output_log,
+      StdOutput = sd_output_log,
+      MaxWeight = max_weight_log
+    )
+    
+    # Plot 1: Accuracy & Loss
+    p1 <- ggplot(df, aes(x = Epoch)) +
+      geom_line(aes(y = Accuracy), color = "blue") +
+      geom_line(aes(y = Loss), color = "red") +
+      labs(title = "Training Accuracy (blue) & Loss (red)", y = "Value") +
+      theme_minimal()
+    
+    # Plot 2: Output saturation
+    p2 <- ggplot(df, aes(x = Epoch)) +
+      geom_line(aes(y = MeanOutput), color = "green") +
+      geom_line(aes(y = StdOutput), color = "orange") +
+      labs(title = "Output Mean (green) & Std Dev (orange)", y = "Output Value") +
+      theme_minimal()
+    
+    # Plot 3: Max Weight
+    p3 <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
+      geom_line(color = "purple") +
+      labs(title = "Max Weight Magnitude Over Time", y = "Max |Weight|") +
+      theme_minimal()
+    
+    print(p1)
+    print(p2)
+    print(p3)
+    
+  
     
     predicted_output_train_reg <- learn_result
     predicted_output_train_reg_prediction_time <- learn_result$learn_time
@@ -5803,7 +5876,7 @@ evaluate_classification_metrics <- function(preds, labels) {
 
 
 
-lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = .5, decay_epoch = 20, min_lr = 1e-6) {
+lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-6) {
   decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
   return(max(min_lr, decayed_lr))
 }

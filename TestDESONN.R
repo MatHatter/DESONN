@@ -69,35 +69,35 @@ function(test1){
 # # Define parameters
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
-lookahead_step <- 1000
+lookahead_step <- 20
 batch_normalize_data <- TRUE
 shuffle_bn <- FALSE
-gamma_bn <- .1
-beta_bn <- .1
-epsilon_bn <- 1e-12  # Increase for numerical stability
-momentum_bn <- 50 # Improved convergence
+gamma_bn <- .6
+beta_bn <- .6
+epsilon_bn <- 1e-6  # Increase for numerical stability
+momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.9 # Slightly lower for better adaptabilit
-lr <- 0.15
-lambda <- .0001
-num_epochs <- 92
+lr <- 0.3
+lambda <- .00001
+num_epochs <- 45
 custom_scale <- .05
 
 # ML_NN <- TRUE
 ML_NN <- TRUE
 train <- TRUE
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 64, 12)
+hidden_sizes <- c(64, 12)
 
-activation_functions <- list(selu , NULL, leaky_selu, sigmoid) #hidden layers + output layer
+activation_functions <- list(selu, leaky_selu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(selu , NULL, leaky_relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(selu, leaky_selu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-6
 loss_type <- "MSE" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
-dropout_rates <- list(0.2, 0.2) # NULL for output layer
+dropout_rates <- list(0.2) # NULL for output layer
 
 dropout_rates_learn <- dropout_rates
 
