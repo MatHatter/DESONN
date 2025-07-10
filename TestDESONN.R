@@ -78,7 +78,7 @@ epsilon_bn <- 1e-6  # Increase for numerical stability
 momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
-beta2 <- 0.9 # Slightly lower for better adaptabilit
+beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- 0.3
 lambda <- .00001
 num_epochs <- 45
