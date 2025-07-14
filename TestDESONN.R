@@ -79,8 +79,8 @@ momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
-lr <- 0.3
-lambda <- .00001
+lr <- .3
+lambda <- .000011
 num_epochs <- 45
 custom_scale <- .05
 
@@ -176,10 +176,10 @@ base_weights <- rep(1, length(labels))
 base_weights[labels == 1] <- base_weights[labels == 1] * 2
 
 # Strong boost for risky deaths
-base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(12) *2
+base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(12) * 3
 
 # Optional: boost deceptive healthy deaths (the hard cases)
-base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 8
+base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 2
 
 
 # Blend with error
