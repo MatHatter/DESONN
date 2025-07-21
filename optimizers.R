@@ -87,33 +87,61 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
 
     
   else if (optimizer == "rmsprop") {
-    # Update weights using RMSprop optimizer
-    optimizer_params_weights[[layer]] <- rmsprop_update(optimizer_params_weights[[layer]], grads_matrix, lr, beta2, epsilon)
+    cat(">> Optimizer = rmsprop\n")
+    cat("Layer:", layer, "\n")
+    cat("grads_matrix dim:\n")
+    print(dim(grads_matrix))
     
-    # Accessing the returned values
-    updated_weights_update <- optimizer_params_weights[[layer]]$updates
+    # Boost LR for output layer if needed
+    layer_boost <- if (layer == self$num_layers) 1 else 1
     
-    # Convert updated_weights_update to a numeric vector if it's a list
-    if (is.list(updated_weights_update)) {
-      updated_weights_update <- unlist(updated_weights_update)
+    # --- FIX: Make sure grads is a list of 2D matrix ---
+    grads_input <- if (is.list(grads_matrix)) {
+      grads_matrix
+    } else if (is.null(dim(grads_matrix))) {
+      list(matrix(grads_matrix, nrow = 1, ncol = 1))
+    } else if (length(dim(grads_matrix)) == 1) {
+      list(matrix(grads_matrix, nrow = 1))
+    } else {
+      list(grads_matrix)
     }
     
-    # Perform subtraction for weights if dimensions match exactly
-    if (length(updated_weights_update) == prod(dim(self$weights[[layer]]))) {
-      cat("Dimensions match exactly. Performing subtraction.\n")
-      self$weights[[layer]] <- self$weights[[layer]] - matrix(updated_weights_update, nrow = nrow(self$weights[[layer]]), byrow = TRUE)
-    } else if (prod(dim(self$weights[[layer]])) == 1) {
-      # Handle scalar weight updates
-      cat("Handling scalar weight update.\n")
-      update_value <- sum(updated_weights_update)  # Assuming summing the updates is appropriate
-      self$weights[[layer]] <- self$weights[[layer]] - update_value
+    # Update call
+    optimizer_params[[layer]] <- rmsprop_update(
+      optimizer_params[[layer]],
+      grads = grads_input,
+      lr = lr * layer_boost,
+      beta2 = beta2,
+      epsilon = epsilon
+    )
+    
+    update <- optimizer_params[[layer]]$updates
+    update_matrix <- if (is.list(update) && length(update) == 1) update[[1]] else update
+    
+    # --- YOUR DIMENSIONAL HANDLING BLOCK (UNCHANGED) ---
+    if (target == "biases") {
+      if (length(update_matrix) == prod(target_dim)) {
+        updated <- matrix(update_matrix, nrow = target_dim[1], ncol = target_dim[2])
+      } else if (length(update_matrix) == 1) {
+        updated <- matrix(rep(update_matrix, prod(target_dim)), nrow = target_dim[1], ncol = target_dim[2])
+      } else {
+        repeated <- rep(update_matrix, length.out = prod(target_dim))
+        updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2])
+      }
     } else {
-      cat("Dimensions do not match exactly. Adjusting dimensions for subtraction.\n")
-      repeat_times <- ceiling(nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]) / length(updated_weights_update))
-      repeated_updated_weights_update <- rep(updated_weights_update, length.out = nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]))
-      self$weights[[layer]] <- self$weights[[layer]] - matrix(repeated_updated_weights_update, nrow = nrow(self$weights[[layer]]), byrow = TRUE)
+      if (length(update_matrix) == prod(target_dim)) {
+        updated <- matrix(update_matrix, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+      } else if (prod(target_dim) == 1) {
+        updated <- matrix(update_matrix, nrow = 1, ncol = 1)
+      } else {
+        repeated <- rep(update_matrix, length.out = prod(target_dim))
+        updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
+      }
+      clip_threshold <- 5
+      updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
     }
   }
+  
   else if (optimizer == "sgd") {
     # Perform SGD update for the weights
     optimizer_params_weights[[layer]] <- sgd_update(optimizer_params_weights[[layer]], grads_matrix, lr)
