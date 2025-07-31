@@ -79,23 +79,23 @@ momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
-lr <- .3
-lambda <- .000011
-num_epochs <- 45
+lr <- .01
+lambda <- 0.00011
+num_epochs <- 46
 custom_scale <- .05
 
 # ML_NN <- TRUE
 ML_NN <- TRUE
 train <- TRUE
 # hidden_sizes <- NULL
-hidden_sizes <- c(64, 12)
+hidden_sizes <- c(64, 32)
 
-activation_functions <- list(selu, leaky_selu, sigmoid) #hidden layers + output layer
+activation_functions <- list(relu, relu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(selu, leaky_selu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(relu, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-6
-loss_type <- "MSE" #NULL #"MSE" #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
 dropout_rates <- list(0.2) # NULL for output layer
 
@@ -176,18 +176,18 @@ base_weights <- rep(1, length(labels))
 base_weights[labels == 1] <- base_weights[labels == 1] * 2
 
 # Strong boost for risky deaths
-base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(12) * 3
+base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(20) * 4
 
 # Optional: boost deceptive healthy deaths (the hard cases)
-base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 2
+base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 3
 
 
 # Blend with error
 raw_weights <- base_weights * errors
-raw_weights <- pmin(pmax(raw_weights, 0.1), 2.5)
+raw_weights <- pmin(pmax(raw_weights, 0.05), 23)
 
 # Final adaptive weights
-sample_weights <- 0.8 * base_weights + 0.2 * raw_weights
+sample_weights <- 0.6 * base_weights + 0.4 * raw_weights
 sample_weights <- sample_weights / mean(sample_weights)
 
 stopifnot(length(sample_weights) == length(labels))
@@ -215,7 +215,7 @@ numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'pl
 y <- data %>% dplyr::select(DEATH_EVENT)
 colname_y <- colnames(y)
 # Define the number of samples for each set
-set.seed(1)
+set.seed(11)
 total_num_samples <- nrow(data)
 # Define num_samples
 num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
@@ -259,7 +259,7 @@ X_test_scaled <- scale(X_test, center = center, scale = scale_)
 
 # $$$$$$$$$$$$$ Further rescale to prevent exploding activations
 max_val <- max(abs(X_train_scaled))
-if (max_val > 10) {
+if (max_val > 1) {
   Rdata <- Rdata / max_val  # range will be roughly [-1, 1]
 }
 
@@ -356,357 +356,177 @@ results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), 
 # results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
 # Iterate over each row of the hyperparameter grid
 # for (j in 1:nruns) {
-for(j in 1:1){
-  # Initialize global variable
-  increment_loop_flag <- FALSE
-  # for (j in 1:nrow(hyperparameter_grid)) {
-  # for (j in 1:nrow(new_grid)) {
-  # for (j in 1:nrow(new_grid2)) {
+
+plot_robustness <- FALSE
+predict_models <- FALSE
+use_loaded_weights <- FALSE
+saveToDisk <- FALSE
+Run1 <- TRUE
+Run2 <- FALSE
+Run3 <- FALSE
+Run1.1 <- FALSE
+Run1.2 <- FALSE
+# === Step 1: Hyperparameter setup ===
+hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
+results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
+
+if (hyperparameter_grid_setup) {
+  # Define grid of learning rates and regularization values
+  lr_vals <- c(0.3)
+  lambda_vals <- c(0.000028, 0.000011)
+  hyper_grid <- expand.grid(lr = lr_vals, lambda = lambda_vals)
   
-  # Check if the global variable is set
-  if (increment_loop_flag) {
-    # Increment j by 1
-    j <- j + 1
+  # Loop through all combinations
+  for (j in 1:nrow(hyper_grid)) {
+    lr <- hyper_grid$lr[j]
+    lambda <- hyper_grid$lambda[j]
     
-    # Reset the global variable
-    increment_loop_flag <- FALSE
+    # === Initialize DESONN model ===
+    if (ML_NN) {
+      DESONN_model <- DESONN$new(
+        num_networks = num_networks,
+        input_size = input_size,
+        hidden_sizes = hidden_sizes,
+        output_size = output_size,
+        N = N,
+        lambda = lambda,
+        ensemble_number = j,
+        ML_NN = ML_NN,
+        method = init_method,
+        custom_scale = custom_scale
+      )
+    } else {
+      DESONN_model <- DESONN$new(
+        num_networks = num_networks,
+        input_size = input_size,
+        output_size = output_size,
+        N = N,
+        lambda = lambda,
+        ensemble_number = j,
+        ML_NN = ML_NN,
+        method = init_method,
+        custom_scale = custom_scale
+      )
+    }
+    
+    # === Train the model ===
+    run_result <- DESONN_model$train(
+      Rdata = X,
+      labels = y,
+      lr = lr,
+      ensemble_number = j,
+      num_epochs = num_epochs,
+      threshold = threshold,
+      reg_type = reg_type,
+      numeric_columns = numeric_columns,
+      activation_functions_learn = activation_functions_learn,
+      activation_functions = activation_functions,
+      dropout_rates_learn = dropout_rates_learn,
+      dropout_rates = dropout_rates,
+      optimizer = optimizer,
+      beta1 = beta1,
+      beta2 = beta2,
+      epsilon = epsilon,
+      lookahead_step = lookahead_step,
+      batch_normalize_data = batch_normalize_data,
+      gamma_bn = gamma_bn,
+      beta_bn = beta_bn,
+      epsilon_bn = epsilon_bn,
+      momentum_bn = momentum_bn,
+      is_training_bn = is_training_bn,
+      shuffle_bn = shuffle_bn,
+      loss_type = loss_type,
+      sample_weights = sample_weights,
+      X_validation = X_validation,
+      y_validation = y_validation
+    )
+    
+    # === Save result to results table ===
+    results <- rbind(results, data.frame(
+      lr = lr,
+      lambda = lambda,
+      accuracy = run_result$accuracy
+    ))
+    
+    cat("Finished grid run", j, "of", nrow(hyper_grid), "-> Accuracy:", run_result$accuracy, "\n")
   }
   
+} else {
+  # === Manual run with provided lr1 and lambda1 ===
+  lr <- lr1
+  lambda <- lambda
   
-  #     if(loading_ensemble_1_run_ids){
-  #
-  #         # Load the data from the RDS file
-  #         loaded_run_results <- readRDS("run_results_saved_63.rds") #56
-  #
-  #         # Assign each element of the loaded list to individual variables $performance_metric$MSE
-  #         lapply(loaded_run_results, function(result) result$performance_metric$MSE)
-  #
-  #         # Update the run_id for each sublist
-  #         loaded_run_results <- lapply(seq_along(loaded_run_results), function(i) {
-  #             sublist <- loaded_run_results[[i]]
-  #             sublist$run_id <- paste("Ensemble: 1 Model:", i)
-  #             return(sublist)
-  #         })
-  #         for(i in 1:length(loaded_run_results)) { # don't need the ensemble_number from the hyperparameter_grid_setup loop
-  #             loaded_run_results[[i]]$ensemble_number <- 1
-  #         }
-  #         # Assign each updated sublist to individual variables
-  #         official_run_results_1_1 <- loaded_run_results[[1]]
-  #         # official_run_results_1_2 <- loaded_run_results[[2]]
-  #         # official_run_results_1_3 <- loaded_run_results[[3]]
-  #         # official_run_results_1_4 <- loaded_run_results[[4]]
-  #         # official_run_results_1_5 <- loaded_run_results[[5]]
-  # #official is for predicting
-  # official_run_results <- list(
-  #         official_run_results_1_1
-  #         # official_run_results_1_2,
-  #         # official_run_results_1_3,
-  #         # official_run_results_1_4,
-  #         # official_run_results_1_5
-  #     )
-  #
-  #     # Extract optimal_epoch values
-  #     optimal_epochs <- sapply(official_run_results, function(x) x$optimal_epoch)
-  #         loading_ensemble_1_run_ids <- FALSE
-  #     }
-  #
-  #      run_results_1_1 <- official_run_results_1_1
-  # run_results_1_2 <- official_run_results_1_2
-  # run_results_1_3 <- official_run_results_1_3
-  # run_results_1_4 <- official_run_results_1_4
-  # run_results_1_5 <- official_run_results_1_5
-  
-  hyperparameter_grid_setup <- hyperparameter_grid_setup #FALSE means ready for temp
-  
-  if(hyperparameter_grid_setup){
-    # Initialize ensembles list
-    ensembles_hyperparameter_grid <- list()  # Initialize temporary ensemble as an empty list
-    lr1 <- lr #0.0001 #c(0.001, 0.01, 0.1) #0.00001, 0.0001,
-    lambda1 <- lambda #0.01#c(0.01, 0.001, 0.0001, 0.00001) #1, 0.1,// Calculate the factorial of a number using a recursive function
-    hyperparameter_grid <- expand.grid(lr = lr1, lambda = lambda1) %>%
-      mutate_all(~ format(., scientific = FALSE))
-    
-    # Get lr and lambda values for the current row
-    lr <- as.numeric(hyperparameter_grid[j, "lr"])
-    lambda <- as.numeric(hyperparameter_grid[j, "lambda"])
-    print(hyperparameter_grid)
-    
-  }else{
-    # lr <- 0.001
-    # lr <- as.numeric(lr)
-    # lambda <- 0.1
-    # lambda <- as.numeric(lambda)
-    lr <- c(0.00001, 0.0001, 0.001, 0.01, 0.1, 1)
-    lambda <- c(1, 0.1, 0.01, 0.001, 0.0001, 0.00001)
-    hyperparameter_grid <- expand.grid(lr = lr, lambda = lambda) %>%
-      mutate_all(~ format(., scientific = FALSE))
-    lr <- as.numeric(hyperparameter_grid[j, "lr"])
-    lambda <- as.numeric(hyperparameter_grid[j, "lambda"])
-    
-    # Initialize the ensembles list with main_ensemble containing the five lists
-    ensembles <<- list(
-      main_ensemble = list(
-        run_results_1_1),
-      #     run_results_1_2,
-      #     run_results_1_3,
-      #     run_results_1_4,
-      #     run_results_1_5
-      # ),
-      temp_ensemble = list() # Initialize temporary ensemble as an empty list
+  if (ML_NN) {
+    DESONN_model <- DESONN$new(
+      num_networks = num_networks,
+      input_size = input_size,
+      hidden_sizes = hidden_sizes,
+      output_size = output_size,
+      N = N,
+      lambda = lambda,
+      ensemble_number = 1,
+      ML_NN = ML_NN,
+      method = init_method,
+      custom_scale = custom_scale
+    )
+  } else {
+    DESONN_model <- DESONN$new(
+      num_networks = num_networks,
+      input_size = input_size,
+      output_size = output_size,
+      N = N,
+      lambda = lambda,
+      ensemble_number = 1,
+      ML_NN = ML_NN,
+      method = init_method,
+      custom_scale = custom_scale
     )
   }
   
-  #if getting loading the best models, makes sense to
+  run_result <- DESONN_model$train(
+    Rdata = X,
+    labels = y,
+    lr = lr,
+    ensemble_number = 1,
+    num_epochs = num_epochs,
+    threshold = threshold,
+    reg_type = reg_type,
+    numeric_columns = numeric_columns,
+    activation_functions_learn = activation_functions_learn,
+    activation_functions = activation_functions,
+    dropout_rates_learn = dropout_rates_learn,
+    dropout_rates = dropout_rates,
+    optimizer = optimizer,
+    beta1 = beta1,
+    beta2 = beta2,
+    epsilon = epsilon,
+    lookahead_step = lookahead_step,
+    batch_normalize_data = batch_normalize_data,
+    gamma_bn = gamma_bn,
+    beta_bn = beta_bn,
+    epsilon_bn = epsilon_bn,
+    momentum_bn = momentum_bn,
+    is_training_bn = is_training_bn,
+    shuffle_bn = shuffle_bn,
+    loss_type = loss_type,
+    sample_weights = sample_weights,
+    X_validation = X_validation,
+    y_validation = y_validation
+  )
   
-  #Im going to try running grid on weights constant and then run on looking for best metric best and worst ensemble
+  # Save manual run result
+  results <- rbind(results, data.frame(
+    lr = lr,
+    lambda = lambda,
+    accuracy = run_result$accuracy
+  ))
   
-  # run_results_1_1 <- Ensemble_2_model_1
-  # run_results_1_2 <- Ensemble_2_model_2
-  # run_results_1_3 <- Ensemble_2_model_3
-  # run_results_1_4 <- Ensemble_2_model_4
-  # run_results_1_5 <- Ensemble_2_model_5
-  # Initialize a data frame to store the results
-  
-  
-  plot_robustness <- FALSE
-  predict_models <- FALSE
-  use_loaded_weights <- FALSE
-  saveToDisk <- FALSE
-  Run1 <- TRUE
-  Run2 <- FALSE
-  Run3 <- FALSE
-  Run1.1 <- FALSE
-  Run1.2 <- FALSE
-  
-  if (Run1 == TRUE && Run2 == FALSE && Run3 == FALSE && Run1.1 == FALSE && hyperparameter_grid_setup){
-    learnOnlyTrainingRun <- FALSE
-    update_weights <- TRUE
-    update_biases <- TRUE
-    never_ran_flag <- TRUE
-  }else if (Run1 == FALSE && Run2 == TRUE && Run3 == FALSE && Run1.1 == FALSE && hyperparameter_grid_setup){
-    learnOnlyTrainingRun <- FALSE
-    update_weights <- FALSE
-    update_biases <- FALSE
-    never_ran_flag <- FALSE
-    
-  }else if (Run1 == FALSE && Run2 == FALSE && Run3 == TRUE && Run1.1 == FALSE && hyperparameter_grid_setup){
-    learnOnlyTrainingRun <- TRUE
-    update_weights <- FALSE
-    update_biases <- FALSE
-    never_ran_flag <- TRUE
-    
-    #ENSEMBLE LOOPING
-  }else if (Run1 == FALSE && Run2 == FALSE && Run3 == FALSE && Run1.1 == TRUE && !hyperparameter_grid_setup){ #Error in match(x, table, nomatch = 0L) : 'match' requires vector arguments
-    learnOnlyTrainingRun <- FALSE
-    update_weights <- TRUE
-    update_biases <- TRUE
-    never_ran_flag <- FALSE #this is good bc it gets the weights & biases from run_results_1_1 - run_results_1_5
-    
-    #PREDICTING
-  }else if (Run1 == FALSE && Run2 == FALSE && Run3 == FALSE && Run1.2 == TRUE && !hyperparameter_grid_setup && predict_models){
-    learnOnlyTrainingRun <- FALSE
-    update_weights <- FALSE
-    update_biases <- FALSE
-    never_ran_flag <- FALSE
-    predict_models <- predict_models
-  }
-  
-  if(never_ran_flag == FALSE) { #length(my_optimal_epoch_out_vector) > 1
-    cat("________________________________________new_run_", j, "______________________________________________\n", sep = "")
-    
-    if ((!exists("my_optimal_epoch_out_vector") || is.null(my_optimal_epoch_out_vector[[1]]) || is.na(my_optimal_epoch_out_vector[[1]])) && hyperparameter_grid_setup  && !use_loaded_weights) {
-      my_optimal_epoch_out_vector <- vector("list", length(1:num_networks))  # Initialize your list
-      my_optimal_epoch_out_vector <- num_epochs_check
-    }else if (!exists("my_optimal_epoch_out_vector") && use_loaded_weights) {
-      my_optimal_epoch_out_vector <- vector("list", length(1:num_networks))  # Initialize your list
-      # Extract optimal_epoch values
-      my_optimal_epoch_out_vector <- optimal_epochs
-      #if you have stored weights/biases/metadata you want to load from run_results_1_1 - run_results_1_5
-    }
-    
-    
-    if(hyperparameter_grid_setup){
-      #num_epochs <- max(unlist(my_optimal_epoch_out_vector)) + 7
-      num_epochs <- my_optimal_epoch_out_vector #<<-
-      #num_epochs_max <<- max(unlist(my_optimal_epoch_out_vector))
-    }else{
-      num_epochs <- 10 #<<-
-    }
-    
-    if(ML_NN){
-      DESONN_model_2 <- DESONN$new(num_networks = num_networks, input_size = input_size, hidden_sizes = hidden_sizes, output_size = output_size, N = N, lambda = lambda, ensemble_number = ensemble_number, ML_NN = ML_NN, method = init_method, custom_scale = custom_scale)
-    }else{
-      DESONN_model_2 <- DESONN$new(num_networks = num_networks, input_size = input_size, output_size = output_size, N = N, lambda = lambda, ensemble_number = ensemble_number, ML_NN = ML_NN, method = init_method, custom_scale = custom_scale)
-    }
-    DESONN_model <- DESONN_model_2 #<<-
-    SecondRunDESONN <- DESONN_model_2$train(X, y, lr, ensemble_number = j, num_epochs, threshold, reg_type, numeric_columns = numeric_columns, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions,
-                                            dropout_rates_learn = dropout_rates_learn, dropout_rates = dropout_rates, optimizer = optimizer, beta1 = beta1, beta2 = beta2, epsilon = epsilon, lookahead_step = lookahead_step, batch_normalize_data = batch_normalize_data, gamma_bn = gamma_bn, beta_bn = beta_bn,
-                                            epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type)
-    if (SecondRunDESONN$loss_status == 'exceeds_10000') {
-      next
-    }
-    
-    
-    
-    # if(!predict_models){
-    #     if(hyperparameter_grid_setup){
-    #         ensembles_hyperparameter_grid[[j]] <- results_list
-    #     }else {
-    #         print("___________________________PRUNE_ADD________________________________")
-    #         prune_result <- prune_network_from_ensemble(ensembles, target_metric_name_worst) #<<-
-    #         main_ensemble_copy_return <- add_network_to_ensemble(prune_result$updated_ensemble, target_metric_name_best, prune_result$removed_network, ensemble_number = j, prune_result$worst_model_index) #<<-
-    #         print("___________________________PRUNE_ADD_end____________________________")
-    # 
-    #         # Initialize lists to store run_ids and MSE performance metrics
-    #         run_ids <- list()
-    #         mse_metrics <- list()
-    # 
-    #         # Loop over each ensemble
-    #         for (i in seq_along(ensembles$main_ensemble)) {
-    #             # Check if best_model_metadata exists in the i-th ensemble
-    #             if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-    #                 # Extract run_id and MSE performance metric from best_model_metadata
-    #                 run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
-    #                 mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
-    #             } else {
-    #                 # Extract run_id and MSE performance metric from the i-th ensemble
-    #                 run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
-    #                 mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
-    #             }
-    #         }
-    # 
-    #         # Convert lists to dataframe
-    #         results_df <- data.frame(run_id = unlist(run_ids), mse_metric = unlist(mse_metrics))
-    # 
-    #         # Print the dataframe
-    #         print("___________________________results_df________________________________")
-    #         print(results_df)
-    #         print("___________________________results_df_end____________________________")
-    # 
-    #         # Save the dataframe as an RDS file
-    #         saveRDS(results_df, file = "results_df.rds")
-    # 
-    #         # After finishing the inner loop, update the temporary ensemble (second list) in ensembles
-    #         ensembles[[2]] <- ensembles$temp_ensemble
-    #     }
-    # }else{
-    #     # Initialize lists to store run_ids and MSE performance metrics
-    #     run_ids <- list()
-    #     mse_metrics <- list()
-    # 
-    #     # Loop over each ensemble
-    #     for (i in seq_along(ensembles$main_ensemble)) {
-    #         # Check if best_model_metadata exists in the i-th ensemble
-    #         if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-    #             # Extract run_id and MSE performance metric from best_model_metadata
-    #             run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
-    #             mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
-    #         } else {
-    #             # Extract run_id and MSE performance metric from the i-th ensemble
-    #             run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
-    #             mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
-    #         }
-    #     }
-    # 
-    #     # Initialize lists to store run_ids and MSE performance metrics
-    #     run_ids <- list()
-    #     mse_metrics <- list()
-    # 
-    #     # Convert lists to dataframe
-    #     results_df <- data.frame(run_id = unlist(run_ids), mse_metric = unlist(mse_metrics))
-    # 
-    #     # Print the dataframe
-    #     print("___________________________results_df________________________________")
-    #     print(results_df)
-    #     print("___________________________results_df_end____________________________")
-    # 
-    #     # Save the dataframe as an RDS file
-    #     saveRDS(results_df, file = "results_df_predict.rds")
-    # 
-    # }
-    print("old vector used")
-    #print(findout)
-    # print(head(X))
-  }else{ #if never ran before
-    
-    
-    
-    if (!exists("my_optimal_epoch_out_vector")) {
-      my_optimal_epoch_out_vector <- vector("list", length(1:num_networks))  # Initialize your list
-      
-      
-    }
-    
-    
-    # print(head(X))
-    num_epochs <- num_epochs
-    never_ran_flag <- TRUE
-    # Train your DESONN model
-    
-    if(ML_NN){
-      DESONN_model_1 <- DESONN$new(num_networks = num_networks, input_size = input_size, hidden_sizes = hidden_sizes, output_size = output_size, N = N, lambda = lambda, ensemble_number = ensemble_number, ML_NN = ML_NN, method = init_method, custom_scale = custom_scale)
-      
-    }else{
-      DESONN_model_1 <- DESONN$new(num_networks = num_networks, input_size = input_size, output_size = output_size, N = N, lambda = lambda, ensemble_number = ensemble_number, ML_NN = ML_NN, method = init_method, custom_scale = custom_scale)
-      
-    }
-    
-    DESONN_model <- DESONN_model_1
-    FirstRunDESONN <- DESONN_model_1$train(X, y, lr, ensemble_number = j, num_epochs, threshold, reg_type, numeric_columns = numeric_columns, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions,
-                                           dropout_rates_learn = dropout_rates_learn, dropout_rates = dropout_rates, optimizer = optimizer, beta1 = beta1, beta2 = beta2, epsilon = epsilon, lookahead_step = lookahead_step, batch_normalize_data = batch_normalize_data, gamma_bn = gamma_bn, beta_bn = beta_bn,
-                                           epsilon_bn = epsilon_bn, momentum_bn = momentum_bn, is_training_bn = is_training_bn, shuffle_bn = shuffle_bn, loss_type = loss_type, sample_weights = sample_weights, X_validation = X_validation, y_validation = y_validation)
-    if (FirstRunDESONN$loss_status == 'exceeds_10000') {
-      next
-    }
-    
-    
-    # Update the results data frame
-    results <- rbind(results, data.frame(lr = lr, lambda = lambda, accuracy = FirstRunDESONN$accuracy)) #<<-
-    
-    # Save the results data frame to an RDS file
-    saveRDS(results, file = "results.rds")
-    
-    if(hyperparameter_grid_setup){
-      ensembles_hyperparameter_grid[[j]] <- results_list
-    }else{
-      print("before prune and add")
-      # Prune the worst-performing model
-      pruned_result <- prune_network_from_ensemble(ensembles, target_metric_name_worst) #<<-
-      
-      # Check if a model was removed and if so, add a new model
-      if (!is.null(pruned_result$removed_network)) {
-        # Call add_network_to_ensemble to add a new model
-        main_ensemble_copy_return <- add_network_to_ensemble(pruned_result$updated_ensemble, target_metric_name_best, pruned_result$removed_network, ensemble_number = j, pruned_result$worst_model_index) #<<-
-        
-        print("___________________________________")
-        pruned_result$removed_network$run_id
-        pruned_result$removed_network$ensemble_number
-        pruned_result$removed_network$model_iter_num
-        print("___________________________________")
-        ensembles$main_ensemble[[1]]$run_id
-        ensembles$main_ensemble[[2]]$run_id
-        ensembles$main_ensemble[[3]]$run_id
-        ensembles$main_ensemble[[4]]$run_id
-        ensembles$main_ensemble[[5]]$run_id
-        print("___________________________________")
-        
-        
-      } else {
-        cat("No model removed. No need to add a new model.\n")
-      }
-      
-      print("after prune and add")
-      
-      # After finishing the inner loop, update the temporary ensemble (second list) in ensembles
-      #ensembles[[2]] <- ensembles$temp_ensemble
-    }
-    
-    print("num_epochs <- 100 initialized")
-    #print(findout)
-    # print(head(X))
-  }
+  cat("Manual run -> Accuracy:", run_result$accuracy, "\n")
 }
 
+# === Step 4: Save all results ===
+saveRDS(results, file = "results.rds")
+write.csv(results, file = "results.csv", row.names = FALSE)
 
 if(saveToDisk){
   

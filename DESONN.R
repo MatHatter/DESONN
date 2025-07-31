@@ -163,7 +163,7 @@ SONN <- R6Class(
       weights <- list()
       biases <- list()
       
-      clip_weights <- function(W, limit = 5) {
+      clip_weights <- function(W, limit = .08) {
         return(pmin(pmax(W, -limit), limit))
       }
       
@@ -199,7 +199,7 @@ SONN <- R6Class(
           W <- matrix(rnorm(fan_in * fan_out, mean = 0, sd = sd), nrow = fan_in, ncol = fan_out)
         }
         
-        return(clip_weights(W, limit = 5))
+        return(clip_weights(W, limit = .08))
       }
       
       # Initialize first hidden layer
@@ -443,106 +443,112 @@ SONN <- R6Class(
         for (layer in (self$num_layers - 1):1) {
           cat("Layer:", layer, "\n")
           
-          # Check for existence of weights and errors
-          if (is.null(self$weights[[layer + 1]]) || is.null(errors[[layer + 1]])) {
-            cat(paste("Skipping layer", layer, "- weights or errors do not exist\n"))
+          # Load weights and error from next layer
+          weights_next <- self$weights[[layer + 1]]
+          errors_next  <- errors[[layer + 1]]
+          
+          # Check for NULLs
+          if (is.null(weights_next) || is.null(errors_next)) {
+            cat(paste("Skipping layer", layer, "- weights or errors are NULL\n"))
             next
           }
           
-          # Print dimensions
-          weight_dims <- dim(self$weights[[layer + 1]])
-          error_dims <- dim(errors[[layer + 1]])
+          # Print actual dimensions
+          weight_dims <- dim(weights_next)
+          error_dims  <- dim(errors_next)
           cat("Weights dimensions:\n"); print(weight_dims)
           cat("Errors dimensions:\n"); print(error_dims)
           
+          # Sanity checks
           if (is.null(weight_dims) || is.null(error_dims)) {
             cat(paste("Skipping layer", layer, "- dimensions are NULL\n"))
             next
           }
           
-          weight_in  <- weight_dims[1]  # rows = input to layer
-          weight_out <- weight_dims[2]  # cols = output from layer
+          # Adjust shape dynamically
+          expected_error_cols <- ncol(weights_next)
+          actual_error_cols   <- ncol(errors_next)
+          actual_error_rows   <- nrow(errors_next)
           
-          error_rows <- error_dims[1]   # rows = batch size
-          error_cols <- error_dims[2]   # cols = error signals
-          
-          # Adjust errors[[layer + 1]] if shape doesn't match expected [batch_size x weight_out]
-          if (error_cols != weight_out) {
-            if (error_cols > weight_out) {
-              errors[[layer + 1]] <- errors[[layer + 1]][, 1:weight_out, drop = FALSE]
+          # Match error columns to weights' output dim
+          if (actual_error_cols != expected_error_cols) {
+            if (actual_error_cols > expected_error_cols) {
+              errors_next <- errors_next[, 1:expected_error_cols, drop = FALSE]
             } else {
-              errors[[layer + 1]] <- matrix(
-                rep(errors[[layer + 1]], length.out = error_rows * weight_out),
-                nrow = error_rows,
-                ncol = weight_out
+              errors_next <- matrix(
+                rep(errors_next, length.out = actual_error_rows * expected_error_cols),
+                nrow = actual_error_rows,
+                ncol = expected_error_cols
               )
             }
           }
           
-          # Propagate error: errors[[l]] = errors[[l+1]] %*% t(weights[[l+1]])
+
+          # Propagate error
           cat("Backpropagating errors for layer", layer, "\n")
-          errors[[layer]] <- errors[[layer + 1]] %*% t(self$weights[[layer + 1]])
+          errors[[layer]] <- errors_next %*% t(weights_next)
         }
       }
+      
       else {
-        # Single-layer neural network
         cat("Single Layer Backpropagation\n")
         
-        # Check if weights and errors exist
-        if (is.null(self$weights[[1]]) || is.null(errors[[1]])) {
+        # Check existence
+        weights_sl <- self$weights[[1]]
+        errors_sl  <- errors[[1]]
+        
+        if (is.null(weights_sl) || is.null(errors_sl)) {
           stop("Error: Weights or errors for single layer do not exist.")
         }
         
-        # Ensure weights are explicitly matrices
-        weight_matrix <- as.matrix(self$weights[[1]])
+        # Ensure matrix form
+        weights_sl <- as.matrix(weights_sl)
+        errors_sl  <- as.matrix(errors_sl)
         
-        # Debugging: Print dimensions
-        weight_dims <- dim(weight_matrix)
-        error_dims <- dim(errors[[1]])
-        cat("Weights dimensions:\n")
-        print(weight_dims)
-        cat("Errors dimensions:\n")
-        print(error_dims)
+        # Print current dimensions
+        weight_dims <- dim(weights_sl)
+        error_dims  <- dim(errors_sl)
+        cat("Weights dimensions:\n"); print(weight_dims)
+        cat("Errors dimensions:\n"); print(error_dims)
         
-        # Ensure dimensions are not NULL
         if (is.null(weight_dims) || is.null(error_dims)) {
           stop("Error: Dimensions for weights or errors are NULL.")
         }
         
-        weight_rows <- weight_dims[1]
-        weight_cols <- weight_dims[2]
-        error_rows <- error_dims[1]
-        error_cols <- error_dims[2]
+        # Target: errors[[1]] = weights %*% errors
+        # Align shapes: [n_input, n_output] %*% [batch_size, n_output]^T
         
-        # Check and adjust dimensions
-        if (error_cols != weight_rows) {
-          if (error_cols > weight_rows) {
-            errors[[1]] <- errors[[1]][, 1:weight_rows, drop = FALSE]
+        # Ensure error has matching columns
+        expected_cols <- ncol(weights_sl)
+        actual_cols   <- ncol(errors_sl)
+        actual_rows   <- nrow(errors_sl)
+        
+        if (actual_cols != expected_cols) {
+          if (actual_cols > expected_cols) {
+            errors_sl <- errors_sl[, 1:expected_cols, drop = FALSE]
           } else {
-            errors[[1]] <- matrix(
-              rep(errors[[1]], length.out = error_rows * weight_rows),
-              nrow = error_rows,
-              ncol = weight_rows
+            errors_sl <- matrix(
+              rep(errors_sl, length.out = actual_rows * expected_cols),
+              nrow = actual_rows,
+              ncol = expected_cols
             )
           }
         }
         
-        if (error_rows != weight_cols) {
-          if (error_rows > weight_cols) {
-            errors[[1]] <- errors[[1]][1:weight_cols, , drop = FALSE]
+        # If error is still misaligned for matrix multiplication, transpose
+        if (ncol(errors_sl) != ncol(weights_sl)) {
+          if (ncol(errors_sl) == nrow(weights_sl)) {
+            weights_sl <- t(weights_sl)
           } else {
-            errors[[1]] <- matrix(
-              rep(errors[[1]], length.out = weight_cols * ncol(errors[[1]])),
-              nrow = weight_cols,
-              ncol = ncol(errors[[1]])
-            )
+            cat("Warning: shape mismatch persists in single-layer case\n")
           }
         }
         
-        # Perform matrix multiplication
+        # Perform backpropagation step
         cat("Performing matrix multiplication for single layer\n")
-        errors[[1]] <- weight_matrix %*% errors[[1]]
+        errors[[1]] <- errors_sl %*% t(weights_sl)
       }
+      
       
       
       
@@ -805,12 +811,12 @@ SONN <- R6Class(
           
           # ----- Clipping Extreme Z Values (Activation-Aware) -----
           clip_limit <- switch(activation_name,
-                               "sigmoid" = 50,
+                               "sigmoid" = 80,
                                "tanh" = 10,
                                "softmax" = 15,
                                "relu" = 100,
                                "leaky_relu" = 200,
-                               100 # Default fallback
+                               90 # Default fallback
           )
           
           Z_max <- max(Z)
@@ -820,7 +826,7 @@ SONN <- R6Class(
           }
           Z <- pmin(pmax(Z, -clip_limit), clip_limit)
           
-          Z <- Z  / 4
+          Z <- Z / 4
           
           
           cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
@@ -842,7 +848,7 @@ SONN <- R6Class(
             hidden_output <- self$dropout(hidden_output, self$dropout_rates_learn[[layer]])
             hidden_outputs[[layer]] <- hidden_output
             
-            hidden_outputs[[layer]] <- self$dropout(hidden_outputs[[layer]], self$dropout_rates_learn[[layer]])
+            hidden_outputs[[layer]] <- self$dropout(hidden_output, self$dropout_rates_learn[[layer]])
             
             cat(sprintf("[Debug] Layer %d : Hidden output AFTER  dropout (sample):\n", layer))
             print(head(hidden_output, 3))
@@ -945,7 +951,7 @@ SONN <- R6Class(
                              "softmax" = 15,
                              "relu" = 100,
                              "leaky_relu" = 200,
-                             100 # Default fallback
+                             90 # Default fallback
         )
         
         Z_max <- max(Z)
@@ -1396,7 +1402,7 @@ SONN <- R6Class(
                   grads_matrix <- weight_gradients[[layer]]
                   
                   # Clip weight gradient
-                  grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5)
+                  grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5.0)
                   
                   
                   # --------- Apply Regularization to Weight Gradient ---------
@@ -1506,6 +1512,9 @@ SONN <- R6Class(
                       
                       
                       self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      
+
+                      
                       optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                       
                     }
@@ -2176,7 +2185,9 @@ SONN <- R6Class(
                   grads_matrix <- bias_gradients[[layer]]
                   
                   # Clip bias gradient
-                  grads_matrix <- clip_gradient_norm(grads_matrix)
+                  grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5)
+                  
+
                   
                   # --- Align dimensions if needed ---
                   bias_shape <- dim(as.matrix(self$biases[[layer]]))
@@ -3212,16 +3223,16 @@ DESONN <- R6Class(
       results_list_learnOnly <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
       results_list <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
       self$numeric_columns <- NULL
-      if(!hyperparameter_grid_setup){
-        ensembles$main_ensemble <- list(
-          run_results_1_1
+      # if(!hyperparameter_grid_setup){
+        # ensembles$main_ensemble <- list(
+          # run_results_1_1
           # run_results_1_2,
           # run_results_1_3,
           # run_results_1_4,
           # run_results_1_5
-        )
-        ensembles$temp_ensemble <- vector("list", length(self$ensemble))
-      }
+        # )
+        # ensembles$temp_ensemble <- vector("list", length(self$ensemble))
+      # }
       
     },
     # Function to normalize specific columns in the data
@@ -3535,56 +3546,116 @@ DESONN <- R6Class(
                 Predicted_Prob = as.vector(probs)
               )
             
+            # === ROC and AUC ===
+            # === ROC and AUC ===
+            library(pROC)
+            
+            # Ensure inputs are flattened numeric vectors
+            labels_numeric <- as.numeric(labels_flat)
+            probs_numeric <- as.numeric(probs)
+            
+            roc_obj <- roc(response = labels_numeric, predictor = probs_numeric)
+            auc_value <- auc(roc_obj)
+            
+            print(paste("AUC:", round(auc_value, 4)))
+            
+            # Plot ROC curve
+            plot(roc_obj,
+                 col = "#1f77b4",
+                 lwd = 2,
+                 main = "ROC Curve - Neural Network")
+            abline(a = 0, b = 1, lty = 2, col = "gray")
+            text(0.6, 0.2, paste("AUC =", round(auc_value, 4)), cex = 1.2)
+            
+            # === Precision-Recall Curve ===
+            library(PRROC)
+            
+            # PRROC expects class 1 scores first
+            pr_obj <- pr.curve(scores.class0 = probs_numeric[labels_numeric == 1],
+                               scores.class1 = probs_numeric[labels_numeric == 0],
+                               curve = TRUE)
+            
+            cat("AUPRC (Area under Precision-Recall Curve):", round(pr_obj$auc.integral, 4), "\n")
+            
+            # Plot PR Curve
+            plot(pr_obj,
+                 main = "Precision-Recall Curve - Neural Network",
+                 col = "#d62728",
+                 lwd = 2)
             
             
+            # library(openxlsx)
+            # library(ggplot2)
+            # library(dplyr)
+            # library(tidyr)
+            # 
+            # library(openxlsx)
+            # library(ggplot2)
+            # library(dplyr)
+            # library(tidyr)
+            # 
+            # # Rename columns safely
+            # Rdata_predictions <- Rdata_predictions %>%
+            #   rename(prob = Predicted_Prob, label = Label)
+            # 
+            # # Ensure numeric values and clamp label to 0 or 1
+            # Rdata_predictions <- Rdata_predictions %>%
+            #   mutate(
+            #     prob = as.numeric(prob),
+            #     label = as.numeric(label),
+            #     label = ifelse(label >= 1, 1, 0)
+            #   ) %>%
+            #   filter(!is.na(prob), !is.na(label))  # Remove rows with NA in prob or label
+            # 
+            # # Create decile bins
+            # Rdata_predictions <- Rdata_predictions %>%
+            #   mutate(prob_bin = ntile(prob, 10)) %>%
+            #   group_by(prob_bin) %>%
+            #   mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
+            #   ungroup()
+            # 
+            # # Summarize actual death rate per bin
+            # bin_summary <- Rdata_predictions %>%
+            #   group_by(prob_bin, bin_mid) %>%
+            #   summarise(
+            #     actual_death_rate = mean(label, na.rm = TRUE),
+            #     .groups = 'drop'
+            #   ) %>%
+            #   filter(
+            #     !is.na(bin_mid),
+            #     !is.na(actual_death_rate),
+            #     is.finite(bin_mid),
+            #     is.finite(actual_death_rate)
+            #   )  # Fully clean input for ggplot
+            # 
+            # # Ensure correct types
+            # bin_summary <- bin_summary %>%
+            #   mutate(
+            #     bin_mid = as.numeric(bin_mid),
+            #     actual_death_rate = as.numeric(actual_death_rate)
+            #   )
+            # 
+            # # Inspect just in case
+            # print(bin_summary)
+            # 
+            # # Plot
+            # p <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
+            #   geom_col(fill = "steelblue", na.rm = TRUE) +
+            #   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+            #   labs(
+            #     title = "Calibration Plot (Corrected)",
+            #     x = "Average Predicted Probability",
+            #     y = "Observed Death Rate"
+            #   ) +
+            #   theme_minimal()
+            # 
+            # print(p)
+            # 
             
-            library(openxlsx)
-            library(ggplot2)
-            library(dplyr)
-            library(tidyr)
             
-            library(dplyr)
-            library(ggplot2)
-            
-            # Rename safely
-            Rdata_predictions <- Rdata_predictions %>%
-              rename(prob = Predicted_Prob, label = Label)
-            
-            # Ensure numeric 0 or 1
-            Rdata_predictions <- Rdata_predictions %>%
-              mutate(label = as.numeric(label),
-                     label = ifelse(label >= 1, 1, 0))
-            
-            # Create quantile bins
-            Rdata_predictions <- Rdata_predictions %>%
-              mutate(prob_bin = ntile(prob, 10)) %>%
-              group_by(prob_bin) %>%
-              mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
-              ungroup()
-            
-            # Compute observed death rate per bin
-            bin_summary <- Rdata_predictions %>%
-              group_by(prob_bin, bin_mid) %>%
-              summarise(actual_death_rate = mean(label, na.rm = TRUE), .groups = 'drop')
-            
-            # Check results before plotting
-            print(bin_summary)
-            
-            # Plot
-            p <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
-              geom_col(fill = "steelblue") +
-              geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-              labs(title = "Calibration Plot (Corrected)",
-                   x = "Average Predicted Probability",
-                   y = "Observed Death Rate") +
-              theme_minimal()
-            
-            print(p)
-            
-            
-            
-            ggsave("final_calibration_plot.png", plot = p, width = 6, height = 4)
-            
+          
+            # ggsave("final_calibration_plot.png", plot = p, width = 6, height = 4)
+          
             
             
             # === Metrics Summary Sheet ===
@@ -3638,18 +3709,29 @@ DESONN <- R6Class(
               Mean_Predicted_Label_1 = mean_1
             )
             
-            # === Interpretation for prediction means ===
-            commentary_text <- if (mean_0 < 0.2 && mean_1 > 0.8) {
-              paste0("Since your model produces mean ", round(mean_0, 4), " for true label 0, and ",
-                     round(mean_1, 4), " for true label 1, it’s making sharp, confident, and accurate predictions.")
-            } else if (mean_0 > 0.35 && mean_1 < 0.65) {
-              paste0("Warning: predicted probabilities are close together (", round(mean_0, 4),
-                     " vs ", round(mean_1, 4), ") — model may not be separating classes clearly.")
+            # Calculate class-wise mean predicted probabilities
+            mean_0 <- mean(Rdata_predictions$prob[Rdata_predictions$label == 0], na.rm = TRUE)
+            mean_1 <- mean(Rdata_predictions$prob[Rdata_predictions$label == 1], na.rm = TRUE)
+            
+            # Safely generate interpretation
+            if (!is.na(mean_0) && !is.na(mean_1)) {
+              commentary_text <- if (mean_0 < 0.2 && mean_1 > 0.8) {
+                paste0("Since your model produces mean ", round(mean_0, 4), " for true label 0, and ",
+                       round(mean_1, 4), " for true label 1, it’s making sharp, confident, and accurate predictions.")
+              } else if (mean_0 > 0.35 && mean_1 < 0.65) {
+                paste0("Warning: predicted probabilities are close together (", round(mean_0, 4),
+                       " vs ", round(mean_1, 4), ") — model may not be separating classes clearly.")
+              } else {
+                paste0("Model separation is moderate (", round(mean_0, 4), " vs ", round(mean_1, 4),
+                       ") — might benefit from output sharpening or additional tuning.")
+              }
             } else {
-              paste0("Model separation is moderate (", round(mean_0, 4), " vs ", round(mean_1, 4),
-                     ") — might benefit from output sharpening or additional tuning.")
+              commentary_text <- "One or both class mean probabilities are NA — likely due to lack of class balance or empty subset."
             }
+            
+            # Output as data frame
             commentary_df_means <- data.frame(Interpretation = commentary_text)
+            
             
             # === Misclassification Tagging and Sorting ===
             misclassified$Type <- ifelse(

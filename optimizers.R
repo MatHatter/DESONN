@@ -67,7 +67,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       }
       
       # ✅ Clip weights after update if target is "weights"
-      clip_threshold <- 5
+      clip_threshold <- .5
       updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
     }
     
