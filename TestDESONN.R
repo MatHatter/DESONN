@@ -80,7 +80,7 @@ is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .01
-lambda <- 0.00011
+lambda <- 0.00025
 num_epochs <- 46
 custom_scale <- .05
 
