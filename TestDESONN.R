@@ -68,7 +68,7 @@ function(test1){
 
 # # Define parameters
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
-optimizer <- "adam" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam
+optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
 lookahead_step <- 20
 batch_normalize_data <- TRUE
 shuffle_bn <- FALSE
@@ -81,7 +81,7 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .001
 lambda <- 0.00025
-num_epochs <- 200
+num_epochs <- 72
 custom_scale <- .05
 
 # ML_NN <- TRUE

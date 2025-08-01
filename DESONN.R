@@ -1385,13 +1385,15 @@ SONN <- R6Class(
             biases_record <- vector("list", self$num_layers)
           }
           
+
+          
+          
           # Update weights
           if (update_weights) {
             if (self$ML_NN) {
               for (layer in 1:self$num_layers) {
                 if (!is.null(self$weights[[layer]]) && !is.null(optimizer)) {
                   
-                  # Initialize optimizer parameters if not already
                   if (is.null(optimizer_params_weights[[layer]])) {
                     optimizer_params_weights[[layer]] <- initialize_optimizer_params(
                       optimizer,
@@ -1399,7 +1401,14 @@ SONN <- R6Class(
                       lookahead_step,
                       layer
                     )
+                    
+                    # $$$$$$$$$$$$$$$ DEBUGGING OUTPUT $$$$$$$$$$$$$$$
+                    cat(">>> After initialize_optimizer_params() for layer", layer, "\n")
+                    print(str(optimizer_params_weights[[layer]]))  # structure of this specific layer’s params
+                    print(names(optimizer_params_weights[[layer]]))  # list element names
                   }
+                  
+                  
                   
                   # Get weight gradients from learn()
                   grads_matrix <- weight_gradients[[layer]]
@@ -1493,6 +1502,8 @@ SONN <- R6Class(
                   print(summary(as.vector(grads_matrix)))
                   
                   
+                  
+                  
                   if (!is.null(optimizer_params_weights[[layer]]) && !is.null(optimizer)) {
                     if (optimizer == "adam") {
                       updated_optimizer <- apply_optimizer_update(
@@ -1544,521 +1555,246 @@ SONN <- R6Class(
                       optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
                     else if (optimizer == "sgd") {
-                      # Perform SGD update for the weights
-                      optimizer_params_weights[[layer]] <- sgd_update(optimizer_params_weights[[layer]], grads_matrix, lr)
-                      updated_weights_update <- optimizer_params_weights[[layer]]$weights_update
+
+                      cat("DEBUG: Is optimizer_params_weights available? ", exists("optimizer_params_weights"), "\n")
+                      cat("DEBUG: Type: ", typeof(optimizer_params_weights), "\n")
+                      cat("DEBUG: Length: ", length(optimizer_params_weights), "\n")
                       
-                      # Ensure updated_weights_update is not NULL
-                      if (is.null(updated_weights_update)) {
-                        stop("Updated weights update is NULL.")
-                      }
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = NA,
+                        beta2 = NA,
+                        epsilon = NA,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "weights"
+                      )
                       
-                      # Ensure updated_weights_update is a matrix or vector
-                      if (is.list(updated_weights_update)) {
-                        updated_weights_update <- unlist(updated_weights_update)
-                      }
                       
-                      # Check the type of updated_weights_update
-                      if (is.matrix(updated_weights_update)) {
-                        # If updated_weights_update is a matrix
-                        if (identical(dim(self$weights[[layer]]), dim(updated_weights_update))) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Adjust dimensions to match if necessary
-                          if (nrow(self$weights[[layer]]) != nrow(updated_weights_update)) {
-                            if (nrow(self$weights[[layer]]) > nrow(updated_weights_update)) {
-                              updated_weights_update <- rbind(updated_weights_update, matrix(0, nrow = nrow(self$weights[[layer]]) - nrow(updated_weights_update), ncol = ncol(updated_weights_update)))
-                            } else if (nrow(self$weights[[layer]]) < nrow(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[1:nrow(self$weights[[layer]]), , drop = FALSE]
-                            }
-                          }
-                          if (ncol(self$weights[[layer]]) != ncol(updated_weights_update)) {
-                            if (ncol(self$weights[[layer]]) > ncol(updated_weights_update)) {
-                              updated_weights_update <- cbind(updated_weights_update, matrix(0, nrow = nrow(updated_weights_update), ncol = ncol(self$weights[[layer]]) - ncol(updated_weights_update)))
-                            } else if (ncol(self$weights[[layer]]) < ncol(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[, 1:ncol(self$weights[[layer]]), drop = FALSE]
-                            }
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (is.vector(updated_weights_update)) {
-                        # If updated_weights_update is a vector
-                        if (length(updated_weights_update) == length(self$weights[[layer]])) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Repeat or truncate updated_weights_update to match self$weights[[layer]]
-                          if (length(updated_weights_update) > length(self$weights[[layer]])) {
-                            updated_weights_update <- updated_weights_update[1:length(self$weights[[layer]])]
-                          } else if (length(updated_weights_update) < length(self$weights[[layer]])) {
-                            updated_weights_update <- rep(updated_weights_update, length.out = length(self$weights[[layer]]))
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (prod(dim(self$weights[[layer]])) == 1) {
-                        # Handle scalar weight updates
-                        cat("Handling scalar weight update.\n")
-                        update_value <- sum(updated_weights_update)  # Assuming summing the updates is appropriate
-                        self$weights[[layer]] <- self$weights[[layer]] - update_value
-                      } else {
-                        stop("Unable to adjust dimensions for updated_weights_update.")
-                      }
+                      
+                      
+                      # $$$$$$$$$$$$ Diagnostic print
+                      cat(">> Updated weights summary (post-SGD): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      # $$$$$$$$$$$$ Final update
+                      self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
-                    
                     else if (optimizer == "sgd_momentum") {
-                      # Perform SGD update for the weights
-                      optimizer_params_weights[[layer]] <- sgd_momentum_update(optimizer_params_weights[[layer]], grads_matrix, lr)
-                      updated_weights_update <- optimizer_params_weights[[layer]]$weights_update
+                      cat("DEBUG: Is optimizer_params_weights available? ", exists("optimizer_params_weights"), "\n")
+                      cat("DEBUG: Type: ", typeof(optimizer_params_weights), "\n")
+                      cat("DEBUG: Length: ", length(optimizer_params_weights), "\n")
                       
-                      # Ensure updated_weights_update is not NULL
-                      if (is.null(updated_weights_update)) {
-                        stop("Updated weights update is NULL.")
-                      }
+                      # $$$$$$$$$$$$ Apply SGD momentum update (weights)
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,      # Used as momentum
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "weights"
+                      )
                       
-                      # Ensure updated_weights_update is a matrix or vector
-                      if (is.list(updated_weights_update)) {
-                        updated_weights_update <- unlist(updated_weights_update)
-                      }
+                      # $$$$$$$$$$$$ Diagnostic print
+                      cat(">> Updated weights summary (SGD momentum): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
                       
-                      # Check the type of updated_weights_update
-                      if (is.matrix(updated_weights_update)) {
-                        # If updated_weights_update is a matrix
-                        if (identical(dim(self$weights[[layer]]), dim(updated_weights_update))) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Adjust dimensions to match if necessary
-                          if (nrow(self$weights[[layer]]) != nrow(updated_weights_update)) {
-                            if (nrow(self$weights[[layer]]) > nrow(updated_weights_update)) {
-                              updated_weights_update <- rbind(updated_weights_update, matrix(0, nrow = nrow(self$weights[[layer]]) - nrow(updated_weights_update), ncol = ncol(updated_weights_update)))
-                            } else if (nrow(self$weights[[layer]]) < nrow(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[1:nrow(self$weights[[layer]]), , drop = FALSE]
-                            }
-                          }
-                          if (ncol(self$weights[[layer]]) != ncol(updated_weights_update)) {
-                            if (ncol(self$weights[[layer]]) > ncol(updated_weights_update)) {
-                              updated_weights_update <- cbind(updated_weights_update, matrix(0, nrow = nrow(updated_weights_update), ncol = ncol(self$weights[[layer]]) - ncol(updated_weights_update)))
-                            } else if (ncol(self$weights[[layer]]) < ncol(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[, 1:ncol(self$weights[[layer]]), drop = FALSE]
-                            }
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (is.vector(updated_weights_update)) {
-                        # If updated_weights_update is a vector
-                        if (length(updated_weights_update) == length(self$weights[[layer]])) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Repeat or truncate updated_weights_update to match self$weights[[layer]]
-                          if (length(updated_weights_update) > length(self$weights[[layer]])) {
-                            updated_weights_update <- updated_weights_update[1:length(self$weights[[layer]])]
-                          } else if (length(updated_weights_update) < length(self$weights[[layer]])) {
-                            updated_weights_update <- rep(updated_weights_update, length.out = length(self$weights[[layer]]))
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (prod(dim(self$weights[[layer]])) == 1) {
-                        # Handle scalar weight updates
-                        cat("Handling scalar weight update.\n")
-                        update_value <- sum(updated_weights_update)  # Assuming summing the updates is appropriate
-                        self$weights[[layer]] <- self$weights[[layer]] - update_value
-                      } else {
-                        stop("Unable to adjust dimensions for updated_weights_update.")
-                      }
+                      # $$$$$$$$$$$$ Final update with optional clipping
+                      updated_weights_matrix <- updated_optimizer$updated_weights_or_biases
+                      clip_threshold <- 0.5
+                      updated_weights_matrix <- pmin(pmax(updated_weights_matrix, -clip_threshold), clip_threshold)
+                      
+                      self$weights[[layer]] <- self$weights[[layer]] - updated_weights_matrix
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
-                    
-                    
                     else if (optimizer == "nag") {
-                      # Perform NAG update for the weights
-                      optimizer_params_weights[[layer]] <- nag_update(optimizer_params_weights[[layer]], grads_matrix, lr, beta = 0.9)
-                      updated_weights_update <- optimizer_params_weights[[layer]]$weights_update
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,  # Nag only uses momentum (beta1)
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "weights"
+                      )
                       
-                      # Ensure updated_weights_update is not NULL
-                      if (is.null(updated_weights_update)) {
-                        stop("Updated weights update is NULL.")
-                      }
+                      cat(">> Updated weights summary (post-NAG): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
                       
-                      # Ensure updated_weights_update is a matrix or vector
-                      if (is.list(updated_weights_update)) {
-                        updated_weights_update <- unlist(updated_weights_update)
-                      }
-                      
-                      # Check the type of updated_weights_update
-                      if (is.matrix(updated_weights_update)) {
-                        # If updated_weights_update is a matrix
-                        if (identical(dim(self$weights[[layer]]), dim(updated_weights_update))) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Adjust dimensions to match if necessary
-                          if (nrow(self$weights[[layer]]) != nrow(updated_weights_update)) {
-                            if (nrow(self$weights[[layer]]) > nrow(updated_weights_update)) {
-                              updated_weights_update <- rbind(updated_weights_update, matrix(0, nrow = nrow(self$weights[[layer]]) - nrow(updated_weights_update), ncol = ncol(updated_weights_update)))
-                            } else if (nrow(self$weights[[layer]]) < nrow(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[1:nrow(self$weights[[layer]]), , drop = FALSE]
-                            }
-                          }
-                          if (ncol(self$weights[[layer]]) != ncol(updated_weights_update)) {
-                            if (ncol(self$weights[[layer]]) > ncol(updated_weights_update)) {
-                              updated_weights_update <- cbind(updated_weights_update, matrix(0, nrow = nrow(updated_weights_update), ncol = ncol(self$weights[[layer]]) - ncol(updated_weights_update)))
-                            } else if (ncol(self$weights[[layer]]) < ncol(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[, 1:ncol(self$weights[[layer]]), drop = FALSE]
-                            }
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (is.vector(updated_weights_update)) {
-                        # If updated_weights_update is a vector
-                        if (length(updated_weights_update) == length(self$weights[[layer]])) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Repeat or truncate updated_weights_update to match self$weights[[layer]]
-                          if (length(updated_weights_update) > length(self$weights[[layer]])) {
-                            updated_weights_update <- updated_weights_update[1:length(self$weights[[layer]])]
-                          } else if (length(updated_weights_update) < length(self$weights[[layer]])) {
-                            updated_weights_update <- rep(updated_weights_update, length.out = length(self$weights[[layer]]))
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (prod(dim(self$weights[[layer]])) == 1) {
-                        # Handle scalar weight updates
-                        cat("Handling scalar weight update.\n")
-                        update_value <- sum(updated_weights_update)  # Assuming summing the updates is appropriate
-                        self$weights[[layer]] <- self$weights[[layer]] - update_value
-                      } else {
-                        stop("Unable to adjust dimensions for updated_weights_update.")
-                      }
+                      self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    
                     else if (optimizer == "ftrl") {
-                      # Compute the gradients for weights if not already available
-                      grads_weights <- lapply(self$weights, function(weight) {
-                        if (is.null(dim(weight))) {
-                          # Convert vectors to matrices with a single column
-                          matrix(weight, nrow = length(weight), ncol = 1)
-                        } else {
-                          weight  # Already a matrix
-                        }
-                      })
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer         = optimizer,
+                        optimizer_params  = optimizer_params_weights,
+                        grads_matrix      = grads_matrix,
+                        lr                = lr,
+                        beta1             = beta1,     # Optional, can be used for adaptive variants
+                        beta2             = beta2,     # Optional, can be used for smoothing
+                        alpha             = 0.1,       # FTRL specific
+                        lambda1           = 0.01,
+                        lambda2           = 0.01,
+                        epsilon           = epsilon,
+                        epoch             = epoch,
+                        self              = self,
+                        layer             = layer,
+                        target            = "weights"
+                      )
                       
-                      # Perform FTRL update for the weights
-                      ftrl_results <- ftrl_update(optimizer_params_weights[[layer]], grads_weights, lr, alpha = 0.1, beta = 1.0, lambda1 = 0.01, lambda2 = 0.01)
-                      optimizer_params_weights[[layer]] <- ftrl_results$params
-                      updated_weights_update <- ftrl_results$weights_update
+                      cat(">> Updated weights summary (post-FTRL): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
                       
-                      # Ensure updated_weights_update is not NULL
-                      if (is.null(updated_weights_update)) {
-                        stop("Updated weights update is NULL.")
-                      }
-                      
-                      # Ensure updated_weights_update is a matrix or vector
-                      if (is.list(updated_weights_update)) {
-                        updated_weights_update <- unlist(updated_weights_update)
-                      }
-                      
-                      # Check the type of updated_weights_update
-                      if (is.matrix(updated_weights_update)) {
-                        # If updated_weights_update is a matrix
-                        if (identical(dim(self$weights[[layer]]), dim(updated_weights_update))) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Adjust dimensions to match if necessary
-                          if (nrow(self$weights[[layer]]) != nrow(updated_weights_update)) {
-                            if (nrow(self$weights[[layer]]) > nrow(updated_weights_update)) {
-                              updated_weights_update <- rbind(updated_weights_update, matrix(0, nrow = nrow(self$weights[[layer]]) - nrow(updated_weights_update), ncol = ncol(updated_weights_update)))
-                            } else if (nrow(self$weights[[layer]]) < nrow(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[1:nrow(self$weights[[layer]]), , drop = FALSE]
-                            }
-                          }
-                          if (ncol(self$weights[[layer]]) != ncol(updated_weights_update)) {
-                            if (ncol(self$weights[[layer]]) > ncol(updated_weights_update)) {
-                              updated_weights_update <- cbind(updated_weights_update, matrix(0, nrow = nrow(updated_weights_update), ncol = ncol(self$weights[[layer]]) - ncol(updated_weights_update)))
-                            } else if (ncol(self$weights[[layer]]) < ncol(updated_weights_update)) {
-                              updated_weights_update <- updated_weights_update[, 1:ncol(self$weights[[layer]]), drop = FALSE]
-                            }
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (is.vector(updated_weights_update)) {
-                        # If updated_weights_update is a vector
-                        if (length(updated_weights_update) == length(self$weights[[layer]])) {
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          # Repeat or truncate updated_weights_update to match self$weights[[layer]]
-                          if (length(updated_weights_update) > length(self$weights[[layer]])) {
-                            updated_weights_update <- updated_weights_update[1:length(self$weights[[layer]])]
-                          } else if (length(updated_weights_update) < length(self$weights[[layer]]) && !prod(dim(self$weights[[layer]])) == 1) {
-                            updated_weights_update <- rep(updated_weights_update, length.out = length(self$weights[[layer]]))
-                          }
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        }
-                      } else if (prod(dim(self$weights[[layer]])) == 1) {
-                        # Handle scalar weight updates
-                        cat("Handling scalar weight update.\n")
-                        update_value <- sum(updated_weights_update)  # Assuming summing the updates is appropriate
-                        self$weights[[layer]] <- self$weights[[layer]] - update_value
-                      } else {
-                        cat("Dimensions or type of updated_weights_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_weights_update is not directly suitable
-                        if (is.vector(updated_weights_update)) {
-                          repeated_updated_weights_update <- rep(updated_weights_update, length.out = length(self$weights[[layer]]))
-                          self$weights[[layer]] <- self$weights[[layer]] - repeated_updated_weights_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_weights_update.\n")
-                        }
-                      }
+                      self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    
                     else if (optimizer == "lamb") {
-                      # Compute the gradients for weights if not already available
-                      grads_weights <- lapply(self$weights, function(weight) {
-                        if (is.null(dim(weight))) {
-                          # Convert vectors to matrices with a single column
-                          grad <- matrix(runif(n = length(weight)), nrow = length(weight), ncol = 1)
-                        } else {
-                          # If weight is already a matrix
-                          grad <- matrix(runif(n = prod(dim(weight))), nrow = nrow(weight), ncol = ncol(weight))
-                        }
-                        as.numeric(grad)  # Ensure the gradient is numeric
-                      })
+                      cat(">> Optimizer = lamb\n")
+                      cat("Layer:", layer, "\n")
+                      cat("grads_matrix dim:\n")
+                      print(dim(grads_matrix))
                       
-                      # Perform LAMB update for the weights
-                      for (layer in seq_along(self$weights)) {
-                        # Ensure grads_weights[[layer]] and self$weights[[layer]] are matrices or vectors of the same dimension
-                        grads_weights[[layer]] <- as.numeric(grads_weights[[layer]])
-                        
-                        # Ensure params have valid numeric matrices or vectors
-                        params <- optimizer_params_weights[[layer]]
-                        params$param <- as.numeric(params$param)
-                        params$m <- as.numeric(params$m)
-                        params$v <- as.numeric(params$v)
-                        
-                        # Perform LAMB update
-                        lamb_results <- lamb_update(params, grads_weights[[layer]], lr, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, lambda = 0.01)
-                        optimizer_params_weights[[layer]] <- lamb_results$params
-                        updated_weights_update <- lamb_results$update
-                        
-                        # Ensure updated_weights_update is not NULL
-                        if (is.null(updated_weights_update)) {
-                          stop("Updated weights update is NULL.")
-                        }
-                        
-                        # Check the type of updated_weights_update
-                        if (is.matrix(updated_weights_update)) {
-                          # If updated_weights_update is a matrix
-                          if (identical(dim(self$weights[[layer]]), dim(updated_weights_update))) {
-                            self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                          } else {
-                            # Adjust dimensions to match if necessary
-                            if (nrow(self$weights[[layer]]) != nrow(updated_weights_update)) {
-                              if (nrow(self$weights[[layer]]) > nrow(updated_weights_update)) {
-                                updated_weights_update <- rbind(updated_weights_update, matrix(0, nrow = nrow(self$weights[[layer]]) - nrow(updated_weights_update), ncol = ncol(updated_weights_update)))
-                              } else if (nrow(self$weights[[layer]]) < nrow(updated_weights_update)) {
-                                updated_weights_update <- updated_weights_update[1:nrow(self$weights[[layer]]), , drop = FALSE]
-                              }
-                            }
-                            if (ncol(self$weights[[layer]]) != ncol(updated_weights_update)) {
-                              if (ncol(self$weights[[layer]]) > ncol(updated_weights_update)) {
-                                updated_weights_update <- cbind(updated_weights_update, matrix(0, nrow = nrow(updated_weights_update), ncol = ncol(self$weights[[layer]]) - ncol(updated_weights_update)))
-                              } else if (ncol(self$weights[[layer]]) < ncol(updated_weights_update)) {
-                                updated_weights_update <- updated_weights_update[, 1:ncol(self$weights[[layer]]), drop = FALSE]
-                              }
-                            }
-                            self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                          }
-                        } else if (is.vector(updated_weights_update) && length(updated_weights_update) == length(self$weights[[layer]])) {
-                          # If updated_weights_update is a vector
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          cat("Dimensions or type of updated_weights_update are not suitable for subtraction.\n")
-                          cat("Attempting to adjust dimensions if possible.\n")
-                          
-                          # Attempting to adjust dimensions if updated_weights_update is not directly suitable
-                          if (is.vector(updated_weights_update)) {
-                            repeated_updated_weights_update <- rep(updated_weights_update, length.out = length(self$weights[[layer]]))
-                            self$weights[[layer]] <- self$weights[[layer]] - repeated_updated_weights_update
-                          } else {
-                            cat("Unable to adjust dimensions for updated_weights_update.\n")
-                          }
-                        }
+                      # Standardize grads_matrix to list of matrices
+                      grads_input <- if (is.list(grads_matrix)) {
+                        grads_matrix
+                      } else if (is.null(dim(grads_matrix))) {
+                        list(matrix(grads_matrix, nrow = 1, ncol = 1))
+                      } else if (length(dim(grads_matrix)) == 1) {
+                        list(matrix(grads_matrix, nrow = length(grads_matrix), ncol = 1))
+                      } else {
+                        list(grads_matrix)
                       }
+                      
+                      # Call LAMB via apply_optimizer_update
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer         = optimizer,
+                        optimizer_params  = optimizer_params_weights,
+                        grads_matrix      = grads_matrix,
+                        lr                = lr,
+                        beta1             = beta1,
+                        beta2             = beta2,
+                        epsilon           = epsilon,
+                        epoch             = epoch,
+                        self              = self,
+                        layer             = layer,
+                        target            = "weights"
+                      )
+                      
+                      # Logging
+                      cat(">> Updated weights summary (post-LAMB): min =", 
+                          min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      # Apply update
+                      self$weights[[layer]] <- self$weights[[layer]] - updated_optimizer$updated_weights_or_biases
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    
                     else if (optimizer == "lookahead") {
-                      # Ensure gradients for weights are properly initialized
-                      grads_weights <- lapply(self$weights, function(weights) {
-                        # Create a gradient matrix with the same dimensions as weights
-                        grad_matrix <- matrix(runif(n = length(weights)), nrow = nrow(weights), ncol = ncol(weights))
-                        list(param = grad_matrix)  # Ensure 'param' element is included
-                      })
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        layer = layer,
+                        grads_matrix = weight_gradients[[layer]],
+                        lr = lr,
+                        beta1 = beta1,
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        target = "weights"
+                      )
                       
-                      # Perform Lookahead update for the weights
-                      for (layer in seq_along(self$weights)) {
-                        # Ensure 'param' element is present in grads_weights
-                        grads_list <- list(param = grads_weights[[layer]]$param)
-                        
-                        # Extract optimizer parameters for the current layer
-                        params <- list(
-                          param = self$weights[[layer]],
-                          m = optimizer_params_weights[[layer]]$m,
-                          v = optimizer_params_weights[[layer]]$v,
-                          r = optimizer_params_weights[[layer]]$r,
-                          slow_weights = optimizer_params_weights[[layer]]$slow_weights,
-                          lookahead_counter = optimizer_params_weights[[layer]]$lookahead_counter,
-                          lookahead_step = optimizer_params_weights[[layer]]$lookahead_step
-                        )
-                        
-                        # Perform Lookahead update
-                        lookahead_results <- lookahead_update(
-                          list(params),  # Wrap params in a list
-                          list(grads_list),  # Wrap grads_list in a list
-                          lr,
-                          beta1 = 0.9,
-                          beta2 = 0.999,
-                          epsilon = 1e-8,
-                          lookahead_step,
-                          base_optimizer = "adam_update",  # Use "adam" for weights
-                          t = epoch,
-                          lambda
-                        )
-                        
-                        # Extract updated weights and other parameters
-                        updated_weights_update <- lookahead_results$param
-                        new_m <- lookahead_results$m
-                        new_v <- lookahead_results$v
-                        new_r <- lookahead_results$r
-                        new_slow_weights <- lookahead_results$slow_weights
-                        new_lookahead_counter <- lookahead_results$lookahead_counter
-                        
-                        # Ensure updated_weights_update is not NULL
-                        if (is.null(updated_weights_update)) {
-                          cat("Updated weights update is NULL.\n")
-                          next  # Skip to the next layer
-                        }
-                        
-                        # Check the type of updated_weights_update
-                        if (is.matrix(updated_weights_update) && all(dim(updated_weights_update) == dim(self$weights[[layer]]))) {
-                          # If updated_weights_update is a matrix with matching dimensions
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else if (is.vector(updated_weights_update) && length(updated_weights_update) == length(self$weights[[layer]])) {
-                          # If updated_weights_update is a vector with matching length
-                          self$weights[[layer]] <- self$weights[[layer]] - updated_weights_update
-                        } else {
-                          cat("Dimensions or type of updated_weights_update are not suitable for subtraction.\n")
-                          cat("Attempting to adjust dimensions if possible.\n")
-                          
-                          # Attempting to adjust dimensions if updated_weights_update is not directly suitable
-                          if (is.vector(updated_weights_update)) {
-                            repeated_updated_weights_update <- matrix(rep(updated_weights_update, length.out = length(self$weights[[layer]])), nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]))
-                            self$weights[[layer]] <- self$weights[[layer]] - repeated_updated_weights_update
-                          } else {
-                            cat("Unable to adjust dimensions for updated_weights_update.\n")
-                          }
-                        }
-                        
-                        # Update optimizer parameters
-                        optimizer_params_weights[[layer]]$m <- new_m
-                        optimizer_params_weights[[layer]]$v <- new_v
-                        optimizer_params_weights[[layer]]$r <- new_r
-                        optimizer_params_weights[[layer]]$slow_weights <- new_slow_weights
-                        optimizer_params_weights[[layer]]$lookahead_counter <- new_lookahead_counter
-                      }
+                      
+                      
+                      cat(">> Updated weights summary (post-lookahead): min =", 
+                          min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      self$weights[[layer]] <- self$weights[[layer]] - updated_optimizer$updated_weights_or_biases
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
-                    
-                    
-                    
                     
                     else if (optimizer == "adagrad") {
-                      # Compute the gradients for weights if not already available
-                      grads_weights <- lapply(self$weights, function(weight) {
-                        # Example gradient computation (replace with actual gradients)
-                        grad_matrix <- matrix(runif(n = length(weight)), nrow = nrow(weight), ncol = ncol(weight))
-                        as.numeric(grad_matrix)  # Ensure the gradient is numeric
-                      })
+                      cat(">> Optimizer = adagrad\n")
+                      cat("Layer:", layer, "\n")
+                      cat("grads_matrix dim:\n")
+                      print(dim(grads_matrix))
                       
-                      # Perform Adagrad update for the weights
-                      for (layer in seq_along(self$weights)) {
-                        # Ensure grads_weights[[layer]] is a numeric vector
-                        grads_matrix <- as.numeric(grads_weights[[layer]])
-                        
-                        # Perform Adagrad update
-                        adagrad_results <- adagrad_update(optimizer_params_weights[[layer]], grads_matrix, lr)
-                        optimizer_params_weights[[layer]] <- adagrad_results$params
-                        r_values <- adagrad_results$r
-                        
-                        # Ensure r_values is numeric
-                        if (is.list(r_values)) {
-                          r_values <- unlist(r_values)
-                        }
-                        
-                        # Calculate updated_weights_update
-                        updated_weights_update <- grads_matrix / (sqrt(r_values) + epsilon)
-                        
-                        # Convert updated_weights_update to a numeric vector if it's a list
-                        if (is.list(updated_weights_update)) {
-                          updated_weights_update <- unlist(updated_weights_update)
-                        }
-                        
-                        # Perform subtraction for weights if dimensions match
-                        if (length(updated_weights_update) == prod(dim(self$weights[[layer]]))) {
-                          cat("Dimensions match exactly. Performing subtraction.\n")
-                          self$weights[[layer]] <- self$weights[[layer]] - matrix(updated_weights_update, nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-                        } else {
-                          cat("Dimensions do not match exactly. Adjusting dimensions for subtraction.\n")
-                          repeat_times <- ceiling(nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]) / length(updated_weights_update))
-                          repeated_updated_weights_update <- rep(updated_weights_update, length.out = nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]))
-                          self$weights[[layer]] <- self$weights[[layer]] - matrix(repeated_updated_weights_update, nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-                        }
-                      }
-                    }
-                    else if (optimizer == "adadelta") {
-                      # Compute the gradients for weights if not already available
-                      grads_weights <- lapply(self$weights, function(weight) {
-                        # Example gradient computation (replace with actual gradients)
-                        grad_matrix <- matrix(runif(n = length(weight)), nrow = nrow(weight), ncol = ncol(weight))
-                        as.numeric(grad_matrix)  # Ensure the gradient is numeric
-                      })
+                      # Use apply_optimizer_update to match unified format
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,  # Not used in Adagrad, but kept for consistency
+                        beta2 = beta2,  # Not used either
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "weights"
+                      )
                       
-                      # Perform Adadelta update for the weights
-                      for (layer in seq_along(self$weights)) {
-                        # Ensure grads_weights[[layer]] is a numeric vector
-                        grads_matrix <- as.numeric(grads_weights[[layer]])
-                        
-                        # Perform Adadelta update
-                        adadelta_results <- adadelta_update(optimizer_params_weights[[layer]], grads_matrix, lr, epsilon)
-                        optimizer_params_weights[[layer]] <- adadelta_results$params
-                        delta_w <- adadelta_results$delta_w
-                        
-                        # Ensure delta_w is numeric
-                        if (is.list(delta_w)) {
-                          delta_w <- unlist(delta_w)
-                        }
-                        
-                        # Check if delta_w is numeric
-                        if (!is.numeric(delta_w)) {
-                          stop("delta_w contains non-numeric values. Please check the adadelta_update function.")
-                        }
-                        
-                        # Calculate updated_weights_update
-                        updated_weights_update <- delta_w / (sqrt(delta_w) + epsilon)
-                        
-                        # Convert updated_weights_update to a numeric vector if it's a list
-                        if (is.list(updated_weights_update)) {
-                          updated_weights_update <- unlist(updated_weights_update)
-                        }
-                        
-                        # Perform subtraction for weights if dimensions match
-                        if (length(updated_weights_update) == prod(dim(self$weights[[layer]]))) {
-                          cat("Dimensions match exactly. Performing subtraction.\n")
-                          self$weights[[layer]] <- self$weights[[layer]] - matrix(updated_weights_update, nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-                        } else {
-                          cat("Dimensions do not match exactly. Adjusting dimensions for subtraction.\n")
-                          repeat_times <- ceiling(nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]) / length(updated_weights_update))
-                          repeated_updated_weights_update <- rep(updated_weights_update, length.out = nrow(self$weights[[layer]]) * ncol(self$weights[[layer]]))
-                          self$weights[[layer]] <- self$weights[[layer]] - matrix(repeated_updated_weights_update, nrow = nrow(self$weights[[layer]]), ncol = ncol(self$weights[[layer]]), byrow = TRUE)
-                        }
-                        
-                        # Print dimensions after Adadelta update
-                        cat("After Adadelta update - Dimensions of self$weights[[layer]]:", dim(self$weights[[layer]]), "\n")
-                      }
+                      # Extract updated weights
+                      updated_weights <- updated_optimizer$updated_weights_or_biases
+                      
+                      # Print summary
+                      cat(">> Updated weights summary (post-Adagrad): min =", min(updated_weights), 
+                          ", mean =", mean(updated_weights), 
+                          ", max =", max(updated_weights), "\n")
+                      
+                      # Apply weight update
+                      self$weights[[layer]] <- updated_weights
+                      
+                      # Update internal optimizer state
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
                     
+                    else if (optimizer == "adadelta") {
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,   # not used by Adadelta, but passed for consistency
+                        beta2 = beta2,   # not used by Adadelta
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "weights"
+                      )
+                      
+                      cat(">> Updated weights summary (post-Adadelta): min =", 
+                          min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
+                    }
                     
                     
                   }}
@@ -2267,7 +2003,7 @@ SONN <- R6Class(
                   cat("grads_matrix summary:\n")
                   print(summary(as.vector(grads_matrix)))
                   
-                  
+
                   # Apply optimizer update if optimizer is specified
                   if (!is.null(optimizer_params_biases[[layer]]) && !is.null(optimizer)) {
                     if (optimizer == "adam") {
@@ -2313,413 +2049,246 @@ SONN <- R6Class(
                       optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
                     else if (optimizer == "sgd") {
-                      # Perform SGD update for the biases
-                      optimizer_params_biases[[layer]] <- sgd_update(optimizer_params_biases[[layer]], grads_matrix, lr)
                       
-                      # Accessing the returned values
-                      updated_biases_update <- optimizer_params_biases[[layer]]$biases_update
                       
-                      # Convert updated_biases_update to a numeric vector if it's a list
-                      if (is.list(updated_biases_update)) {
-                        updated_biases_update <- unlist(updated_biases_update)
-                      }
+                      # $$$$$$$$$$$$ Fix: Apply SGD update (extra args passed for compatibility)
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_biases,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,         # Not used by SGD, but kept for unified signature
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "biases"
+                      )
                       
-                      # Checking and updating biases
-                      if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                        cat("Dimensions match for matrix. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                      } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                        cat("Dimensions match for vector. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                      } else {
-                        cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                        if (is.vector(updated_biases_update)) {
-                          repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                          self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_biases_update.\n")
-                        }
-                      }
+                      # $$$$$$$$$$$$ Diagnostic print
+                      cat(">> Updated biases summary (post-SGD): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      # $$$$$$$$$$$$ Final updates
+                      self$biases[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    
                     else if (optimizer == "sgd_momentum") {
-                      # Perform SGD update for the biases
-                      optimizer_params_biases[[layer]] <- sgd_momentum_update(optimizer_params_biases[[layer]], grads_matrix, lr)
                       
-                      # Accessing the returned values
-                      updated_biases_update <- optimizer_params_biases[[layer]]$biases_update
+                      # $$$$$$$$$$$$ Fix: Apply SGD momentum update (structured like SGD block)
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_biases,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,         # Used as momentum in this case
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "biases"
+                      )
                       
-                      # Convert updated_biases_update to a numeric vector if it's a list
-                      if (is.list(updated_biases_update)) {
-                        updated_biases_update <- unlist(updated_biases_update)
-                      }
+                      # $$$$$$$$$$$$ Diagnostic print
+                      cat(">> Updated biases summary (SGD momentum): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
                       
-                      # Checking and updating biases
-                      if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                        cat("Dimensions match for matrix. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                      } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                        cat("Dimensions match for vector. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                      } else {
-                        cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                        if (is.vector(updated_biases_update)) {
-                          repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                          self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_biases_update.\n")
-                        }
-                      }
-                    }else if (optimizer == "nag") {
-                      # Compute the gradients for biases if not already available
-                      # Example: grads_bias <- lapply(self$biases, function(bias) {
-                      #     # Compute gradients for biases (this is an example and should be replaced with actual gradient calculations)
-                      #     grad <- matrix(runif(n = length(bias)), nrow = nrow(bias), ncol = ncol(bias))
-                      #     grad
-                      # })
-                      grads_bias <- lapply(self$biases, function(bias) {
-                        if (is.null(dim(bias))) {
-                          # Convert vectors to matrices with a single column
-                          matrix(bias, nrow = length(bias), ncol = 1)
-                        } else {
-                          bias  # Already a matrix
-                        }
-                      })
-                      
-                      # Perform NAG update for the biases
-                      optimizer_params_biases[[layer]] <- nag_update(optimizer_params_biases[[layer]], grads_bias, lr, beta = 0.9)
-                      
-                      # Accessing the returned values
-                      updated_biases_update <- optimizer_params_biases[[layer]]$biases_update
-                      
-                      # Convert updated_biases_update to a numeric vector if it's a list
-                      if (is.list(updated_biases_update)) {
-                        updated_biases_update <- unlist(updated_biases_update)
-                      }
-                      
-                      # Checking and updating biases
-                      if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                        cat("Dimensions match for matrix. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                      } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                        cat("Dimensions match for vector. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                      } else {
-                        cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                        if (is.vector(updated_biases_update)) {
-                          repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                          self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_biases_update.\n")
-                        }
-                      }
-                    }else if (optimizer == "ftrl") {
-                      # Compute the gradients for biases if not already available
-                      # Example: grads_bias <- lapply(self$biases, function(bias) {
-                      #     # Compute gradients for biases (this is an example and should be replaced with actual gradient calculations)
-                      #     grad <- matrix(runif(n = length(bias)), nrow = nrow(bias), ncol = ncol(bias))
-                      #     grad
-                      # })
-                      grads_bias <- lapply(self$biases, function(bias) {
-                        if (is.null(dim(bias))) {
-                          # Convert vectors to matrices with a single column
-                          matrix(bias, nrow = length(bias), ncol = 1)
-                        } else {
-                          bias  # Already a matrix
-                        }
-                      })
-                      
-                      # Perform FTRL update for the biases
-                      ftrl_results <- ftrl_update(optimizer_params_biases[[layer]], grads_bias, lr, alpha = 0.1, beta = 1.0, lambda1 = 0.01, lambda2 = 0.01)
-                      optimizer_params_biases[[layer]] <- ftrl_results$params
-                      updated_biases_update <- ftrl_results$biases_update
-                      
-                      # Ensure updated_biases_update is not NULL
-                      if (is.null(updated_biases_update)) {
-                        stop("Updated biases update is NULL.")
-                      }
-                      
-                      # Ensure updated_biases_update is a matrix or vector
-                      if (is.list(updated_biases_update)) {
-                        updated_biases_update <- unlist(updated_biases_update)
-                      }
-                      
-                      # Check the type of updated_biases_update
-                      if (is.matrix(updated_biases_update)) {
-                        # If updated_biases_update is a matrix
-                        if (identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                          self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                        } else {
-                          # Adjust dimensions to match if necessary
-                          if (nrow(self$biases[[layer]]) != nrow(updated_biases_update)) {
-                            if (nrow(self$biases[[layer]]) > nrow(updated_biases_update)) {
-                              updated_biases_update <- rbind(updated_biases_update, matrix(0, nrow = nrow(self$biases[[layer]]) - nrow(updated_biases_update), ncol = ncol(updated_biases_update)))
-                            } else if (nrow(self$biases[[layer]]) < nrow(updated_biases_update)) {
-                              updated_biases_update <- updated_biases_update[1:nrow(self$biases[[layer]]), , drop = FALSE]
-                            }
-                          }
-                          if (ncol(self$biases[[layer]]) != ncol(updated_biases_update)) {
-                            if (ncol(self$biases[[layer]]) > ncol(updated_biases_update)) {
-                              updated_biases_update <- cbind(updated_biases_update, matrix(0, nrow = nrow(updated_biases_update), ncol = ncol(self$biases[[layer]]) - ncol(updated_biases_update)))
-                            } else if (ncol(self$biases[[layer]]) < ncol(updated_biases_update)) {
-                              updated_biases_update <- updated_biases_update[, 1:ncol(self$biases[[layer]]), drop = FALSE]
-                            }
-                          }
-                          self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                        }
-                      } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                        # If updated_biases_update is a vector
-                        self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                      } else {
-                        cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                        if (is.vector(updated_biases_update)) {
-                          repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                          self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_biases_update.\n")
-                        }
-                      }
+                      # $$$$$$$$$$$$ Final updates
+                      self$biases[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
-                    else if (optimizer == "lamb"){
-                      # Compute the gradients for biases if not already available
-                      grads_bias <- lapply(self$biases, function(bias) {
-                        grad <- matrix(runif(n = length(bias)), nrow = length(bias), ncol = 1)
-                        as.numeric(grad)  # Ensure the gradient is numeric
-                      })
+                    
+                    
+                    
+                    else if (optimizer == "nag") {
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_biases,
+                        grads_matrix = bias_gradients[[layer]],
+                        lr = lr,
+                        beta1 = beta1,  # Only beta1 needed for NAG
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "biases"
+                      )
                       
-                      # Perform LAMB update for the biases
-                      for (layer in seq_along(self$biases)) {
-                        # Ensure grads_bias[[layer]] and self$biases[[layer]] are matrices or vectors of the same dimension
-                        grads_bias[[layer]] <- as.numeric(grads_bias[[layer]])
-                        
-                        # Ensure params have valid numeric matrices or vectors
-                        params <- optimizer_params_biases[[layer]]
-                        params$param <- as.numeric(params$param)
-                        params$m <- as.numeric(params$m)
-                        params$v <- as.numeric(params$v)
-                        
-                        optimizer_params_biases[[layer]] <- lamb_update(params, grads_bias[[layer]], lr, beta1 = 0.9, beta2 = 0.999, eps = 1e-8, lambda = 0.01)
-                        updated_biases_update <- optimizer_params_biases[[layer]]$update
-                        
-                        # Ensure updated_biases_update is not NULL
-                        if (is.null(updated_biases_update)) {
-                          stop("Updated biases update is NULL.")
-                        }
-                        
-                        # Check the type of updated_biases_update
-                        if (is.matrix(updated_biases_update)) {
-                          # If updated_biases_update is a matrix
-                          if (identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                            self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                          } else {
-                            # Adjust dimensions to match if necessary
-                            if (nrow(self$biases[[layer]]) != nrow(updated_biases_update)) {
-                              if (nrow(self$biases[[layer]]) > nrow(updated_biases_update)) {
-                                updated_biases_update <- rbind(updated_biases_update, matrix(0, nrow = nrow(self$biases[[layer]]) - nrow(updated_biases_update), ncol = ncol(updated_biases_update)))
-                              } else if (nrow(self$biases[[layer]]) < nrow(updated_biases_update)) {
-                                updated_biases_update <- updated_biases_update[1:nrow(self$biases[[layer]]), , drop = FALSE]
-                              }
-                            }
-                            if (ncol(self$biases[[layer]]) != ncol(updated_biases_update)) {
-                              if (ncol(self$biases[[layer]]) > ncol(updated_biases_update)) {
-                                updated_biases_update <- cbind(updated_biases_update, matrix(0, nrow = nrow(updated_biases_update), ncol = ncol(self$biases[[layer]]) - ncol(updated_biases_update)))
-                              } else if (ncol(self$biases[[layer]]) < ncol(updated_biases_update)) {
-                                updated_biases_update <- updated_biases_update[, 1:ncol(self$biases[[layer]]), drop = FALSE]
-                              }
-                            }
-                            self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                          }
-                        } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                          # If updated_biases_update is a vector
-                          self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                        } else {
-                          cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                          cat("Attempting to adjust dimensions if possible.\n")
-                          
-                          # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                          if (is.vector(updated_biases_update)) {
-                            repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                            self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                          } else {
-                            cat("Unable to adjust dimensions for updated_biases_update.\n")
-                          }
-                        }
-                      }
+                      cat(">> Updated biases summary (post-NAG): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      self$biases[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    else if (optimizer == "ftrl") {
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer         = optimizer,
+                        optimizer_params  = optimizer_params_biases,
+                        grads_matrix      = grads_matrix,
+                        lr                = lr,
+                        alpha             = 0.1,
+                        beta1             = 1.0,
+                        lambda1           = 0.01,
+                        lambda2           = 0.01,
+                        epsilon           = epsilon,
+                        epoch             = epoch,
+                        self              = self,
+                        layer             = layer,
+                        target            = "biases"
+                      )
+                      
+                      cat(">> Updated biases summary (post-FTRL): min =", min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      self$biases[[layer]] <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
+                    }
+                    
+                    else if (optimizer == "lamb") {
+                      cat(">> Optimizer = lamb (biases)\n")
+                      cat("Layer:", layer, "\n")
+                      cat("grads_matrix dim:\n")
+                      print(dim(grads_matrix))
+                      
+                      # Standardize grads_matrix to list of matrices
+                      grads_input <- if (is.list(grads_matrix)) {
+                        grads_matrix
+                      } else if (is.null(dim(grads_matrix))) {
+                        list(matrix(grads_matrix, nrow = length(grads_matrix), ncol = 1))
+                      } else if (length(dim(grads_matrix)) == 1) {
+                        list(matrix(grads_matrix, nrow = length(grads_matrix), ncol = 1))
+                      } else {
+                        list(grads_matrix)
+                      }
+                      
+                      # Apply LAMB update through unified optimizer interface
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer         = optimizer,
+                        optimizer_params  = optimizer_params_biases,
+                        grads_matrix      = grads_matrix,
+                        lr                = lr,
+                        beta1             = beta1,
+                        beta2             = beta2,
+                        epsilon           = epsilon,
+                        epoch             = epoch,
+                        self              = self,
+                        layer             = layer,
+                        target            = "biases"
+                      )
+                      
+                      # Logging
+                      cat(">> Updated biases summary (post-LAMB): min =", 
+                          min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      # Update biases
+                      self$biases[[layer]] <- self$biases[[layer]] - updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
+                    }
+                    
                     else if (optimizer == "lookahead") {
-                      # Ensure gradients for biases are properly initialized
-                      grads_biases <- lapply(self$biases, function(biases) {
-                        grad_vector <- runif(n = length(biases))  # Generate random gradients
-                        list(param = grad_vector)  # Ensure 'param' element is included
-                      })
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_weights,
+                        layer = layer,
+                        grads_matrix = weight_gradients[[layer]],
+                        lr = lr,
+                        beta1 = beta1,
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        target = "biases"
+                      )
                       
-                      # Perform Lookahead update for the biases
-                      for (layer in seq_along(self$biases)) {
-                        # Ensure 'param' element is present in grads_list
-                        grads_list <- list(param = grads_biases[[layer]]$param)
-                        
-                        params <- list(
-                          param = self$biases[[layer]],
-                          m = optimizer_params_biases[[layer]]$m,
-                          v = optimizer_params_biases[[layer]]$v,
-                          r = optimizer_params_biases[[layer]]$r,
-                          slow_weights = optimizer_params_biases[[layer]]$slow_biases,
-                          lookahead_counter = optimizer_params_biases[[layer]]$lookahead_counter,
-                          lookahead_step = optimizer_params_biases[[layer]]$lookahead_step
-                        )
-                        
-                        optimizer_params_biases[[layer]] <- lookahead_update(
-                          list(params),  # Wrap params in a list
-                          list(grads_list),  # Wrap grads_list in a list
-                          lr,
-                          beta1 = 0.9,
-                          beta2 = 0.999,
-                          epsilon = 1e-8,
-                          lookahead_step,
-                          base_optimizer = "adam_update",  # Use "adam" for biases
-                          t = epoch,
-                          lambda
-                        )
-                        
-                        
-                        
-                        
-                        
-                        
-                        # Extract updated biases and other parameters
-                        updated_biases_update <- optimizer_params_biases[[layer]]$param
-                        new_m <- optimizer_params_biases[[layer]]$m
-                        new_v <- optimizer_params_biases[[layer]]$v
-                        new_r <- optimizer_params_biases[[layer]]$r
-                        new_slow_biases <- optimizer_params_biases[[layer]]$slow_biases
-                        new_lookahead_counter <- optimizer_params_biases[[layer]]$lookahead_counter
-                        
-                        # Ensure updated_biases_update is not NULL
-                        if (is.null(updated_biases_update)) {
-                          cat("Updated biases update is NULL.\n")
-                          next  # Skip to the next layer
-                        }
-                        
-                        # Check the type of updated_biases_update
-                        if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                          # If updated_biases_update is a vector with matching length
-                          self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                        } else {
-                          cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                          cat("Attempting to adjust dimensions if possible.\n")
-                          
-                          # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                          if (is.matrix(updated_biases_update)) {
-                            repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                            self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                          } else {
-                            cat("Unable to adjust dimensions for updated_biases_update.\n")
-                          }
-                        }
-                        
-                        # Update optimizer parameters
-                        optimizer_params_biases[[layer]]$m <- new_m
-                        optimizer_params_biases[[layer]]$v <- new_v
-                        optimizer_params_biases[[layer]]$r <- new_r
-                        optimizer_params_biases[[layer]]$slow_biases <- new_slow_biases
-                        optimizer_params_biases[[layer]]$lookahead_counter <- new_lookahead_counter
-                      }
+                      
+                      cat(">> Updated biases summary (post-lookahead): min =", 
+                          min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
+                      
+                      self$biases[[layer]] <- self$biases[[layer]] - updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    
                     
                     
                     else if (optimizer == "adagrad") {
-                      optimizer_params_biases[[layer]] <- adagrad_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr)
+                      cat(">> Optimizer = adagrad (biases)\n")
+                      cat("Layer:", layer, "\n")
+                      cat("errors dim:\n")
+                      print(dim(errors[[layer]]))
                       
-                      # Accessing the returned values
-                      r_values <- optimizer_params_biases[[layer]]$r
-                      
-                      # Ensure r_values is numeric
-                      if (is.list(r_values)) {
-                        r_values <- unlist(r_values)
-                      }
-                      
-                      # Calculate updated_biases_update
-                      updated_biases_update <- r_values / (sqrt(r_values) + epsilon)
-                      
-                      # Convert updated_biases_update to a numeric vector if it's a list
-                      if (is.list(updated_biases_update)) {
-                        updated_biases_update <- unlist(updated_biases_update)
-                      }
-                      
-                      # Checking and updating biases
-                      if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                        cat("Dimensions match for matrix. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                      } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                        cat("Dimensions match for vector. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
+                      # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+                      # FIXED: Make sure grads_matrix is always a matrix, even if 1D input
+                      grads_matrix <- if (is.null(dim(errors[[layer]]))) {
+                        matrix(errors[[layer]], nrow = 1)  # Convert vector to 1-row matrix
                       } else {
-                        cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                        if (is.vector(updated_biases_update)) {
-                          repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                          self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_biases_update.\n")
-                        }
+                        errors[[layer]]  # Already matrix, use directly
                       }
+                      grads_matrix <- colSums(grads_matrix)  # Now always works
+                      # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+                      
+                      # Unified call to apply_optimizer_update
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_biases,
+                        grads_matrix = grads_matrix,
+                        lr = lr,
+                        beta1 = beta1,  # not used by Adagrad but passed for uniformity
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "biases"
+                      )
+                      
+                      # Extract updated bias vector
+                      updated_biases <- updated_optimizer$updated_weights_or_biases
+                      
+                      cat(">> Updated biases summary (post-Adagrad): min =", min(updated_biases), 
+                          ", mean =", mean(updated_biases), 
+                          ", max =", max(updated_biases), "\n")
+                      
+                      # Apply to model
+                      self$biases[[layer]] <- self$biases[[layer]] - updated_biases
+                      
+                      # Update optimizer state
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
+                    
+                    
                     else if (optimizer == "adadelta") {
-                      optimizer_params_biases[[layer]] <- adadelta_update(optimizer_params_biases[[layer]], colSums(errors[[layer]]), lr)
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer = optimizer,
+                        optimizer_params = optimizer_params_biases,
+                        grads_matrix = colSums(errors[[layer]]),
+                        lr = lr,
+                        beta1 = beta1,  # unused by Adadelta but passed for uniformity
+                        beta2 = beta2,
+                        epsilon = epsilon,
+                        epoch = epoch,
+                        self = self,
+                        layer = layer,
+                        target = "biases"
+                      )
                       
-                      # Accessing the returned values
-                      delta_b <- optimizer_params_biases[[layer]]$delta_w
+                      cat(">> Updated biases summary (post-Adadelta): min =", 
+                          min(updated_optimizer$updated_weights_or_biases), 
+                          ", mean =", mean(updated_optimizer$updated_weights_or_biases), 
+                          ", max =", max(updated_optimizer$updated_weights_or_biases), "\n")
                       
-                      # Ensure delta_b is numeric
-                      if (is.list(delta_b)) {
-                        delta_b <- unlist(delta_b)
-                      }
-                      
-                      # Check if delta_b is numeric
-                      if (!is.numeric(delta_b)) {
-                        stop("delta_b contains non-numeric values. Please check the adadelta_update function.")
-                      }
-                      
-                      # Calculate updated_biases_update
-                      updated_biases_update <- delta_b / (sqrt(delta_b) + epsilon)
-                      
-                      # Convert updated_biases_update to a numeric vector if it's a list
-                      if (is.list(updated_biases_update)) {
-                        updated_biases_update <- unlist(updated_biases_update)
-                      }
-                      
-                      # Checking and updating biases
-                      if (is.matrix(updated_biases_update) && identical(dim(self$biases[[layer]]), dim(t(updated_biases_update)))) {
-                        cat("Dimensions match for matrix. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - t(updated_biases_update)
-                      } else if (is.vector(updated_biases_update) && length(updated_biases_update) == length(self$biases[[layer]])) {
-                        cat("Dimensions match for vector. Performing subtraction.\n")
-                        self$biases[[layer]] <- self$biases[[layer]] - updated_biases_update
-                      } else {
-                        cat("Dimensions or type of updated_biases_update are not suitable for subtraction.\n")
-                        cat("Attempting to adjust dimensions if possible.\n")
-                        
-                        # Attempting to adjust dimensions if updated_biases_update is not directly suitable
-                        if (is.vector(updated_biases_update)) {
-                          repeated_updated_biases_update <- rep(updated_biases_update, length.out = length(self$biases[[layer]]))
-                          self$biases[[layer]] <- self$biases[[layer]] - repeated_updated_biases_update
-                        } else {
-                          cat("Unable to adjust dimensions for updated_biases_update.\n")
-                        }
-                      }
+                      self$biases[[layer]] <- self$biases[[layer]] - updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
                     
                     
@@ -4820,68 +4389,59 @@ is_binary <- function(column) {
 }
 
 
-initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer) {
-  params <- list()
-  
+initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer, verbose = FALSE) {
   if (length(dim) == 2 && is.null(layer)) {
-    # Multi-layer is not specified; wrap single-layer into a list
     dim <- list(dim)
   }
   
-  for (i in seq_along(dim)) {
-    layer_dim <- dim[[i]]
-    
-    if (length(layer_dim) != 2 || any(is.na(layer_dim)) || any(layer_dim <= 0)) {
-      cat("Invalid dimensions detected for layer", i, ". Setting default dimension [1, 1].\n")
-      layer_dim <- c(1, 1)
-    }
-    
-    nrow_dim <- layer_dim[1]
-    ncol_dim <- layer_dim[2]
-    
-    current_layer <- if (!is.null(layer)) layer else i
-    cat("Layer", current_layer, "dimensions: nrow =", nrow_dim, ", ncol =", ncol_dim, "\n")
-    
-    param_init <- matrix(rnorm(nrow_dim * ncol_dim), nrow = nrow_dim, ncol = ncol_dim)
-    
-    # Store optimizer state for this layer
-    entry <- switch(optimizer,
-                    adam = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    rmsprop = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    adadelta = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    adagrad = list(param = param_init, r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    sgd = list(param = param_init, momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    sgd_momentum = list(param = param_init, momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    nag = list(param = param_init,
-                               momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                               fast_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                               fast_biases = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    ftrl = list(param = param_init,
-                                z = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                n = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    lamb = list(param = param_init,
-                                m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
-                    lookahead = list(param = param_init,
-                                     m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                     v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                     r = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                     slow_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
-                                     lookahead_counter = 0,
-                                     lookahead_step = lookahead_step),
-                    stop(paste("Optimizer", optimizer, "not supported."))
-    )
-    
-    params[[current_layer]] <- entry
-    
-    if (verbose) {
-      cat("Layer", current_layer, "optimizer tracking params initialized:\n")
-      print(str(entry))
-    }
+  layer_dim <- dim[[1]]  # always using first dim block
+  if (length(layer_dim) != 2 || any(is.na(layer_dim)) || any(layer_dim <= 0)) {
+    cat("Invalid dimensions detected. Setting default dimension [1, 1].\n")
+    layer_dim <- c(1, 1)
   }
   
-  return(params)
+  nrow_dim <- layer_dim[1]
+  ncol_dim <- layer_dim[2]
+  
+  current_layer <- if (!is.null(layer)) layer else 1
+  cat("Layer", current_layer, "dimensions: nrow =", nrow_dim, ", ncol =", ncol_dim, "\n")
+  
+  param_init <- matrix(rnorm(nrow_dim * ncol_dim), nrow = nrow_dim, ncol = ncol_dim)
+  
+  entry <- switch(optimizer,
+                  adam = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  rmsprop = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  adadelta = list(param = param_init, m = matrix(0, nrow = nrow_dim, ncol = ncol_dim), v = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  adagrad = list(param = param_init, r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  sgd = list(param = param_init, momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  sgd_momentum = list(param = param_init, momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  nag = list(param = param_init,
+                             momentum = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                             fast_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                             fast_biases = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  ftrl = list(param = param_init,
+                              z = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                              n = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  lamb = list(param = param_init,
+                              m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                              v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                              r = matrix(0, nrow = nrow_dim, ncol = ncol_dim)),
+                  lookahead = list(param = param_init,
+                                   m = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                   v = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                   r = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                   slow_weights = matrix(0, nrow = nrow_dim, ncol = ncol_dim),
+                                   lookahead_counter = 0,
+                                   lookahead_step = lookahead_step),
+                  stop(paste("Optimizer", optimizer, "not supported."))
+  )
+  
+  if (verbose) {
+    cat("Layer", current_layer, "optimizer tracking params initialized:\n")
+    print(str(entry))
+  }
+  
+  return(entry)
 }
 
 
@@ -4981,115 +4541,92 @@ rmsprop_update <- function(params, grads, lr, beta2 = 0.999, epsilon = 1e-8) {
 
 
 adagrad_update <- function(params, grads, lr, epsilon = 1e-8) {
-  # Initialize r as a list if it's not already
+  # Initialize r as a list if not already
   if (!is.list(params$r)) {
     params$r <- vector("list", length(grads))
   }
   
-  # Update each element of r
+  # Initialize updates
+  updates <- vector("list", length(grads))
+  
   for (i in seq_along(grads)) {
-    # Get the dimensions of the current gradient
     grad_dims <- dim(grads[[i]])
     
-    # If grads[[i]] is a scalar, set grad_dims to c(1) and convert to array
     if (is.null(grad_dims)) {
       grad_dims <- c(1)
       grads[[i]] <- array(grads[[i]], dim = grad_dims)
     }
     
-    # Initialize r if it doesn't exist or has wrong dimensions
+    # Init r if missing or mismatched
     if (is.null(params$r[[i]]) || !all(dim(params$r[[i]]) == grad_dims)) {
       params$r[[i]] <- array(0, dim = grad_dims)
     }
     
-    # Update r for this element
-    params$r[[i]] <- params$r[[i]] + grads[[i]] ^ 2
+    # Update r
+    params$r[[i]] <- params$r[[i]] + grads[[i]]^2
+    
+    # Compute update
+    updates[[i]] <- lr * grads[[i]] / (sqrt(params$r[[i]]) + epsilon)
   }
   
-  # Compute the updates for each element
-  updates <- Map(function(r, grad) lr * grad / (sqrt(r) + epsilon), params$r, grads)
-  
-  # Convert updates to the same format as grads (matrix or array)
-  for (i in seq_along(updates)) {
-    if (is.null(dim(grads[[i]]))) {
-      updates[[i]] <- array(updates[[i]], dim = c(1))
-    } else {
-      updates[[i]] <- matrix(updates[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-    }
-  }
-  
-  # Return updated parameters and updates
-  return(list(r = params$r, updates = updates))
+  # Return as full structured output
+  return(list(
+    params = params,
+    weights_update = updates,
+    biases_update = updates  # If shared logic for both — differentiate if needed
+  ))
 }
 
 adadelta_update <- function(params, grads, lr, beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8, t = 1) {
-  # Initialize m and v as lists if they are not already
-  if (!is.list(params$m)) {
-    params$m <- vector("list", length(grads))
-  }
-  if (!is.list(params$v)) {
-    params$v <- vector("list", length(grads))
-  }
+  if (!is.list(params$m)) params$m <- vector("list", length(grads))
+  if (!is.list(params$v)) params$v <- vector("list", length(grads))
   
-  # Initialize delta_w
-  delta_w <- vector("list", length(grads))
+  updates <- vector("list", length(grads))
   
-  # Update each element of m and v
   for (i in seq_along(grads)) {
-    # Get the dimensions of the current gradient
+    # Ensure gradient is in array form
     grad_dims <- dim(grads[[i]])
-    
-    # If grads[[i]] is a scalar, set grad_dims to c(1) and convert to array
     if (is.null(grad_dims)) {
-      grad_dims <- c(1)
-      grads[[i]] <- array(grads[[i]], dim = grad_dims)
+      grads[[i]] <- array(grads[[i]], dim = c(length(grads[[i]]), 1))
+      grad_dims <- dim(grads[[i]])
     }
     
-    # Initialize m and v if they don't exist or have wrong dimensions
-    if (is.null(params$m[[i]]) || !all(dim(params$m[[i]]) == grad_dims)) {
+    # Initialize accumulators with same shape
+    if (is.null(params$m[[i]]) || !identical(dim(params$m[[i]]), grad_dims)) {
       params$m[[i]] <- array(0, dim = grad_dims)
     }
-    if (is.null(params$v[[i]]) || !all(dim(params$v[[i]]) == grad_dims)) {
+    if (is.null(params$v[[i]]) || !identical(dim(params$v[[i]]), grad_dims)) {
       params$v[[i]] <- array(0, dim = grad_dims)
     }
     
-    # Update m and v for this element
-    params$v[[i]] <- beta2 * params$v[[i]] + (1 - beta2) * (grads[[i]] ^ 2)
+    # Clean NaNs from gradients
+    grads[[i]][is.na(grads[[i]])] <- 0
+    params$v[[i]][is.na(params$v[[i]])] <- 0
     
-    # Bias correction
+    # Adadelta updates
+    params$v[[i]] <- beta2 * params$v[[i]] + (1 - beta2) * (grads[[i]] ^ 2)
     v_hat <- params$v[[i]] / (1 - beta2 ^ t)
     
-    # Calculate the Adadelta update
     delta <- (sqrt(params$m[[i]] + epsilon) / sqrt(v_hat + epsilon)) * grads[[i]]
+    delta[is.nan(delta) | is.infinite(delta)] <- 0
+    delta <- pmin(pmax(delta, -5), 5)  # optional clip
     
-    # Update m for this element
     params$m[[i]] <- beta1 * params$m[[i]] + (1 - beta1) * (delta ^ 2)
-    
-    # Store the update
-    delta_w[[i]] <- delta
+    updates[[i]] <- delta
   }
   
-  # Convert delta_w to the same format as grads (matrix or array)
-  for (i in seq_along(delta_w)) {
-    if (is.null(dim(grads[[i]]))) {
-      delta_w[[i]] <- array(delta_w[[i]], dim = c(1))
-    } else {
-      delta_w[[i]] <- matrix(delta_w[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-    }
-  }
-  
-  # Return updated parameters, m, v, and delta_w
-  return(list(m = params$m, v = params$v, delta_w = delta_w))
+  return(list(
+    params = list(m = params$m, v = params$v),
+    weights_update = updates,
+    biases_update = updates
+  ))
 }
 
 # Stochastic Gradient Descent with Momentum
 # Define the sgd_update function with improvements
 # Improved SGD Update Function
 # Define the sgd_update function
-sgd_momentum_update <- function(params, grads, lr) {
-  
-  momentum <- 0.9
-  
+sgd_momentum_update <- function(params, grads, lr, momentum) {
   # Initialize momentum as a list if it is not already
   if (!is.list(params$momentum)) {
     params$momentum <- vector("list", length(grads))
@@ -5097,99 +4634,88 @@ sgd_momentum_update <- function(params, grads, lr) {
   
   # Initialize weights_update and biases_update as lists
   weights_update <- vector("list", length(grads))
-  biases_update <- vector("list", length(grads))
+  biases_update  <- vector("list", length(grads))
   
   # Update each element of momentum and calculate weights_update and biases_update
   for (i in seq_along(grads)) {
-    # Get the dimensions of the current gradient
     grad_dims <- dim(grads[[i]])
     
-    # If grads[[i]] is a scalar, set grad_dims to c(1) and convert to array
     if (is.null(grad_dims)) {
       grad_dims <- c(1)
       grads[[i]] <- array(grads[[i]], dim = grad_dims)
     }
     
-    # Initialize momentum if it doesn't exist or has wrong dimensions
     if (is.null(params$momentum[[i]]) || !all(dim(params$momentum[[i]]) == grad_dims)) {
       params$momentum[[i]] <- array(0, dim = grad_dims)
     }
     
-    # Update momentum for this element
+    # Momentum update
     params$momentum[[i]] <- momentum * params$momentum[[i]] - lr * grads[[i]]
     
-    # Calculate weights_update for this element
     weights_update[[i]] <- params$momentum[[i]]
-    
-    # Calculate biases_update for this element (biases are updated directly without momentum)
-    biases_update[[i]] <- lr * grads[[i]]
+    biases_update[[i]]  <- lr * grads[[i]]  # This is just a placeholder; bias logic might differ
   }
   
-  # Convert weights_update and biases_update to the same format as grads (matrix or array)
+  # Standardize dimensions to match grads
   for (i in seq_along(weights_update)) {
     if (is.null(dim(grads[[i]]))) {
       weights_update[[i]] <- array(weights_update[[i]], dim = c(1))
-      biases_update[[i]] <- array(biases_update[[i]], dim = c(1))
+      biases_update[[i]]  <- array(biases_update[[i]],  dim = c(1))
     } else {
       weights_update[[i]] <- matrix(weights_update[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-      biases_update[[i]] <- matrix(biases_update[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
+      biases_update[[i]]  <- matrix(biases_update[[i]],  nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
     }
   }
   
-  # Return updated parameters, weights_update, and biases_update
   return(list(params = params, weights_update = weights_update, biases_update = biases_update))
 }
 
 sgd_update <- function(params, grads, lr) {
-  # Initialize weights_update and biases_update as lists
-  weights_update <- vector("list", length(grads))
-  biases_update <- vector("list", length(grads))
+  updated_params <- list()
   
-  # Update weights and biases
+  weights_update <- list()
+  biases_update  <- list()
+  
   for (i in seq_along(grads)) {
-    # Get the dimensions of the current gradient
-    grad_dims <- dim(grads[[i]])
+    grad_matrix <- as.matrix(grads[[i]])
+    param_matrix <- as.matrix(params$param)
     
-    # If grads[[i]] is a scalar, set grad_dims to c(1) and convert to array
-    if (is.null(grad_dims)) {
-      grad_dims <- c(1)
-      grads[[i]] <- array(grads[[i]], dim = grad_dims)
+    # Safe reshape if needed
+    if (!all(dim(grad_matrix) == dim(param_matrix))) {
+      grad_matrix <- matrix(rep(grad_matrix, length.out = length(param_matrix)), nrow = nrow(param_matrix))
     }
     
-    # Calculate weights_update for this element
-    weights_update[[i]] <- lr * grads[[i]]
+    update_matrix <- lr * grad_matrix
+    updated_param_matrix <- param_matrix - update_matrix
     
-    # Calculate biases_update for this element
-    biases_update[[i]] <- lr * grads[[i]]  # Biases are updated with the same gradient as weights
+    # Store updates
+    updated_params$param <- updated_param_matrix
+    updated_params$momentum <- params$momentum  # even if unused
+    
+    weights_update[[i]] <- update_matrix
+    biases_update[[i]]  <- matrix(0, nrow = 1, ncol = 1)  # dummy for compatibility
   }
   
-  # Convert weights_update and biases_update to the same format as grads (matrix or array)
-  for (i in seq_along(weights_update)) {
-    if (is.null(dim(grads[[i]]))) {
-      weights_update[[i]] <- array(weights_update[[i]], dim = c(1))
-      biases_update[[i]] <- array(biases_update[[i]], dim = c(1))
-    } else {
-      weights_update[[i]] <- matrix(weights_update[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-      biases_update[[i]] <- matrix(biases_update[[i]], nrow = dim(grads[[i]])[1], ncol = dim(grads[[i]])[2])
-    }
-  }
-  
-  # Return updated parameters, weights_update, and biases_update
-  return(list(weights_update = weights_update, biases_update = biases_update))
+  return(list(
+    params = updated_params,
+    weights_update = weights_update,
+    biases_update = biases_update
+  ))
 }
 
-nag_update <- function(params, grads, lr, beta = 0.9) {
+
+
+nag_update <- function(params, grads, lr, beta1 = 0.9) {
   weights_update <- vector("list", length(grads))
   biases_update <- vector("list", length(grads))
   
   for (i in seq_along(grads)) {
     grad_dims <- dim(grads[[i]])
     if (is.null(grad_dims)) {
-      grad_dims <- c(length(grads[[i]]), 1)  # Handle gradients as vectors
+      grad_dims <- c(length(grads[[i]]), 1)
       grads[[i]] <- array(grads[[i]], dim = grad_dims)
     }
     
-    # Ensure params components are initialized
     if (length(params$momentum) < i) {
       params$momentum[[i]] <- matrix(0, nrow = grad_dims[1], ncol = grad_dims[2])
     }
@@ -5200,12 +4726,11 @@ nag_update <- function(params, grads, lr, beta = 0.9) {
       params$fast_biases[[i]] <- matrix(0, nrow = grad_dims[1], ncol = grad_dims[2])
     }
     
-    # Update the momentum term for weights
-    params$momentum[[i]] <- beta * params$momentum[[i]] + grads[[i]]
-    weights_update[[i]] <- lr * (beta * params$momentum[[i]] + grads[[i]])
+    # ✅ Use beta1
+    params$momentum[[i]] <- beta1 * params$momentum[[i]] + grads[[i]]
+    weights_update[[i]] <- lr * (beta1 * params$momentum[[i]] + grads[[i]])
     biases_update[[i]] <- lr * grads[[i]]
     
-    # Update fast weights for NAG
     params$fast_weights[[i]] <- params$fast_weights[[i]] - weights_update[[i]]
     params$fast_biases[[i]] <- params$fast_biases[[i]] - biases_update[[i]]
   }
@@ -5213,221 +4738,201 @@ nag_update <- function(params, grads, lr, beta = 0.9) {
   return(list(params = params, weights_update = weights_update, biases_update = biases_update))
 }
 
-# Define FTRL optimizer
-ftrl_update <- function(params, grads, lr, alpha = 0.1, beta = 1.0, lambda1 = 0.01, lambda2 = 0.01) {
-  weights_update <- vector("list", length(grads))
-  biases_update <- vector("list", length(grads))
+
+ftrl_update <- function(params, grads, lr,
+                        alpha   = 0.1,
+                        beta    = beta1,
+                        lambda1 = 0.01,
+                        lambda2 = 0.01) {
+  # 1) Wrap single matrix/vector into a list
+  if (!is.list(grads)) {
+    grads <- list(grads)
+  }
+  n_grads <- length(grads)
   
-  for (i in seq_along(grads)) {
-    grad_dims <- dim(grads[[i]])
-    if (is.null(grad_dims)) {
-      grad_dims <- c(length(grads[[i]]), 1)  # Handle gradients as vectors
-      grads[[i]] <- array(grads[[i]], dim = grad_dims)
-    }
-    
-    # Ensure params components are initialized
-    if (length(params$z) < i || is.null(params$z[[i]])) {
-      params$z[[i]] <- matrix(0, nrow = grad_dims[1], ncol = grad_dims[2])
-    }
-    if (length(params$n) < i || is.null(params$n[[i]])) {
-      params$n[[i]] <- matrix(0, nrow = grad_dims[1], ncol = grad_dims[2])
-    }
-    
-    # Update z and n
-    params$z[[i]] <- params$z[[i]] + grads[[i]]
-    params$n[[i]] <- params$n[[i]] + grads[[i]]^2
-    
-    # Compute the update step for weights
-    weights_update[[i]] <- -((lr / (sqrt(params$n[[i]]) + beta)) * (params$z[[i]] - (lambda1 / (lr + beta)) * sign(params$z[[i]])))
-    
-    # Compute the update step for biases
-    biases_update[[i]] <- rep(0, length(grads[[i]]))  # No bias updates for this example
-    
-    # Update weights
-    params$z[[i]] <- params$z[[i]] - weights_update[[i]]
-    params$n[[i]] <- params$n[[i]] - weights_update[[i]]
+  # 2) Ensure params$z and params$n exist and are lists of correct length
+  if (!is.list(params$z) || length(params$z) != n_grads) {
+    params$z <- vector("list", n_grads)
+  }
+  if (!is.list(params$n) || length(params$n) != n_grads) {
+    params$n <- vector("list", n_grads)
   }
   
-  return(list(params = params, weights_update = weights_update, biases_update = biases_update))
+  # Prepare outputs
+  weights_update <- vector("list", n_grads)
+  biases_update  <- vector("list", n_grads)
+  
+  for (i in seq_len(n_grads)) {
+    # 3) Force grad to matrix
+    grad_i <- grads[[i]]
+    if (!is.matrix(grad_i)) {
+      grad_i <- matrix(grad_i, nrow = length(grad_i), ncol = 1)
+    }
+    
+    # 4) Initialize z[i], n[i] if missing or wrong shape
+    if (is.null(params$z[[i]]) ||
+        !identical(dim(params$z[[i]]), dim(grad_i))) {
+      params$z[[i]] <- matrix(0, nrow = nrow(grad_i), ncol = ncol(grad_i))
+    }
+    if (is.null(params$n[[i]]) ||
+        !identical(dim(params$n[[i]]), dim(grad_i))) {
+      params$n[[i]] <- matrix(0, nrow = nrow(grad_i), ncol = ncol(grad_i))
+    }
+    
+    # Shortcut references
+    z_i <- params$z[[i]]
+    n_i <- params$n[[i]]
+    
+    # 5) Compute new accumulators
+    n_new <- n_i + grad_i^2
+    sigma <- (sqrt(n_new) - sqrt(n_i)) / alpha
+    z_new <- z_i + grad_i - sigma * 0  # if you had slow weights, you'd subtract them here
+    
+    # 6) FTRL update step
+    denom <- (beta + sqrt(n_new)) / alpha + lambda2
+    w_update <- -1/denom * (z_new - lambda1 * sign(z_new))
+    
+    # 7) Store updates
+    weights_update[[i]] <- w_update
+    biases_update[[i]]  <- matrix(0,
+                                  nrow = nrow(grad_i),
+                                  ncol = ncol(grad_i))  # still zero for biases
+    
+    # 8) Save back updated accumulators
+    params$z[[i]] <- z_new
+    params$n[[i]] <- n_new
+  }
+  
+  return(list(
+    params         = params,
+    weights_update = weights_update,
+    biases_update  = biases_update
+  ))
 }
 
-# LAMB Update Function
-lamb_update <- function(params, grads, lr, beta1, beta2, epsilon, lambda) {
-  # Ensure params$param and grads are numeric
+
+# LAMB Update Function #$$$$$$$$$$$$$
+lamb_update <- function(params, grads, lr, beta1, beta2, eps, lambda) {
+  # Ensure param and grads are numeric vectors
   params$param <- as.numeric(params$param)
   grads <- as.numeric(grads)
   
-  # Extract the dimensions of the parameter matrix from the network structure
-  nrows <- length(params$param) / length(grads)
-  ncols <- length(grads)
+  # Ensure m and v are initialized and numeric
+  if (is.null(params$m)) params$m <- rep(0, length(grads))
+  if (is.null(params$v)) params$v <- rep(0, length(grads))
   
-  # Convert vectors to matrices for the current layer
-  param_matrix <- matrix(params$param, nrow = nrows, ncol = ncols)
-  grad_matrix <- matrix(grads, nrow = nrows, ncol = ncols)
-  m <- matrix(params$m, nrow = nrows, ncol = ncols)
-  v <- matrix(params$v, nrow = nrows, ncol = ncols)
+  m <- beta1 * params$m + (1 - beta1) * grads
+  v <- beta2 * params$v + (1 - beta2) * (grads^2)
   
-  # Compute m_t and v_t
-  m <- beta1 * m + (1 - beta1) * grad_matrix
-  v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
-  
-  # Compute m_hat and v_hat
   m_hat <- m / (1 - beta1)
   v_hat <- v / (1 - beta2)
   
-  # Compute weight updates
-  update <- m_hat / (sqrt(v_hat) + epsilon)
+  update <- m_hat / (sqrt(v_hat) + eps)
+  
+  # Trust ratio scaling (LAMB-specific)
+  w_norm <- sqrt(sum(params$param^2))
+  u_norm <- sqrt(sum(update^2))
+  trust_ratio <- ifelse(w_norm > 0 && u_norm > 0, w_norm / u_norm, 1.0)
+  
+  update <- trust_ratio * update
   
   # Apply weight decay
-  update <- update / (1 + lambda * lr)
+  update <- update + lambda * params$param
   
-  # Ensure that param_matrix and update have the same dimensions
-  if (all(dim(param_matrix) == dim(update))) {
-    updated_param <- param_matrix - lr * update
-  } else {
-    stop("Dimensions of param_matrix and update do not match.")
-  }
+  updated_param <- params$param - lr * update
   
-  # Return updated parameters and optimizers state
-  list(
-    param = as.numeric(updated_param),
-    m = as.numeric(m),
-    v = as.numeric(v),
-    update = as.numeric(update)  # Ensure update is included in the return list
-  )
+  return(list(
+    params = list(
+      param = updated_param,
+      m = m,
+      v = v
+    ),
+    weights_update = list(update),  # Required for downstream [[1]]
+    biases_update = list(rep(0, length(update)))  # Placeholder for biases
+  ))
 }
 
 
 
-lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, lookahead_step, base_optimizer, t, lambda) {
+
+lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, lookahead_step, base_optimizer, epoch, lambda) {
   updated_params_list <- list()
   
-  # Check the structure of grads_list
-  cat("Structure of grads_list:\n")
-  print(str(grads_list))
+  cat(">> Lookahead optimizer running\n")
   
-  for (layer in seq_along(params)) {
-    cat("Processing Layer lookahead update: ", layer, "\n")
-    
-    # Check the structure of each layer in grads_list
-    cat("Structure of grads_list for layer", layer, ":\n")
-    print(str(grads_list[[layer]]))
-    
-    param_list <- params[[layer]]
-    
-    # Check if 'param' exists in grads_list[[layer]]
-    if (!"param" %in% names(grads_list[[layer]])) {
-      cat("Warning: 'param' not found in grads_list for layer", layer, "\n")
-      next  # Skip to the next layer if 'param' is not found
-    }
-    
-    grad_matrix <- grads_list[[layer]]$param
-    
-    # Ensure the gradients are correctly structured
-    if (is.null(grad_matrix)) {
-      stop(paste("Missing element 'param' in gradients for layer", layer))
-    }
-    
-    param <- param_list$param
-    m <- param_list$m
-    v <- param_list$v
-    r <- param_list$r
-    slow_param <- param_list$slow_weights  # Use slow_weights for weights or biases
-    lookahead_counter <- param_list$lookahead_counter
-    
-    # Debug statements
-    cat("Initial lookahead_counter for layer", layer, ":", lookahead_counter, "\n")
-    cat("lookahead_step for layer", layer, ":", lookahead_step, "\n")
-    
-    # Ensure lookahead_counter is not NULL and is numeric
-    if (is.null(lookahead_counter) || !is.numeric(lookahead_counter)) {
-      lookahead_counter <- 0  # Initialize to 0 if missing or not numeric
-      cat("lookahead_counter initialized to 0 for layer", layer, "\n")
-    }
-    
-    if (is.null(lookahead_step) || !is.numeric(lookahead_step)) {
-      stop("lookahead_step is missing or not numeric.")
-    }
-    
-    if (base_optimizer == "adam_update") {
-      # Adam Update
-      m <- beta1 * m + (1 - beta1) * grad_matrix
-      v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
-      
-      m_hat <- m / (1 - beta1^t)
-      v_hat <- v / (1 - beta2^t)
-      
-      param <- param - lr * m_hat / (sqrt(v_hat) + epsilon)
-      
-      updated_params_list[[layer]] <- list(
-        param = param,
-        m = m,
-        v = v,
-        r = r,
-        slow_weights = slow_param,
-        lookahead_counter = lookahead_counter,
-        lookahead_step = lookahead_step
-      )
-      
-    } else if (base_optimizer == "lamb_update") {
-      # LAMB Update
-      m <- beta1 * m + (1 - beta1) * grad_matrix
-      v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
-      
-      m_hat <- m / (1 - beta1^t)
-      v_hat <- v / (1 - beta2^t)
-      
-      r1 <- sqrt(sum(param^2))
-      r2 <- sqrt(sum((m_hat / (sqrt(v_hat) + epsilon))^2))
-      
-      ratio <- ifelse(r1 == 0 | r2 == 0, 1, r1 / r2)
-      
-      param <- param - lr * ratio * m_hat / (sqrt(v_hat) + epsilon)
-      
-      slow_param <- beta1 * slow_param + (1 - beta1) * param
-      
-      updated_params_list[[layer]] <- list(
-        param = param,
-        m = m,
-        v = v,
-        r = r,
-        slow_weights = slow_param,
-        lookahead_counter = lookahead_counter,
-        lookahead_step = lookahead_step
-      )
-      
-    } else {
-      stop("Unsupported base optimizer.")
-    }
-    
-    # Update the lookahead mechanism
-    lookahead_counter <- lookahead_counter + 1
-    
-    if (lookahead_counter >= lookahead_step) {
-      cat("Performing lookahead update for layer", layer, "\n")
-      slow_param <- param
-      lookahead_counter <- 0
-    }
-    
-    # Store the updated parameters
-    updated_params_list[[layer]] <- list(
-      param = param,
-      m = m,
-      v = v,
-      r = r,
-      slow_weights = slow_param,
-      lookahead_counter = lookahead_counter,
-      lookahead_step = lookahead_step
-    )
-    
-    cat("Updated lookahead_counter for layer", layer, ":", lookahead_counter, "\n")
+  # grads_list is just the matrix for this layer
+  grad_matrix <- if (is.list(grads_list)) grads_list[[1]] else grads_list
+  
+  if (is.null(grad_matrix)) stop("Missing gradient matrix")
+  
+  # ✅ FIXED: Don't double-index
+  param_list <- params
+  
+  param <- param_list$param
+  m <- param_list$m
+  v <- param_list$v
+  r <- param_list$r
+  slow_param <- param_list$slow_weights
+  lookahead_counter <- param_list$lookahead_counter
+  lookahead_step_layer <- param_list$lookahead_step
+  
+  if (is.null(lookahead_counter)) {
+    lookahead_counter <- 0
+    cat("Initialized lookahead_counter = 0\n")
   }
+  
+  if (is.null(lookahead_step_layer)) {
+    lookahead_step_layer <- lookahead_step
+  }
+  
+  if (base_optimizer == "adam_update") {
+    m <- beta1 * m + (1 - beta1) * grad_matrix
+    v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
+    
+    m_hat <- m / (1 - beta1^epoch)
+    v_hat <- v / (1 - beta2^epoch)
+    
+    update <- lr * m_hat / (sqrt(v_hat) + epsilon)
+    param <- param - update
+    
+  } else if (base_optimizer == "lamb_update") {
+    m <- beta1 * m + (1 - beta1) * grad_matrix
+    v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
+    
+    m_hat <- m / (1 - beta1^epoch)
+    v_hat <- v / (1 - beta2^epoch)
+    
+    r1 <- sqrt(sum(param^2))
+    r2 <- sqrt(sum((m_hat / (sqrt(v_hat) + epsilon))^2))
+    ratio <- ifelse(r1 == 0 | r2 == 0, 1, r1 / r2)
+    
+    update <- lr * ratio * m_hat / (sqrt(v_hat) + epsilon)
+    param <- param - update
+    
+  } else {
+    stop("Unsupported base optimizer in lookahead_update()")
+  }
+  
+  lookahead_counter <- lookahead_counter + 1
+  if (lookahead_counter >= lookahead_step_layer) {
+    cat(">> Lookahead sync\n")
+    slow_param <- param
+    lookahead_counter <- 0
+  }
+  
+  updated_params_list <- list(
+    param = param,
+    m = m,
+    v = v,
+    r = r,
+    slow_weights = slow_param,
+    lookahead_counter = lookahead_counter,
+    lookahead_step = lookahead_step_layer,
+    weights_update = update
+  )
   
   return(updated_params_list)
 }
-
-
-
 
 
 
