@@ -7,7 +7,6 @@ function(showlibraries){
   # install.packages("rlist")
   # install.packages("pracma")
   # install.packages("randomForest", type = "source")
-  library(tensorflow)
   library(R6)
   library(cluster)
   library(fpc)
@@ -961,7 +960,7 @@ SONN <- R6Class(
         }
         Z <- pmin(pmax(Z, -clip_limit), clip_limit)
         
-        Z <- Z  / 4
+        # Z <- Z  / 4
         
         
         cat("[Debug] SL NN : Z summary AFTER clipping:\n")

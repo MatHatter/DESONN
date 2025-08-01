@@ -215,7 +215,7 @@ numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'pl
 y <- data %>% dplyr::select(DEATH_EVENT)
 colname_y <- colnames(y)
 # Define the number of samples for each set
-set.seed(11)
+set.seed(111)
 total_num_samples <- nrow(data)
 # Define num_samples
 num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
