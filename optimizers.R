@@ -92,6 +92,15 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     cat("grads_matrix dim:\n")
     print(dim(grads_matrix))
     
+    if (!exists("target_dim")) {
+      target_dim <- if (target == "biases") {
+        dim(as.matrix(self$biases[[layer]]))
+      } else {
+        dim(self$weights[[layer]])
+      }
+    }
+    
+    
     # Boost LR for output layer if needed
     layer_boost <- if (layer == self$num_layers) 1 else 1
     

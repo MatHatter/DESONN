@@ -1094,6 +1094,9 @@ SONN <- R6Class(
       if (train) {
         for (epoch in 1:epoch_in_list) {
           
+          
+
+          
           lr <- lr_scheduler(epoch)
           
           
@@ -3497,6 +3500,7 @@ DESONN <- R6Class(
             # === Auto-tune threshold based on F1 ===
             # threshold_result <- tune_threshold(probs, labels)
             threshold_result <- tune_threshold_accuracy(probs, labels)
+            
             best_threshold <- threshold_result$best_threshold
             # print(paste("Best F1 threshold:", best_threshold))
             print(paste("Best threshold (accuracy-optimized):", best_threshold))
@@ -5941,6 +5945,7 @@ lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch =
   decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
   return(max(min_lr, decayed_lr))
 }
+
 
 
 
