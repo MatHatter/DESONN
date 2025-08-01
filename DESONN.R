@@ -826,7 +826,7 @@ SONN <- R6Class(
           }
           Z <- pmin(pmax(Z, -clip_limit), clip_limit)
           
-          Z <- Z / 4
+          # Z <- Z / 4
           
           
           cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
