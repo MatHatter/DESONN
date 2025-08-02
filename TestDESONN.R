@@ -81,7 +81,7 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .001
 lambda <- 0.00025
-num_epochs <- 72
+num_epochs <- 1
 custom_scale <- .05
 
 # ML_NN <- TRUE
@@ -369,7 +369,7 @@ Run1.2 <- FALSE
 # === Step 1: Hyperparameter setup ===
 hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
 results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
-
+j <- 1
 if (hyperparameter_grid_setup) {
   # Define grid of learning rates and regularization values
   lr_vals <- c(0.3)
@@ -453,7 +453,7 @@ if (hyperparameter_grid_setup) {
   
 } else {
   # === Manual run with provided lr1 and lambda1 ===
-  lr <- lr1
+  lr <- lr
   lambda <- lambda
   
   if (ML_NN) {
@@ -523,7 +523,9 @@ if (hyperparameter_grid_setup) {
   
   cat("Manual run -> Accuracy:", run_result$accuracy, "\n")
 }
-
+learnOnlyTrainingRun <- FALSE
+update_weights <- TRUE
+update_biases <- TRUE
 # === Step 4: Save all results ===
 saveRDS(results, file = "results.rds")
 write.csv(results, file = "results.csv", row.names = FALSE)
