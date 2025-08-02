@@ -741,25 +741,13 @@ SONN <- R6Class(
         labels <- matrix(as.numeric(labels), ncol = 1)
       }
       
-      # ----- Class Weights Based on Label Frequency -----
-      num_pos <- sum(labels == 1)
-      num_neg <- sum(labels == 0)
-      total_samples <- num_pos + num_neg
-      
-      # Inverse frequency: weight more for minority class
-      # pos_weight <- total_samples / (2 * num_pos)
-      # neg_weight <- total_samples / (2 * num_neg)
-      
       pos_weight <- 2
       neg_weight <- 1
       
-      
-      # If custom sample_weights provided, use it; otherwise use class-based weights
       if (is.null(sample_weights)) {
         sample_weights <- ifelse(labels == 1, pos_weight, neg_weight)
       }
       sample_weights <- matrix(sample_weights, nrow = nrow(labels), ncol = 1)
-      
       
       self$dropout_rates_learn <- dropout_rates_learn
       
@@ -776,6 +764,8 @@ SONN <- R6Class(
       bias_gradients <- list()
       grads_matrix <- list()
       weight_gradients <- list()
+      
+      errors <- list()  # $$$$$$$$$$$$$$$$ Added for per-layer error tracking
       
       if (self$ML_NN) {
         hidden_outputs <- vector("list", self$num_layers)
@@ -816,23 +806,17 @@ SONN <- R6Class(
           cat(sprintf("[Debug] Layer %d : Z summary BEFORE clipping:\n", layer))
           print(summary(as.vector(Z)))
           
-          
-          
           activation_function <- activation_functions_learn[[layer]]
           activation_name <- if (!is.null(activation_function)) attr(activation_function, "name") else "none"
           cat(sprintf("[Debug] Layer %d : Activation Function = %s\n", layer, activation_name))
           
-          
-          
-          # ----- Clipping Extreme Z Values (Activation-Aware) -----
           clip_limit <- switch(activation_name,
                                "sigmoid" = 80,
                                "tanh" = 10,
                                "softmax" = 15,
                                "relu" = 100,
                                "leaky_relu" = 200,
-                               90 # Default fallback
-          )
+                               90)
           
           Z_max <- max(Z)
           Z_min <- min(Z)
@@ -841,12 +825,8 @@ SONN <- R6Class(
           }
           Z <- pmin(pmax(Z, -clip_limit), clip_limit)
           
-          # Z <- Z / 4
-          
-          
           cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
           print(summary(as.vector(Z)))
-          
           
           hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
           hidden_outputs[[layer]] <- hidden_output
@@ -868,10 +848,6 @@ SONN <- R6Class(
             cat(sprintf("[Debug] Layer %d : Hidden output AFTER  dropout (sample):\n", layer))
             print(head(hidden_output, 3))
           }
-          
-          
-          
-          
           
           cat(sprintf("[Debug] Layer %d : predicted_output_learn dim = %d x %d\n", layer, nrow(hidden_output), ncol(hidden_output)))
           
@@ -899,6 +875,7 @@ SONN <- R6Class(
         for (layer in self$num_layers:1) {
           delta <- error_backprop * activation_derivatives[[layer]]
           bias_gradients[[layer]] <- matrix(colMeans(delta), nrow = 1)
+          errors[[layer]] <- delta  # $$$$$$$$$$$$$$$$ Added
           
           input_for_grad <- if (layer == 1) input_matrix else hidden_outputs[[layer - 1]]
           grads_matrix[[layer]] <- t(input_for_grad) %*% delta
@@ -930,7 +907,6 @@ SONN <- R6Class(
           stop(sprintf("SL NN: invalid bias shape: length = %d", length(bias_vec)))
         }
         
-        # ----- Apply dropout using self$dropout for SL NN -----
         if (!is.list(self$dropout_rates_learn)) {
           self$dropout_rates_learn <- list(self$dropout_rates_learn)
         }
@@ -945,9 +921,6 @@ SONN <- R6Class(
         cat(sprintf("[Debug]: Z summary BEFORE clipping.\n"))
         print(summary(as.vector(Z)))
         
-        
-        
-        
         if (is.function(activation_functions_learn)) {
           activation_function <- activation_functions_learn
         } else {
@@ -957,8 +930,6 @@ SONN <- R6Class(
           activation_function <- activation_functions_learn[[1]]
         }
         
-        
-        # ----- Clipping Extreme Z Values (Activation-Aware) for SL NN -----
         activation_name <- attr(activation_function, "name")
         clip_limit <- switch(activation_name,
                              "sigmoid" = 50,
@@ -966,8 +937,7 @@ SONN <- R6Class(
                              "softmax" = 15,
                              "relu" = 100,
                              "leaky_relu" = 200,
-                             90 # Default fallback
-        )
+                             90)
         
         Z_max <- max(Z)
         Z_min <- min(Z)
@@ -976,13 +946,8 @@ SONN <- R6Class(
         }
         Z <- pmin(pmax(Z, -clip_limit), clip_limit)
         
-        # Z <- Z  / 4
-        
-        
         cat("[Debug] SL NN : Z summary AFTER clipping:\n")
         print(summary(as.vector(Z)))
-        
-        
         
         predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
         error_learn <- (predicted_output_learn - labels) * sample_weights
@@ -997,12 +962,22 @@ SONN <- R6Class(
         delta <- error_learn * activation_deriv
         bias_gradients[[1]] <- matrix(colMeans(delta), nrow = 1)
         grads_matrix[[1]] <- t(Rdata) %*% delta
+        errors[[1]] <- delta  # $$$$$$$$$$$$$$$$ Added for SL NN
       }
       
       learn_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
       print("------------------------learn-end-------------------------------------------------")
       
-      return(list(learn_output = predicted_output_learn, learn_time = learn_time, error = error_learn, dim_hidden_layers = dim_hidden_layers_learn, hidden_outputs = predicted_output_learn_hidden, grads_matrix = grads_matrix, bias_gradients = bias_gradients))
+      return(list(
+        learn_output = predicted_output_learn,
+        learn_time = learn_time,
+        error = error_learn,
+        dim_hidden_layers = dim_hidden_layers_learn,
+        hidden_outputs = predicted_output_learn_hidden,
+        grads_matrix = grads_matrix,
+        bias_gradients = bias_gradients,
+        errors = errors  # $$$$$$$$$$$$$$$$ Added
+      ))
     }
     
     
@@ -1260,6 +1235,7 @@ SONN <- R6Class(
           }
           
           error <- predicted_output_train_reg$error
+          errors <- predicted_output_train_reg$errors
           bias_gradients <- predicted_output_train_reg$bias_gradients  # <---- EXTRACT BIAS GRADIENTS
           weight_gradients <- predicted_output_train_reg$grads_matrix 
           dim_hidden_layers <- predicted_output_train_reg$dim_hidden_layers

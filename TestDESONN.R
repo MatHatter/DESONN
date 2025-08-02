@@ -65,7 +65,7 @@ function(test1){
   # X <- as.matrix(X_train)
   # y <- as.matrix(y_train)
 }
-
+set.seed(111)
 # # Define parameters
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
@@ -79,8 +79,8 @@ momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
-lr <- .001
-lambda <- 0.00025
+lr <- .121
+lambda <- 0.0003
 num_epochs <- 78
 custom_scale <- .05
 
@@ -218,7 +218,7 @@ numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'pl
 y <- data %>% dplyr::select(DEATH_EVENT)
 colname_y <- colnames(y)
 # Define the number of samples for each set
-set.seed(111)
+
 total_num_samples <- nrow(data)
 # Define num_samples
 num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
