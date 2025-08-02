@@ -3264,77 +3264,77 @@ DESONN <- R6Class(
 
             
             
-            # library(openxlsx)
-            # library(ggplot2)
-            # library(dplyr)
-            # library(tidyr)
-            # 
-            # library(openxlsx)
-            # library(ggplot2)
-            # library(dplyr)
-            # library(tidyr)
-            # 
-            # # Rename columns safely
-            # Rdata_predictions <- Rdata_predictions %>%
-            #   rename(prob = Predicted_Prob, label = Label)
-            # 
-            # # Ensure numeric values and clamp label to 0 or 1
-            # Rdata_predictions <- Rdata_predictions %>%
-            #   mutate(
-            #     prob = as.numeric(prob),
-            #     label = as.numeric(label),
-            #     label = ifelse(label >= 1, 1, 0)
-            #   ) %>%
-            #   filter(!is.na(prob), !is.na(label))  # Remove rows with NA in prob or label
-            # 
-            # # Create decile bins
-            # Rdata_predictions <- Rdata_predictions %>%
-            #   mutate(prob_bin = ntile(prob, 10)) %>%
-            #   group_by(prob_bin) %>%
-            #   mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
-            #   ungroup()
-            # 
-            # # Summarize actual death rate per bin
-            # bin_summary <- Rdata_predictions %>%
-            #   group_by(prob_bin, bin_mid) %>%
-            #   summarise(
-            #     actual_death_rate = mean(label, na.rm = TRUE),
-            #     .groups = 'drop'
-            #   ) %>%
-            #   filter(
-            #     !is.na(bin_mid),
-            #     !is.na(actual_death_rate),
-            #     is.finite(bin_mid),
-            #     is.finite(actual_death_rate)
-            #   )  # Fully clean input for ggplot
-            # 
-            # # Ensure correct types
-            # bin_summary <- bin_summary %>%
-            #   mutate(
-            #     bin_mid = as.numeric(bin_mid),
-            #     actual_death_rate = as.numeric(actual_death_rate)
-            #   )
-            # 
-            # # Inspect just in case
-            # print(bin_summary)
-            # 
-            # # Plot
-            # p <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
-            #   geom_col(fill = "steelblue", na.rm = TRUE) +
-            #   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-            #   labs(
-            #     title = "Calibration Plot (Corrected)",
-            #     x = "Average Predicted Probability",
-            #     y = "Observed Death Rate"
-            #   ) +
-            #   theme_minimal()
-            # 
-            # print(p)
-            # 
-            
-            
-          
-            # ggsave("final_calibration_plot.png", plot = p, width = 6, height = 4)
+            library(openxlsx)
+            library(ggplot2)
+            library(dplyr)
+            library(tidyr)
+
+            library(openxlsx)
+            library(ggplot2)
+            library(dplyr)
+            library(tidyr)
+
+            # Rename columns safely
+            Rdata_predictions <- Rdata_predictions %>%
+              rename(prob = Predicted_Prob, label = Label)
+
+            # Ensure numeric values and clamp label to 0 or 1
+            Rdata_predictions <- Rdata_predictions %>%
+              mutate(
+                prob = as.numeric(prob),
+                label = as.numeric(label),
+                label = ifelse(label >= 1, 1, 0)
+              ) %>%
+              filter(!is.na(prob), !is.na(label))  # Remove rows with NA in prob or label
+
+            # Create decile bins
+            Rdata_predictions <- Rdata_predictions %>%
+              mutate(prob_bin = ntile(prob, 10)) %>%
+              group_by(prob_bin) %>%
+              mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
+              ungroup()
+
+            # Summarize actual death rate per bin
+            bin_summary <- Rdata_predictions %>%
+              group_by(prob_bin, bin_mid) %>%
+              summarise(
+                actual_death_rate = mean(label, na.rm = TRUE),
+                .groups = 'drop'
+              ) %>%
+              filter(
+                !is.na(bin_mid),
+                !is.na(actual_death_rate),
+                is.finite(bin_mid),
+                is.finite(actual_death_rate)
+              )  # Fully clean input for ggplot
+
+            # Ensure correct types
+            bin_summary <- bin_summary %>%
+              mutate(
+                bin_mid = as.numeric(bin_mid),
+                actual_death_rate = as.numeric(actual_death_rate)
+              )
+
+            # Inspect just in case
+            print(bin_summary)
+
+            # Plot
+            p <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
+              geom_col(fill = "steelblue", na.rm = TRUE) +
+              geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+              labs(
+                title = "Calibration Plot (Corrected)",
+                x = "Average Predicted Probability",
+                y = "Observed Death Rate"
+              ) +
+              theme_minimal()
+
+            print(p)
+
+
+
+
+            ggsave("final_calibration_plot.png", plot = p, width = 6, height = 4)
           
             
             

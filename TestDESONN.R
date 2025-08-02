@@ -81,12 +81,15 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .001
 lambda <- 0.00025
-num_epochs <- 3
+num_epochs <- 78
 custom_scale <- .05
 
 # ML_NN <- TRUE
 ML_NN <- TRUE
 train <- TRUE
+learnOnlyTrainingRun <- FALSE
+update_weights <- TRUE
+update_biases <- TRUE
 # hidden_sizes <- NULL
 hidden_sizes <- c(64, 32)
 
@@ -97,7 +100,7 @@ activation_functions_learn <- list(relu, relu, sigmoid) #list(relu, bent_identit
 epsilon <- 1e-6
 loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
-dropout_rates <- list(0.2) # NULL for output layer
+dropout_rates <- list(0.1) # NULL for output layer
 
 dropout_rates_learn <- dropout_rates
 
@@ -523,9 +526,7 @@ if (hyperparameter_grid_setup) {
   
   cat("Manual run -> Accuracy:", run_result$accuracy, "\n")
 }
-learnOnlyTrainingRun <- FALSE
-update_weights <- TRUE
-update_biases <- TRUE
+
 
 # === Step 4: Save all results ===
 saveRDS(results, file = "results.rds")
