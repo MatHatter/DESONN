@@ -81,7 +81,7 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
-num_epochs <- 78
+num_epochs <- 100
 custom_scale <- .05
 
 # ML_NN <- TRUE

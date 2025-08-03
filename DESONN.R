@@ -3133,7 +3133,6 @@ DESONN <- R6Class(
               as.data.frame(Rdata)[wrong, , drop = FALSE]
             )
             
-            
             # === Combine Full Rdata, Labels, Predictions ===
             Rdata_df <- as.data.frame(X_validation)
             Rdata_with_labels <- cbind(Rdata_df, Label = labels_flat)
@@ -3152,6 +3151,49 @@ DESONN <- R6Class(
                 Count = n()
               ) %>%
               rename(Class = Label)
+            
+            # === Per-Class Support ===
+            support0 <- sum(labels_flat == 0)
+            support1 <- sum(labels_flat == 1)
+            total    <- support0 + support1
+            
+            # === Per-Class Precision / Recall / F1 ===
+            precision0 <- if ((TN + FN) > 0) TN / (TN + FN) else 0
+            recall0    <- if ((TN + FP) > 0) TN / (TN + FP) else 0
+            f1_0       <- if ((precision0 + recall0) > 0) 2 * precision0 * recall0 / (precision0 + recall0) else 0
+            
+            precision1 <- if ((TP + FP) > 0) TP / (TP + FP) else 0
+            recall1    <- if ((TP + FN) > 0) TP / (TP + FN) else 0
+            f1_1       <- if ((precision1 + recall1) > 0) 2 * precision1 * recall1 / (precision1 + recall1) else 0
+            
+            # === Macro / Weighted Averages ===
+            macro_precision <- mean(c(precision0, precision1))
+            macro_recall    <- mean(c(recall0, recall1))
+            macro_f1        <- mean(c(f1_0, f1_1))
+            
+            weighted_precision <- (support0 * precision0 + support1 * precision1) / total
+            weighted_recall    <- (support0 * recall0 + support1 * recall1) / total
+            weighted_f1        <- (support0 * f1_0 + support1 * f1_1) / total
+            
+            # === Final Metrics Summary ===
+            metrics_summary <- data.frame(
+              Class      = c("0", "1", "macro avg", "weighted avg"),
+              Precision  = c(precision0, precision1, macro_precision, weighted_precision),
+              Recall     = c(recall0, recall1, macro_recall, weighted_recall),
+              F1_Score   = c(f1_0, f1_1, macro_f1, weighted_f1),
+              Support    = c(support0, support1, total, total),
+              Accuracy   = c(rep(accuracy, 4)),
+              TP         = c(rep(TP, 4)),
+              TN         = c(rep(TN, 4)),
+              FP         = c(rep(FP, 4)),
+              FN         = c(rep(FN, 4))
+            )
+  
+            # Save to PNG
+            png("metrics_summary.png", width = 1000, height = 400)
+            grid.table(metrics_summary)
+            dev.off()
+            
             
             
             # === Required Libraries ===
@@ -3240,37 +3282,25 @@ DESONN <- R6Class(
 
             
             
-            library(openxlsx)
             library(ggplot2)
             library(dplyr)
             library(tidyr)
-
-            library(openxlsx)
-            library(ggplot2)
-            library(dplyr)
-            library(tidyr)
-
-            # Rename columns safely
+            
+            # Prep the data again (if needed)
             Rdata_predictions <- Rdata_predictions %>%
-              rename(prob = Predicted_Prob, label = Label)
-
-            # Ensure numeric values and clamp label to 0 or 1
-            Rdata_predictions <- Rdata_predictions %>%
+              rename(prob = Predicted_Prob, label = Label) %>%
               mutate(
                 prob = as.numeric(prob),
                 label = as.numeric(label),
                 label = ifelse(label >= 1, 1, 0)
               ) %>%
-              filter(!is.na(prob), !is.na(label))  # Remove rows with NA in prob or label
-
-            # Create decile bins
-            Rdata_predictions <- Rdata_predictions %>%
+              filter(!is.na(prob), !is.na(label)) %>%
               mutate(prob_bin = ntile(prob, 10)) %>%
               group_by(prob_bin) %>%
               mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
               ungroup()
-
-            # Summarize actual death rate per bin
+            
+            # Summarize per bin
             bin_summary <- Rdata_predictions %>%
               group_by(prob_bin, bin_mid) %>%
               summarise(
@@ -3282,49 +3312,85 @@ DESONN <- R6Class(
                 !is.na(actual_death_rate),
                 is.finite(bin_mid),
                 is.finite(actual_death_rate)
-              )  # Fully clean input for ggplot
-
-            # Ensure correct types
-            bin_summary <- bin_summary %>%
-              mutate(
-                bin_mid = as.numeric(bin_mid),
-                actual_death_rate = as.numeric(actual_death_rate)
-              )
-
-            # Inspect just in case
-            print(bin_summary)
-
-            # Plot
-            p <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
-              geom_col(fill = "steelblue", na.rm = TRUE) +
+              ) %>%
+              mutate(prob_bin = factor(prob_bin))
+            
+            # 1️⃣ Bar Plot — Actual death rate per bin
+            plot1 <- ggplot(bin_summary, aes(x = prob_bin, y = actual_death_rate)) +
+              geom_col(fill = "steelblue") +
+              labs(
+                title = "Observed Death Rate by Risk Bin",
+                x = "Predicted Risk Decile Bin (1 = lowest, 10 = highest)",
+                y = "Actual Death Rate"
+              ) +
+              theme_minimal()
+            
+            ggsave("plot1_bar_actual_death_rate.png", plot1, width = 6, height = 4)
+            
+            # 2️⃣ Line Plot — Calibration curve
+            plot2 <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
+              geom_line(color = "blue", size = 1.2) +
+              geom_point(size = 3, color = "black") +
               geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
               labs(
-                title = "Calibration Plot (Corrected)",
-                x = "Average Predicted Probability",
+                title = "Calibration Curve: Predicted vs Actual",
+                x = "Average Predicted Probability (bin_mid)",
                 y = "Observed Death Rate"
               ) +
               theme_minimal()
-
-            print(p)
-
-
-
-
-            ggsave("final_calibration_plot.png", plot = p, width = 6, height = 4)
-          
+            
+            ggsave("plot2_calibration_curve.png", plot2, width = 6, height = 4)
+            
+            # 3️⃣ Overlay Plot — Bar chart + predicted dot
+            library(ggplot2)
+            library(dplyr)
+            library(gridExtra)
+            
+            # 🧮 Build calibration table with quantification
+            calibration_table <- bin_summary %>%
+              mutate(
+                difference = round(actual_death_rate - bin_mid, 4),
+                calibration = case_when(
+                  abs(difference) < 0.02 ~ "✅ Well Calibrated",
+                  difference > 0 ~ "⚠️ Underconfident",
+                  TRUE ~ "⚠️ Overconfident"
+                )
+              ) %>%
+              select(
+                Bin = prob_bin,
+                `Avg Predicted Prob` = bin_mid,
+                `Actual Death Rate` = actual_death_rate,
+                `Difference (Actual - Predicted)` = difference,
+                `Calibration Quality` = calibration
+              )
+            
+            # 📊 Calibration overlay plot with legend below x-axis and centered title
+            plot_overlay <- ggplot(bin_summary, aes(x = prob_bin)) +
+              geom_col(aes(y = actual_death_rate, fill = "Actual Death Rate")) +
+              geom_point(aes(y = bin_mid, color = "Avg Predicted Prob"), size = 3, shape = 21, stroke = 1.2, fill = "white") +
+              scale_fill_manual(values = c("Actual Death Rate" = "steelblue")) +
+              scale_color_manual(values = c("Avg Predicted Prob" = "black")) +
+              labs(
+                title = "Overlay: Actual vs Predicted Death Rate",
+                x = "Predicted Risk Decile Bin",
+                y = "Rate",
+                fill = NULL,
+                color = NULL
+              ) +
+              theme_minimal() +
+              theme(
+                legend.position = "bottom",
+                plot.title = element_text(hjust = 0.5)  # center the title
+              )
+            
+            ggsave("plot_overlay_with_legend_below.png", plot_overlay, width = 6, height = 4)
+            
+            # 🧾 Save the calibration table as a PNG
+            table_plot <- tableGrob(calibration_table, rows = NULL)
+            ggsave("calibration_table.png", table_plot, width = 8, height = 4, dpi = 300)
             
             
-            # === Metrics Summary Sheet ===
-            metrics_summary <- data.frame(
-              Accuracy = accuracy,
-              Precision = metrics$precision,
-              Recall = metrics$recall,
-              F1_Score = metrics$F1,
-              TP = TP,
-              TN = TN,
-              FP = FP,
-              FN = FN
-            )
+
             
             library(ggplot2)
             library(reshape2)
