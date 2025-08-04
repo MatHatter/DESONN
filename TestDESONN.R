@@ -81,9 +81,9 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
-num_epochs <- 100
+num_epochs <- 3
 custom_scale <- .05
-
+threshold <- .98
 # ML_NN <- TRUE
 ML_NN <- TRUE
 train <- TRUE
@@ -340,7 +340,7 @@ metric_name <- 'MSE'
 #########################################################################################################################
 
 nruns <- 5
-verbose <<- FALSE
+verbose <<- TRUE
 hyperparameter_grid_setup <- TRUE
 reg_type = "L2" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
