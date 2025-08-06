@@ -1,4 +1,5 @@
 source("optimizers.R")
+source("reports/evaluate_predictions_report.R")
 function(showlibraries){
   # Fake function for collapse feature.
   # Run these once to install required packages
@@ -1144,6 +1145,7 @@ SONN <- R6Class(
           
           # Training prediction and accuracy
           probs_train <- learn_result$learn_output
+          learn_time <- learn_result$learn_time
           binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
           train_accuracy <- mean(binary_preds_train == labels, na.rm = TRUE)
           train_accuracy_log <- c(train_accuracy_log, train_accuracy)
@@ -1178,8 +1180,8 @@ SONN <- R6Class(
           train_loss_log <- c(train_loss_log, train_loss)
           
           # Weight explosion diagnostics
-          if (exists("weights_record")) {
-            max_weight <- max(sapply(weights_record, function(w) max(abs(w))))
+          if (exists("best_weights_record")) {
+            max_weight <- max(sapply(best_weights_record, function(w) max(abs(w))))
             cat("Max Weight Abs:", round(max_weight, 4), "\n")
           } else {
             max_weight <- NA
@@ -2523,8 +2525,8 @@ SONN <- R6Class(
             }
             
             
-            assign("final_weights_record", best_weights, envir = .GlobalEnv)
-            assign("final_biases_record", best_biases, envir = .GlobalEnv)
+            assign("final_weights_record", best_weights, envir = .GlobalEnv) #not really necessary as we are returning best_weights_records now
+            assign("final_biases_record", best_biases, envir = .GlobalEnv) #not really necessary as we are returning best_biases_records now
             
             assign("best_val_probs", probs_val, envir = .GlobalEnv)
             assign("best_val_labels", y_validation, envir = .GlobalEnv)
@@ -2549,7 +2551,7 @@ SONN <- R6Class(
       dim_hidden_layers <- NULL}
       if (!train) {
         
-        predicted_output_train_reg <- self$predict(Rdata, weights = final_weights_record, biases = final_biases_record, activation_functions)
+        predicted_output_train_reg <- self$predict(Rdata, weights = best_weights, biases = best_biases, activation_functions)
         
       }
       if (train) {
@@ -2570,14 +2572,18 @@ SONN <- R6Class(
         }
       }
       
+      # Note: The below loop was originally meant to save per-ensemble weights/biases,
+      # but it incorrectly grabs only the final model's weights every time.
+      # We now pass the final trained weights/biases directly through the return object
+      # of `train_with_l2_regularization()` instead.
       
       # Dynamic assignment of weights and biases records
-      for (i in 1:length(self$ensemble)) {
-        weight_record_name <- paste0("weights_record_", i)
-        bias_record_name <- paste0("biases_record_", i)
-        assign(weight_record_name, as.matrix(self$weights), envir = .GlobalEnv)
-        assign(bias_record_name, as.matrix(self$biases), envir = .GlobalEnv)
-      }
+      # for (i in 1:length(self$ensemble)) {
+      #   weight_record_name <- paste0("weights_record_", i)
+      #   bias_record_name <- paste0("biases_record_", i)
+      #   assign(weight_record_name, as.matrix(self$weights), envir = .GlobalEnv)
+      #   assign(bias_record_name, as.matrix(self$biases), envir = .GlobalEnv)
+      # }
       
       
       # if (ML_NN) {
@@ -2685,7 +2691,7 @@ SONN <- R6Class(
       
       
       # Return the predicted output
-      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, training_time = training_time, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers))
+      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, training_time = training_time, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
     },
     # # Method to calculate performance and relevance
     # calculate_metrics = function(Rdata) {
@@ -2740,7 +2746,7 @@ DESONN <- R6Class(
     numeric_columns = NULL,
     #ensemble_number = NULL,
     # Constructor
-    initialize = function(num_networks, input_size, hidden_sizes, output_size, N, lambda, ensemble_number, ML_NN, method = init_method, custom_scale = custom_scale) {
+    initialize = function(num_networks, input_size, hidden_sizes, output_size, N, lambda, ensemble_number, ensembles, ML_NN, method = init_method, custom_scale = custom_scale) {
       
       
       # Initialize an ensemble of SONN networks
@@ -2779,36 +2785,36 @@ DESONN <- R6Class(
                 !is.null(run_result$biases_record) &&
                 is.null(run_result$metadata)) {
               # Initialize lists within lists for weights and biases
-              weights_record_extract <- vector("list", length = length(run_result$weights_record))
-              biases_record_extract <- vector("list", length = length(run_result$biases_record))
+              weights_record_extract <- vector("list", length = length(run_result$best_weights_record))
+              biases_record_extract <- vector("list", length = length(run_result$best_biases_record))
               
               # Extract and unlist the first element of weights_record and biases_record
-              weights_record_extract[[1]] <- unlist(official_run_results_1_1$weights_record[[1]][[1]])
-              biases_record_extract[[1]] <- unlist(official_run_results_1_1$biases_record[[1]][[1]])
+              weights_record_extract[[1]] <- unlist(official_run_results_1_1$best_weights_record[[1]][[1]])
+              biases_record_extract[[1]] <- unlist(official_run_results_1_1$best_biases_record[[1]][[1]])
               
               # Check if ML_NN is TRUE before accessing weights and biases for additional layers
               if (ML_NN == TRUE) {
                 for (k in 2:(length(hidden_sizes)+1)) {
-                  weights_record_extract[[k]] <- unlist(official_run_results_1_1$weights_record[[1]][[k]])
-                  biases_record_extract[[k]] <- unlist(official_run_results_1_1$biases_record[[1]][[k]])
+                  weights_record_extract[[k]] <- unlist(official_run_results_1_1$best_weights_record[[1]][[k]])
+                  biases_record_extract[[k]] <- unlist(official_run_results_1_1$best_biases_record[[1]][[k]])
                 }
               }
-            } else if (!is.null(run_result$best_model_metadata$weights_record) &&
-                       !is.null(run_result$best_model_metadata$biases_record) &&
+            } else if (!is.null(run_result$best_model_metadata$best_weights_record) &&
+                       !is.null(run_result$best_model_metadata$best_biases_record) &&
                        !is.null(run_result$metadata)) {
               # Initialize lists within lists for weights and biases
-              weights_record_extract <- vector("list", length = length(run_result$best_model_metadata$weights_record))
-              biases_record_extract <- vector("list", length = length(run_result$best_model_metadata$biases_record))
+              weights_record_extract <- vector("list", length = length(run_result$best_model_metadata$best_weights_record))
+              biases_record_extract <- vector("list", length = length(run_result$best_model_metadata$best_biases_record))
               
               # Extract and unlist the first element of weights_record and biases_record from best_model_metadata
-              weights_record_extract[[1]] <- unlist(run_result$best_model_metadata$weights_record[[1]][[1]])
-              biases_record_extract[[1]] <- unlist(run_result$best_model_metadata$biases_record[[1]][[1]])
+              weights_record_extract[[1]] <- unlist(run_result$best_model_metadata$best_weights_record[[1]][[1]])
+              biases_record_extract[[1]] <- unlist(run_result$best_model_metadata$best_biases_record[[1]][[1]])
               
               # Check if ML_NN is TRUE before accessing weights and biases for additional layers
               if (ML_NN == TRUE) {
                 for (k in 2:(length(hidden_sizes)+1)) {
-                  weights_record_extract[[k]] <- unlist(run_result$best_model_metadata$weights_record[[1]][[k]])
-                  biases_record_extract[[k]] <- unlist(run_result$best_model_metadata$biases_record[[1]][[k]])
+                  weights_record_extract[[k]] <- unlist(run_result$best_model_metadata$best_weights_record[[1]][[k]])
+                  biases_record_extract[[k]] <- unlist(run_result$best_model_metadata$best_biases_record[[1]][[k]])
                 }
               }
             } else {
@@ -2869,10 +2875,7 @@ DESONN <- R6Class(
         # )
         # ensembles$temp_ensemble <- vector("list", length(self$ensemble))
       # }
-      
-      # self$ensemble <- vector("list", ensemble_number)
-      
-      
+  
     },
     # Function to normalize specific columns in the data
     normalize_data = function(Rdata, numeric_columns) {
@@ -2971,7 +2974,7 @@ DESONN <- R6Class(
     },
     
     
-    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation) {
+    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3067,6 +3070,12 @@ DESONN <- R6Class(
       all_errors                     <- vector("list", length(self$ensemble))
       all_hidden_outputs             <- vector("list", length(self$ensemble))
       all_layer_dims                 <- vector("list", length(self$ensemble))
+      all_best_val_probs <- vector("list", length(self$ensemble))
+      all_best_val_labels <- vector("list", length(self$ensemble))
+      all_weights <- vector("list", length(self$ensemble))
+      all_biases <- vector("list", length(self$ensemble))
+      all_activation_functions <- vector("list", length(self$ensemble))
+      
       # my_optimal_epoch_out_vector    <- vector("list", length(self$ensemble))
       
       if (never_ran_flag == TRUE) {
@@ -3103,10 +3112,11 @@ DESONN <- R6Class(
               prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
               training_time = predicted_outputAndTime$training_time,
               optimal_epoch = predicted_outputAndTime$optimal_epoch,
-              weights_record = predicted_outputAndTime$weights_record,
-              biases_record = predicted_outputAndTime$biases_record,
+              weights_record = predicted_outputAndTime$best_weights_record,
+              biases_record = predicted_outputAndTime$best_biases_record,
               losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch
             )
+
             
             # Optional storage
             # my_optimal_epoch_out_vector[[i]] <<- predicted_outputAndTime$optimal_epoch
@@ -3115,12 +3125,16 @@ DESONN <- R6Class(
             # Continue if predictions are available
             if (!is.null(predicted_outputAndTime$predicted_output_l2$learn_output)) {
               
-              all_predicted_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$learn_output
-              all_prediction_times[[i]] <- predicted_outputAndTime$train_reg_prediction_time
-              
-              all_errors[[i]]         <- predicted_outputAndTime$predicted_output_l2$error
-              all_hidden_outputs[[i]] <- predicted_outputAndTime$predicted_output_l2$hidden_outputs
-              all_layer_dims[[i]]     <- predicted_outputAndTime$predicted_output_l2$dim_hidden_layers
+              all_predicted_outputs[[i]]       <- predicted_outputAndTime$predicted_output_l2$learn_output
+              all_prediction_times[[i]]        <- predicted_outputAndTime$train_reg_prediction_time
+              all_errors[[i]]                  <- predicted_outputAndTime$predicted_output_l2$error
+              all_hidden_outputs[[i]]          <- predicted_outputAndTime$predicted_output_l2$hidden_outputs
+              all_layer_dims[[i]]              <- predicted_outputAndTime$predicted_output_l2$dim_hidden_layers
+              all_best_val_probs[[i]]          <- predicted_outputAndTime$best_val_probs
+              all_best_val_labels[[i]]         <- predicted_outputAndTime$best_val_labels
+              all_weights[[i]]                 <- predicted_outputAndTime$best_weights_record
+              all_biases[[i]]                  <- predicted_outputAndTime$best_biases_record
+              all_activation_functions[[i]]    <- activation_functions_learn
               
               # --- Debug prints ---
               cat(">> Ensemble Index:", i, "\n")
@@ -3131,126 +3145,42 @@ DESONN <- R6Class(
               cat("Error Preview (first 5):\n"); print(head(all_errors[[i]], 5))
               cat("Hidden Output Layer Count:\n"); print(length(all_hidden_outputs[[i]]))
               cat("Hidden Layer Dims:\n"); print(all_layer_dims[[i]])
+              
+              cat("Best Validation Probabilities (first 5):\n"); print(head(all_best_val_probs[[i]], 5))
+              cat("Best Validation Labels (first 5):\n"); print(head(all_best_val_labels[[i]], 5))
+              
+              # Debug weights and biases
+              cat("Weights Record (layer 1 preview):\n"); print(str(all_weights[[i]][[1]]))
+              cat("Biases Record (layer 1 preview):\n"); print(str(all_biases[[i]][[1]]))
+              
+              # Debug activation functions
+              cat("Activation Functions Used:\n"); print(all_activation_functions[[i]])
               cat("--------------------------------------------------------\n")
               
+          
             } else {
               cat("WARNING: predicted_output_l2$learn_output is NULL at ensemble index", i, "\n")
               str(predicted_outputAndTime)
             }
             
-            # === Extract vectors ===
-            pred_vec   <- as.vector(predicted_outputAndTime$predicted_output_l2$learn_output)
-            err_vec    <- as.vector(predicted_outputAndTime$predicted_output_l2$error)
-            label_vec  <- as.vector(labels)
             
-            # === Ensure equal lengths ===
-            max_points <- min(length(pred_vec), length(err_vec), length(label_vec))
-            # === Extract vectors ===
-            pred_vec   <- as.vector(predicted_outputAndTime$predicted_output_l2$learn_output)
-            err_vec    <- as.vector(predicted_outputAndTime$predicted_output_l2$error)
-            label_vec  <- as.vector(labels)
+       
             
-            # === Ensure equal lengths ===
-            max_points <- min(length(pred_vec), length(err_vec), length(label_vec))
-            
-            # === Plot: Prediction vs. Error ===
-            plot(pred_vec, err_vec,
-                 main = "Prediction vs. Error",
-                 xlab = "Prediction",
-                 ylab = "Error",
-                 col = "steelblue", pch = 16)
-            abline(h = 0, col = "gray", lty = 2)
-            
-            # === Combined Commentary Table ===
-            comment_error     <- character(max_points)
-            comment_alignment <- character(max_points)
-            
-            for (i in 1:max_points) {
-              # Error commentary
-              if (label_vec[i] == 1) {
-                comment_error[i] <- paste0("Overpredicted by ", round(pred_vec[i] - 1, 3))
-              } else {
-                comment_error[i] <- paste0("Underpredicted by ", round(pred_vec[i], 3))
-              }
-              
-              # Alignment commentary
-              if (abs(pred_vec[i] - label_vec[i]) > 0.5) {
-                comment_alignment[i] <- paste0("Misaligned (", round(pred_vec[i], 2), " vs ", label_vec[i], ")")
-              } else {
-                comment_alignment[i] <- "Aligned prediction"
-              }
+            # === Evaluate Prediction Diagnostics ===
+            if (!is.null(X_validation) && !is.null(y_validation)) {
+              eval_result <- EvaluatePredictionsReport(
+                X_validation = X_validation,
+                y_validation = y_validation,
+                probs = all_predicted_outputs[[i]],
+                predicted_outputAndTime = predicted_outputAndTime,
+                threshold_function = threshold_function,
+                best_val_probs = all_best_val_probs[[i]],
+                best_val_labels = all_best_val_labels[[i]],
+                verbose
+                
+              )
             }
             
-            df_sample_commentary <- data.frame(
-              Row = 1:max_points,
-              Prediction = round(pred_vec[1:max_points], 5),
-              Label = label_vec[1:max_points],
-              Error = round(err_vec[1:max_points], 5),
-              Comment_Error = comment_error,
-              Alignment_Comment = comment_alignment,
-              stringsAsFactors = FALSE
-            )
-            
-            # === View Combined Table ===
-            View(df_sample_commentary)
-            
-            
-            # --- Build inspection table ---
-            labels_vec <- as.vector(labels)
-            pred_vec <- as.vector(predicted_outputAndTime$predicted_output_l2$learn_output)
-            err_vec <- as.vector(predicted_outputAndTime$predicted_output_l2$error)
-            
-            # Extract first-layer weights from weights_record (replace index as needed)
-            weights_mat <- predicted_outputAndTime$weights_record[[1]]
-            
-            # Convert weight matrix into vector of averages per sample dimension (e.g., row means)
-            weights_summary <- round(rowMeans(weights_mat), 5)  # Or use colMeans if that's what you prefer
-            
-            # Make sure length aligns with number of features or pad/trim
-            max_len <- min(length(pred_vec), length(err_vec), length(labels_vec), length(weights_summary), 15)
-            
-            # Create the inspection table
-            df_inspect <- data.frame(
-              Row = 1:max_len,
-              Prediction = round(pred_vec[1:max_len], 5),
-              Label = labels_vec[1:max_len],
-              Error = round(err_vec[1:max_len], 5),
-              Avg_Input_Weight = weights_summary[1:max_len],
-              comment_observation = character(max_len),
-              comment_suggestion = character(max_len),
-              stringsAsFactors = FALSE
-            )
-            
-            # Add comments based on logic
-            for (j in 1:max_len) {
-              p <- df_inspect$Prediction[j]
-              l <- df_inspect$Label[j]
-              e <- df_inspect$Error[j]
-              w <- df_inspect$Avg_Input_Weight[j]
-              
-              if (l == 0) {
-                if (abs(e - p) < 1e-4) {
-                  df_inspect$comment_observation[j] <- "Label = 0, error = prediction"
-                } else {
-                  df_inspect$comment_observation[j] <- "Label = 0, error ≠ prediction"
-                  df_inspect$comment_suggestion[j] <- "Review logic for label = 0"
-                }
-              } else if (l == 1) {
-                expected_error <- (p - 1)  # assuming sample_weights were 1
-                if (abs(e - expected_error) < 1e-4) {
-                  df_inspect$comment_observation[j] <- "Label = 1, error as expected"
-                } else {
-                  df_inspect$comment_observation[j] <- "Label = 1, error mismatch"
-                  df_inspect$comment_suggestion[j] <- "Inspect how error is scaled"
-                }
-              } else {
-                df_inspect$comment_observation[j] <- "Unknown label"
-                df_inspect$comment_suggestion[j] <- "Check label values"
-              }
-            }
-            
-            # Show the result
-            View(df_inspect)
             
             
             ###########code from old code###########
@@ -3258,12 +3188,21 @@ DESONN <- R6Class(
             all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name)
 
             performance_relevance_plots <- self$update_performance_and_relevance(
-              Rdata, labels, lr, ensemble_number, model_iter_num = all_model_iter_num, num_epochs, threshold,
+              Rdata, labels, lr, ensemble_number,
+              model_iter_num = all_model_iter_num,
+              num_epochs = num_epochs,
+              threshold = threshold,
               learn_results = learn_results,
               predicted_output_list = all_predicted_outputs,
               learn_time = NULL,
-              prediction_time_list = all_prediction_times, run_id = all_ensemble_name_model_name, all_predicted_outputAndTime = all_predicted_outputAndTime
+              prediction_time_list = all_prediction_times,
+              run_id = all_ensemble_name_model_name,
+              all_predicted_outputAndTime = all_predicted_outputAndTime,
+              all_weights = all_weights,
+              all_biases = all_biases,
+              all_activation_functions = all_activation_functions
             )
+            
 
             if (showMeanBoxPlots == TRUE) {
               print(performance_relevance_plots$performance_high_mean_plots)
@@ -3277,520 +3216,6 @@ DESONN <- R6Class(
             # trained_predictions <<- self$predict(Rdata, labels, activation_functions)
             # print(dim(labels))
             predicted_outputAndTime$loss_status <- 'exceeds_10000'
-            calculate_accuracy <- function(predictions, actual_labels) {
-              correct_predictions <- sum(predictions == actual_labels)
-              accuracy <- (correct_predictions / length(actual_labels)) * 100
-              return(accuracy)
-            }
-            
-            cat("Str in predicted_outputAndTime:\n")
-            print(str(predicted_outputAndTime))
-            
-            cat("str of predicted_output:\n")
-            print(str(predicted_outputAndTime$predicted_output))
-            
-            if (!is.null(predicted_outputAndTime$predicted_output_l2)) {
-              cat("str predicted_output_l2$predicted_output:\n")
-              print(str(predicted_outputAndTime$predicted_output_l2$predicted_output))
-            }
-            
-            # probs <- predicted_outputAndTime$predicted_output_l2$predicted_output
-            # binary_preds <- probs
-            # binary_preds <- ifelse(probs >= 0.5, 1, 0)
-            # binary_preds <- ifelse(probs >= 0.1, 1, 0)
-            if(train){
-              probs <- best_val_probs
-              labels <- best_val_labels
-            }
-            
-            
-            
-            # === Auto-tune threshold based on F1 ===
-            # threshold_result <- tune_threshold(probs, labels)
-            threshold_result <- tune_threshold_accuracy(probs, labels)
-            
-            best_threshold <- threshold_result$best_threshold
-            # print(paste("Best F1 threshold:", best_threshold))
-            print(paste("Best threshold (accuracy-optimized):", best_threshold))
-            
-            # === Binary prediction using best threshold ===
-            predict_with_threshold <- function(probs, threshold) {
-              ifelse(probs >= threshold, 1, 0)
-            }
-            
-            binary_preds <- predict_with_threshold(probs, best_threshold)
-            
-            # === Accuracy Evaluation ===
-            labels_flat <- as.vector(labels)
-            accuracy <- calculate_accuracy(binary_preds, labels_flat)
-            print(paste("Accuracy:", accuracy))
-            
-            
-            
-            # === Precision / Recall / F1 ===
-            metrics <- evaluate_classification_metrics(binary_preds, labels_flat)
-            print(metrics)
-            
-            # === Accuracy & Confusion Matrix ===
-            TP <- sum(binary_preds == 1 & labels_flat == 1)
-            TN <- sum(binary_preds == 0 & labels_flat == 0)
-            FP <- sum(binary_preds == 1 & labels_flat == 0)
-            FN <- sum(binary_preds == 0 & labels_flat == 1)
-            accuracy <- (TP + TN) / length(labels_flat)
-            
-            # === Confusion Matrix DataFrame ===
-            conf_matrix_df <- data.frame(
-              Actual = c("0", "0", "1", "1"),
-              Predicted = c("0", "1", "0", "1"),
-              Count = c(TN, FP, FN, TP)
-            )
-            
-            # === Heatmap Path Plot ===
-            tryCatch({
-              heatmap_path <- "confusion_matrix_heatmap.png"
-              plot_conf_matrix <- ggplot(conf_matrix_df, aes(x = Predicted, y = Actual, fill = Count)) +
-                geom_tile(color = "white") +
-                geom_text(aes(label = Count), size = 6, fontface = "bold") +
-                scale_fill_gradient(low = "white", high = "red") +
-                labs(title = "Confusion Matrix Heatmap") +
-                theme_minimal() +
-                theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-              ggsave(heatmap_path, plot_conf_matrix, width = 5, height = 4)
-              while (!is.null(dev.list())) dev.off()
-              print(plot_conf_matrix)
-            }, error = function(e) {
-              message("❌ Failed to generate confusion matrix heatmap: ", e$message)
-            })
-            
-            # === Combine Full Rdata, Labels, Predictions ===
-            Rdata_df <- as.data.frame(X_validation)
-            labels_flat <- as.numeric(labels)
-            binary_preds <- ifelse(probs >= best_threshold, 1, 0)
-            
-            Rdata_with_labels <- cbind(Rdata_df, Label = labels_flat)
-            Rdata_predictions <- Rdata_with_labels %>%
-              mutate(
-                Predictions = binary_preds,
-                Predicted_Prob = as.vector(probs)
-              )
-            
-            # === Mean Predicted Probability by Class ===
-            prediction_means <- Rdata_predictions %>%
-              group_by(Label) %>%
-              summarise(
-                MeanProbability = mean(Predicted_Prob, na.rm = TRUE),
-                StdDev = sd(Predicted_Prob, na.rm = TRUE),
-                Count = n()
-              ) %>%
-              rename(Class = Label)
-            
-            # Extract means for use in commentary
-            mean_0 <- prediction_means$MeanProbability[prediction_means$Class == 0]
-            mean_1 <- prediction_means$MeanProbability[prediction_means$Class == 1]
-            
-            # === Interpret Prediction Separation Commentary ===
-            if (!is.na(mean_0) && !is.na(mean_1)) {
-              commentary_text <- if (mean_0 < 0.2 && mean_1 > 0.8) {
-                paste0("✅ Since your model produces mean ", round(mean_0, 4), " for true label 0, and ",
-                       round(mean_1, 4), " for true label 1, it’s making sharp, confident, and accurate predictions.")
-              } else if (mean_0 > 0.35 && mean_1 < 0.65) {
-                paste0("⚠️ Warning: predicted probabilities are close together (", round(mean_0, 4),
-                       " vs ", round(mean_1, 4), ") — model may not be separating classes clearly.")
-              } else {
-                paste0("ℹ️ Model separation is moderate (", round(mean_0, 4), " vs ", round(mean_1, 4),
-                       ") — might benefit from output sharpening or additional tuning.")
-              }
-            } else {
-              commentary_text <- "❌ One or both class mean probabilities are NA — likely due to lack of class balance or empty subset."
-            }
-            commentary_df_means <- data.frame(Interpretation = commentary_text)
-            print(commentary_df_means)
-            
-            # === Identify Misclassified Samples ===
-            wrong <- which(binary_preds != labels_flat)
-            misclassified <- cbind(
-              predicted_prob = probs[wrong],
-              predicted_label = binary_preds[wrong],
-              actual_label = labels_flat[wrong],
-              as.data.frame(Rdata)[wrong, , drop = FALSE]
-            )
-            
-            # === Sorted Misclassified Samples (by confidence error) ===
-            misclassified_sorted <- misclassified %>%
-              mutate(
-                error = abs(predicted_prob - actual_label),
-                Type = ifelse(predicted_label == 1 & actual_label == 0, "False Positive", "False Negative")
-              ) %>%
-              arrange(desc(error))
-            
-            # === Summary by Misclassification Type (if available) ===
-            if (nrow(misclassified_sorted) > 0) {
-              cat("\n📌 Top Misclassified Samples (sorted by confidence error):\n")
-              print(head(misclassified_sorted, 10))
-              
-              summary_by_type <- misclassified_sorted %>%
-                group_by(Type) %>%
-                summarise(across(c(age, serum_creatinine, ejection_fraction, time), ~mean(.x, na.rm = TRUE)))
-              
-              # Save to RDS for viewing later
-              saveRDS(summary_by_type, file = "summary_by_type.rds")
-              
-              cat("\n💾 summary_by_type saved as summary_by_type.rds\n")
-            } else {
-              message("⚠️ No misclassified samples to summarize.")
-            }
-            
-            
-            # === Per-Class Support ===
-            support0 <- sum(labels_flat == 0)
-            support1 <- sum(labels_flat == 1)
-            total    <- support0 + support1
-            
-            # === Per-Class Precision / Recall / F1 ===
-            precision0 <- if ((TN + FN) > 0) TN / (TN + FN) else 0
-            recall0    <- if ((TN + FP) > 0) TN / (TN + FP) else 0
-            f1_0       <- if ((precision0 + recall0) > 0) 2 * precision0 * recall0 / (precision0 + recall0) else 0
-            
-            precision1 <- if ((TP + FP) > 0) TP / (TP + FP) else 0
-            recall1    <- if ((TP + FN) > 0) TP / (TP + FN) else 0
-            f1_1       <- if ((precision1 + recall1) > 0) 2 * precision1 * recall1 / (precision1 + recall1) else 0
-            
-            # === Macro / Weighted Averages ===
-            macro_precision <- mean(c(precision0, precision1))
-            macro_recall    <- mean(c(recall0, recall1))
-            macro_f1        <- mean(c(f1_0, f1_1))
-            
-            weighted_precision <- (support0 * precision0 + support1 * precision1) / total
-            weighted_recall    <- (support0 * recall0 + support1 * recall1) / total
-            weighted_f1        <- (support0 * f1_0 + support1 * f1_1) / total
-            
-            # === Final Metrics Summary ===
-            metrics_summary <- data.frame(
-              Class      = c("0", "1", "macro avg", "weighted avg"),
-              Precision  = c(precision0, precision1, macro_precision, weighted_precision),
-              Recall     = c(recall0, recall1, macro_recall, weighted_recall),
-              F1_Score   = c(f1_0, f1_1, macro_f1, weighted_f1),
-              Support    = c(support0, support1, total, total),
-              Accuracy   = c(rep(accuracy, 4)),
-              TP         = c(rep(TP, 4)),
-              TN         = c(rep(TN, 4)),
-              FP         = c(rep(FP, 4)),
-              FN         = c(rep(FN, 4))
-            )
-            
-            # === Save Metrics Table to PNG ===
-            tryCatch({
-              png("metrics_summary.png", width = 1000, height = 400)
-              grid.table(metrics_summary)
-              dev.off()
-            }, error = function(e) {
-              message("❌ Failed to save metrics_summary.png: ", e$message)
-            })
-            
-            
-            
-            
-            # === Required Libraries ===
-            library(pROC)
-            library(PRROC)
-            library(ggplotify)
-            library(ggplot2)
-            
-            # === DEBUG: Input Check ===
-            cat("==== DEBUG: ROC/PR Input Check ====\n")
-            cat("Length of labels_flat:", length(labels_flat), "\n")
-            cat("Length of probs:", length(probs), "\n")
-            cat("labels_flat unique values:", paste(unique(labels_flat), collapse = ", "), "\n")
-            cat("probs summary:\n")
-            print(summary(probs))
-            
-            # === Flatten and Coerce ===
-            labels_numeric <- suppressWarnings(as.numeric(labels_flat))
-            probs_numeric <- suppressWarnings(as.numeric(probs))
-            
-            # === ROC Curve ===
-            tryCatch({
-              if (length(unique(labels_numeric)) >= 2 && length(labels_numeric) == length(probs_numeric)) {
-                
-                roc_obj <- pROC::roc(response = labels_numeric,
-                                     predictor = probs_numeric,
-                                     quiet = TRUE)
-                auc_value <- pROC::auc(roc_obj)
-                auc_val_text <- paste("AUC =", round(as.numeric(auc_value), 4))
-                
-                cat("✅ AUC (ROC):", auc_val_text, "\n")
-                
-                roc_curve_plot <- ggplotify::as.ggplot(~{
-                  plot(roc_obj,
-                       col = "#1f77b4", lwd = 2,
-                       main = "ROC Curve - Neural Network")
-                  abline(a = 0, b = 1, lty = 2, col = "gray")
-                  text(0.6, 0.2, labels = auc_val_text, cex = 1.2)
-                })
-                
-                ggsave("roc_curve.png", plot = roc_curve_plot, width = 6, height = 4, dpi = 300)
-                
-                while (!is.null(dev.list())) dev.off()
-                print(roc_curve_plot)
-                
-              } else {
-                cat("❌ ROC skipped: not enough unique label values or mismatched lengths.\n")
-              }
-            }, error = function(e) {
-              message("❌ Failed to compute or plot ROC: ", e$message)
-            })
-            
-            # === PR Curve ===
-            tryCatch({
-              pr_obj <- PRROC::pr.curve(
-                scores.class0 = probs_numeric[labels_numeric == 1],
-                scores.class1 = probs_numeric[labels_numeric == 0],
-                curve = TRUE
-              )
-              
-              cat("✅ AUPRC (PR Curve):", round(pr_obj$auc.integral, 4), "\n")
-              
-              pr_curve_plot <- ggplotify::as.ggplot(~{
-                plot(pr_obj,
-                     main = "Precision-Recall Curve - Neural Network",
-                     col = "#d62728",
-                     lwd = 2)
-              })
-              
-              ggsave("pr_curve.png", plot = pr_curve_plot, width = 6, height = 4, dpi = 300)
-              
-              while (!is.null(dev.list())) dev.off()
-              print(pr_curve_plot)
-              
-            }, error = function(e) {
-              message("❌ Failed to compute or plot PR: ", e$message)
-            })
-            
-
-
-
-
-            
-            
-            library(ggplot2)
-            library(dplyr)
-            library(tidyr)
-            library(gridExtra)
-            library(reshape2)
-            
-            # === Prep Predictions ===
-            Rdata_predictions <- Rdata_predictions %>%
-              rename(prob = Predicted_Prob, label = Label) %>%
-              mutate(
-                prob = as.numeric(prob),
-                label = as.numeric(label),
-                label = ifelse(label >= 1, 1, 0)
-              ) %>%
-              filter(!is.na(prob), !is.na(label)) %>%
-              mutate(prob_bin = ntile(prob, 10)) %>%
-              group_by(prob_bin) %>%
-              mutate(bin_mid = mean(prob, na.rm = TRUE)) %>%
-              ungroup()
-            
-            # === Bin Summary ===
-            bin_summary <- Rdata_predictions %>%
-              group_by(prob_bin, bin_mid) %>%
-              summarise(actual_death_rate = mean(label, na.rm = TRUE), .groups = "drop") %>%
-              filter(
-                !is.na(bin_mid),
-                !is.na(actual_death_rate),
-                is.finite(bin_mid),
-                is.finite(actual_death_rate)
-              ) %>%
-              mutate(prob_bin = factor(prob_bin))
-            
-            # === Plot 1: Bar of Actual Death Rate ===
-            tryCatch({
-              plot1 <- ggplot(bin_summary, aes(x = prob_bin, y = actual_death_rate)) +
-                geom_col(fill = "steelblue") +
-                labs(
-                  title = "Observed Death Rate by Risk Bin",
-                  x = "Predicted Risk Decile Bin (1 = lowest, 10 = highest)",
-                  y = "Actual Death Rate"
-                ) +
-                theme_minimal() +
-                theme(plot.title = element_text(face = "bold", hjust = 0.5))
-              ggsave("plot1_bar_actual_death_rate.png", plot1, width = 6, height = 4)
-              while (!is.null(dev.list())) dev.off()
-              print(plot1)
-            }, error = function(e) {
-              message("❌ Failed to generate plot1: ", e$message)
-            })
-            
-            # === Plot 2: Calibration Curve ===
-            tryCatch({
-              plot2 <- ggplot(bin_summary, aes(x = bin_mid, y = actual_death_rate)) +
-                geom_line(color = "blue", size = 1.2) +
-                geom_point(size = 3, color = "black") +
-                geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
-                labs(
-                  title = "Calibration Curve: Predicted vs Actual",
-                  x = "Average Predicted Probability (bin_mid)",
-                  y = "Observed Death Rate"
-                ) +
-                theme_minimal() +
-                theme(plot.title = element_text(face = "bold", hjust = 0.5))
-              ggsave("plot2_calibration_curve.png", plot2, width = 6, height = 4)
-              while (!is.null(dev.list())) dev.off()
-              print(plot2)
-            }, error = function(e) {
-              message("❌ Failed to generate plot2: ", e$message)
-            })
-            
-            # === Plot 3: Overlay ===
-            tryCatch({
-              plot_overlay <- ggplot(bin_summary, aes(x = prob_bin)) +
-                geom_col(aes(y = actual_death_rate, fill = "Actual Death Rate")) +
-                geom_point(aes(y = bin_mid, color = "Avg Predicted Prob"),
-                           size = 3, shape = 21, stroke = 1.2, fill = "white") +
-                scale_fill_manual(values = c("Actual Death Rate" = "steelblue")) +
-                scale_color_manual(values = c("Avg Predicted Prob" = "black")) +
-                labs(
-                  title = "Overlay: Actual vs Predicted Death Rate",
-                  x = "Predicted Risk Decile Bin",
-                  y = "Rate",
-                  fill = NULL,
-                  color = NULL
-                ) +
-                theme_minimal() +
-                theme(
-                  legend.position = "bottom",
-                  plot.title = element_text(face = "bold", hjust = 0.5)
-                )
-              ggsave("plot_overlay_with_legend_below.png", plot_overlay, width = 6, height = 4)
-              while (!is.null(dev.list())) dev.off()
-              print(plot_overlay)
-            }, error = function(e) {
-              message("❌ Failed to generate overlay plot: ", e$message)
-            })
-            
-            # === Calibration Table PNG ===
-            tryCatch({
-              calibration_table <- bin_summary %>%
-                mutate(
-                  difference = round(actual_death_rate - bin_mid, 4),
-                  calibration = case_when(
-                    abs(difference) < 0.02 ~ "✅ Well Calibrated",
-                    difference > 0 ~ "⚠️ Underconfident",
-                    TRUE ~ "⚠️ Overconfident"
-                  )
-                ) %>%
-                select(
-                  Bin = prob_bin,
-                  `Avg Predicted Prob` = bin_mid,
-                  `Actual Death Rate` = actual_death_rate,
-                  `Difference (Actual - Predicted)` = difference,
-                  `Calibration Quality` = calibration
-                )
-              table_plot <- tableGrob(calibration_table, rows = NULL)
-              ggsave("calibration_table.png", table_plot, width = 8, height = 4, dpi = 300)
-            }, error = function(e) {
-              message("❌ Failed to generate calibration table PNG: ", e$message)
-            })
-            
-            # === Commentary ===
-            tryCatch({
-              commentary_text <- c()
-              
-              if (!exists("accuracy") || !is.numeric(accuracy)) accuracy <- NA
-              if (!exists("metrics") || !is.list(metrics)) metrics <- list()
-              if (is.null(metrics$F1)) metrics$F1 <- NA
-              if (is.null(metrics$precision)) metrics$precision <- NA
-              if (is.null(metrics$recall)) metrics$recall <- NA
-              
-              acc <- round(accuracy, 4)
-              f1 <- round(metrics$F1, 4)
-              prec <- round(metrics$precision, 4)
-              rec <- round(metrics$recall, 4)
-              
-              if (!is.na(acc)) {
-                commentary_text <- c(commentary_text, paste("Accuracy:", acc))
-              }
-              
-              if (!is.na(f1)) {
-                commentary_text <- c(commentary_text, paste("F1 Score:", f1))
-              }
-              
-              if (!is.na(prec) && !is.na(rec)) {
-                if (prec > rec + 0.05) {
-                  commentary_text <- c(commentary_text, "⚠️ Precision-dominant: Model is conservative and may miss true positives.")
-                } else if (rec > prec + 0.05) {
-                  commentary_text <- c(commentary_text, "⚠️ Recall-dominant: Model identifies positives aggressively but may raise false alarms.")
-                } else {
-                  commentary_text <- c(commentary_text, "✅ Balanced precision and recall.")
-                }
-              }
-              
-              commentary_df_metrics <- data.frame(Interpretation = commentary_text)
-              
-            }, error = function(e) {
-              message("❌ Failed to generate commentary_df_metrics: ", e$message)
-              commentary_df_metrics <- data.frame(Interpretation = "⚠️ Metric interpretation unavailable.")
-            })
-            
-            
-            
-            
-            # === Write All to Excel ===
-            wb <- createWorkbook()
-            
-            addWorksheet(wb, "Rdata_Predictions")
-            writeData(wb, "Rdata_Predictions", Rdata_predictions)
-            
-            addWorksheet(wb, "Metrics_Summary")
-            writeData(wb, "Metrics_Summary", metrics_summary)
-            writeData(wb, "Metrics_Summary", commentary_df_metrics, startRow = 10)
-            writeData(wb, "Metrics_Summary", conf_matrix_df, startRow = 13, rowNames = TRUE)
-            insertImage(wb, "Metrics_Summary", heatmap_path, startRow = 18, startCol = 1, width = 6, height = 4)
-            
-            # === Commentary on Prediction Means ===
-            if (!exists("commentary_df_means")) {
-              if (exists("prediction_means") &&
-                  is.data.frame(prediction_means) &&
-                  "prob" %in% colnames(prediction_means)) {
-                
-                prob_values <- suppressWarnings(as.numeric(prediction_means$prob))
-                mean_prob <- mean(prob_values, na.rm = TRUE)
-                
-                if (!is.na(mean_prob)) {
-                  if (mean_prob > 0.7) {
-                    commentary_text_means <- "The model shows a strong tendency to predict the positive class."
-                  } else if (mean_prob < 0.3) {
-                    commentary_text_means <- "The model shows a strong tendency to predict the negative class."
-                  } else {
-                    commentary_text_means <- "The model has balanced prediction tendencies across classes."
-                  }
-                } else {
-                  commentary_text_means <- "Could not calculate mean prediction probability due to NA or non-numeric values."
-                }
-                
-              } else {
-                commentary_text_means <- "Prediction means data is missing or does not include a 'prob' column."
-              }
-              
-              commentary_df_means <- data.frame(Commentary = commentary_text_means)
-            }
-            
-            
-            
-            addWorksheet(wb, "Prediction_Means")
-            writeData(wb, "Prediction_Means", prediction_means)
-            writeData(wb, "Prediction_Means", commentary_df_means, startRow = 5)
-            
-            addWorksheet(wb, "Misclassified")
-            writeData(wb, "Misclassified", misclassified_sorted)
-            
-            addWorksheet(wb, "Misclass_Summary")
-            writeData(wb, "Misclass_Summary", summary_by_type)
-            insertImage(wb, "Misclass_Summary", "misclassification_heatmap.png", startRow = 10, startCol = 1, width = 6, height = 4)
-            insertImage(wb, "Misclass_Summary", "boxplot_serum_creatinine.png", startRow = 25, startCol = 1, width = 6, height = 4)
-            
-            saveWorkbook(wb, "Rdata_predictions.xlsx", overwrite = TRUE)
             
             
             
@@ -3799,17 +3224,11 @@ DESONN <- R6Class(
 
       }
       
-      return(list(
-        predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
-        threshold = best_threshold,
-        accuracy = accuracy,
-        metrics = metrics,
-        misclassified = misclassified
-      ))
+      return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, threshold = eval_result$best_threshold, accuracy = eval_result$accuracy, metrics = eval_result$metrics, misclassified = eval_result$misclassified))
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime) {
+    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions) {
 
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -3843,11 +3262,23 @@ DESONN <- R6Class(
             
             
             performance_list[[i]] <- calculate_performance(
-              self$ensemble[[i]],
-              Rdata, labels, lr, i, num_epochs, threshold,
-              single_predicted_output, single_prediction_time,
-              ensemble_number, single_ensemble_name_model_name
+              SONN = self$ensemble[[i]],
+              Rdata = Rdata,
+              labels = labels,
+              lr = lr,
+              model_iter_num = i,
+              num_epochs = num_epochs,
+              threshold = threshold,
+              learn_time = learn_time,
+              predicted_output = single_predicted_output,
+              prediction_time = single_prediction_time,
+              ensemble_number = ensemble_number,
+              run_id = run_id,
+              weights = all_weights[[i]],
+              biases = all_biases[[i]],
+              activation_functions = all_activation_functions[[i]]
             )
+            
             
            
             relevance_list[[i]] <- calculate_relevance(
@@ -3883,7 +3314,23 @@ DESONN <- R6Class(
             single_predicted_output_learn <- all_predicted_outputs_learn[[i]]
             single_learn_time <- all_learn_times[[i]]
             
-            performance_list[[i]] <- calculate_performance_learn(self$ensemble[[i]], Rdata, labels, lr, i, num_epochs, threshold, single_predicted_output_learn, single_learn_time, ensemble_number, single_ensemble_name_model_name)
+            performance_list[[i]] <- calculate_performance(
+              SONN = self$ensemble[[i]],
+              Rdata = Rdata,
+              labels = labels,
+              lr = lr,
+              model_iter_num = i,
+              num_epochs = num_epochs,
+              threshold = threshold,
+              learn_time = learn_time,
+              predicted_output = single_predicted_output,
+              prediction_time = single_prediction_time,
+              ensemble_number = ensemble_number,
+              run_id = run_id,
+              weights = all_weights[[i]],
+              biases = all_biases[[i]],
+              activation_functions = all_activation_functions[[i]]
+            )
             
             relevance_list[[i]] <- calculate_relevance_learn(
               self$ensemble[[i]],
@@ -3899,8 +3346,8 @@ DESONN <- R6Class(
             performance_metric <- performance_list[[i]]$metrics
             relevance_metric <- relevance_list[[i]]$metrics
             
-            self$store_metadata_precursor(run_id = single_ensemble_name_model_name, model_iter_num = i, num_epochs, threshold, single_predicted_output_learn, single_learn_time, actual_values = y)
-            
+            self$store_metadata_precursor(run_id = single_ensemble_name_model_name, model_iter_num = i, num_epochs, threshold, all_weights, all_biases, single_predicted_output_learn, single_learn_time, actual_values = y)
+
           }
           
           cat("\n====================================\n")
@@ -3914,7 +3361,7 @@ DESONN <- R6Class(
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
+          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
           
         }
       }else if(never_ran_flag == FALSE){
@@ -3933,7 +3380,7 @@ DESONN <- R6Class(
           
           if(learnOnlyTrainingRun == FALSE){
             
-            performance_list[[i]] <- calculate_performance(self$ensemble[[i]], Rdata, labels, lr, i, num_epochs, threshold, single_predicted_output, single_prediction_time, ensemble_number, single_ensemble_name_model_name)
+            performance_list[[i]] <- calculate_performance(self$ensemble[[i]], Rdata, labels, lr, i, num_epochs, threshold, learn_time, single_predicted_output, single_prediction_time, ensemble_number, single_ensemble_name_model_name)
             
             relevance_list[[i]] <- calculate_relevance(self$ensemble[[i]], Rdata, labels, i, single_predicted_output, ensemble_number)
             
@@ -4321,8 +3768,9 @@ DESONN <- R6Class(
       #             return(weighted_average_predictions)
     },
     #This is for NvrRan TRUE and LearnOnlyTraining TRUE
-    store_metadata_precursor = function(run_id, model_iter_num, num_epochs, threshold, single_predicted_output_learn, single_learn_time, actual_values) {
+    store_metadata_precursor = function(run_id, model_iter_num, num_epochs, threshold, all_weights, all_biases, single_predicted_output_learn, single_learn_time, actual_values) {
       
+
       if (ncol(actual_values) != ncol(single_predicted_output_learn)) {
         if (ncol(single_predicted_output_learn) < ncol(actual_values)) {
           # Calculate the required replication factor
@@ -4356,15 +3804,13 @@ DESONN <- R6Class(
       boxplot_stats <- boxplot.stats(differences)
       
       # Create a list to store weights and biases records
-      weights_records_learn <- list()
-      biases_records_learn <- list()
+      best_weights_records_learn <- list()
+      best_biases_records_learn <- list()
       
-      # Loop through each iteration and store weights and biases records in the list
+      # Loop through each network to extract weights and biases from the passed-in lists
       for (i in 1:num_networks) {
-        weights_var_name <- paste0("weights_record_learn_", i)
-        biases_var_name <- paste0("biases_record_learn_", i)
-        weights_records_learn[[i]] <- get(weights_var_name)
-        biases_records_learn[[i]] <- get(biases_var_name)
+        best_weights_records_learn[[i]] <- all_weights[[i]]
+        best_biases_records_learn[[i]]  <- all_biases[[i]]
       }
       
       # Store results in a list
@@ -4398,14 +3844,14 @@ DESONN <- R6Class(
         actual_values_tail = tail(actual_values),
         X = X,
         y = y,
-        weights_record_learn = weights_records_learn,
-        biases_record_learn = biases_records_learn
+        best_weights_record_learn = best_weights_records_learn,
+        best_biases_record_learn = best_biases_records_learn
       )
       
       # Store the result in the results_list_learnOnly
       results_list_learnOnly[[model_iter_num]] <- result_learnOnly #<<-
     },
-    store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, threshold, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
+    store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
       # Print the dimensions of predicted_output
       # print(paste("Dimensions of predicted_output:", paste(dim(predicted_output), collapse = " x ")))
@@ -4449,16 +3895,15 @@ DESONN <- R6Class(
       plot_epochs <- readRDS(paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
       
       # Create a list to store weights and biases records
-      weights_records <- list()
-      biases_records <- list()
-      
-      # Loop through each iteration and store weights and biases records in the list
+      best_weights_records <- list()
+      best_biases_records <- list()
+
+      # Loop through each network to extract weights and biases from the passed-in lists
       for (i in 1:num_networks) {
-        weights_var_name <- paste0("weights_record_", i)
-        biases_var_name <- paste0("biases_record_", i)
-        weights_records[[i]] <- get(weights_var_name)
-        biases_records[[i]] <- get(biases_var_name)
+        best_weights_records[[i]] <- all_weights[[i]]
+        best_biases_records[[i]]  <- all_biases[[i]]
       }
+      
       
       # Store results in a list
       result <- list(
@@ -4494,8 +3939,8 @@ DESONN <- R6Class(
         performance_metric  = performance_metric,
         relevance_metric = relevance_metric,
         plot_epochs = plot_epochs,
-        weights_record = weights_records,
-        biases_record = biases_records
+        best_weights_record = best_weights_records,
+        best_biases_record = best_biases_records
       )
       
       # This is for the initial finding the best model out of all the hyperparameters.
@@ -5522,65 +4967,6 @@ leaky_selu <- function(x, alpha = 0.01, lambda = 1.0507) {
 attr(leaky_selu, "name") <- "leaky_selu"
 
 
-tune_threshold <- function(predicted_output, labels) {
-  thresholds <- seq(0.05, 0.95, by = 0.01)
-  
-  f1_scores <- sapply(thresholds, function(t) {
-    preds <- ifelse(predicted_output >= t, 1, 0)
-    TP <- sum(preds == 1 & labels == 1)
-    FP <- sum(preds == 1 & labels == 0)
-    FN <- sum(preds == 0 & labels == 1)
-    precision <- TP / (TP + FP + 1e-8)
-    recall <- TP / (TP + FN + 1e-8)
-    f1 <- 2 * precision * recall / (precision + recall + 1e-8)
-    return(f1)
-  })
-  
-  best_threshold <- thresholds[which.max(f1_scores)]
-  binary_preds <- ifelse(predicted_output >= best_threshold, 1, 0)
-  
-  return(list(
-    best_threshold = best_threshold,
-    binary_preds = binary_preds,
-    f1_scores = f1_scores
-  ))
-}
-
-tune_threshold_accuracy <- function(predicted_output, labels) {
-  thresholds <- seq(0.05, 0.95, by = 0.01)
-  
-  accuracies <- sapply(thresholds, function(t) {
-    preds <- ifelse(predicted_output >= t, 1, 0)
-    sum(preds == labels) / length(labels)
-  })
-  
-  best_threshold <- thresholds[which.max(accuracies)]
-  binary_preds <- ifelse(predicted_output >= best_threshold, 1, 0)
-  
-  return(list(
-    best_threshold = best_threshold,
-    binary_preds = binary_preds,
-    accuracy_scores = accuracies
-  ))
-}
-
-
-evaluate_classification_metrics <- function(preds, labels) {
-  labels <- as.vector(labels)
-  preds <- as.vector(preds)
-  
-  TP <- sum(preds == 1 & labels == 1)
-  FP <- sum(preds == 1 & labels == 0)
-  FN <- sum(preds == 0 & labels == 1)
-  
-  precision <- TP / (TP + FP + 1e-8)
-  recall <- TP / (TP + FN + 1e-8)
-  F1 <- 2 * precision * recall / (precision + recall + 1e-8)
-  
-  return(list(precision = precision, recall = recall, F1 = F1))
-}
-
-
 
 
 lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-6) {
@@ -5592,8 +4978,7 @@ lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch =
 
 
 
-calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold,
-                                  predicted_output, prediction_time, ensemble_number, run_id) {
+calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, learn_time, predicted_output, prediction_time, ensemble_number, run_id, weights, biases, activation_functions) {
   
   # --- Standardize single-layer as list ---
   if (!is.list(SONN$weights)) {
@@ -5626,68 +5011,75 @@ calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_e
   final_layer_index <- length(SONN$weights)
   final_weights <- SONN$weights[[final_layer_index]]
   
-  # --- Topographic error: compute using first layer only (SOM map exists only there) ---
+  # --- Topographic error: compute using first layer only ---
   if (!is.null(SONN$map) && length(SONN$map) >= 1 && length(SONN$weights) >= 1) {
     topo_layer_index <- 1
     topo_weights <- SONN$weights[[topo_layer_index]]
     topo_map <- as.matrix(SONN$map[[topo_layer_index]])
     cat("[topographic error] using weights + map from layer", topo_layer_index, "\n")
-    topo_error <- topographic_error(topo_weights, topo_map, Rdata, threshold)
+    topo_error <- topographic_error(topo_weights, topo_map, Rdata, threshold, verbose)
   } else {
     cat("[topographic error] skipped: no valid map or weights found for layer 1\n")
     topo_error <- NULL
   }
   
-  
+  # --- Compile performance metrics ---
   perf_metrics <- list(
-    quantization_error = quantization_error(final_weights, Rdata, run_id),
-    topographic_error = topo_error,
-    clustering_quality_db = clustering_quality_db(final_weights, Rdata, cluster_assignments),
-    MSE = MSE(final_weights, Rdata, labels, predicted_output),
-    speed = speed(final_weights, prediction_time),
-    memory_usage = memory_usage(final_weights, Rdata)
+    quantization_error             = quantization_error(final_weights, Rdata, run_id, verbose),
+    topographic_error              = topo_error,
+    clustering_quality_db          = clustering_quality_db(final_weights, Rdata, cluster_assignments, verbose),
+    MSE                            = MSE(final_weights, Rdata, labels, predicted_output, verbose),
+    MAE                            = MAE(SONN, Rdata, labels, predicted_output, verbose),
+    RMSE                           = RMSE(SONN, Rdata, labels, predicted_output, verbose),
+    precision                      = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    recall                         = recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    f1_score                       = f1_score(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    speed                          = speed(final_weights, prediction_time, verbose),
+    speed_learn                    = speed_learn(SONN, learn_time, verbose),
+    memory_usage                   = memory_usage(final_weights, Rdata, verbose),
+    robustness                     = robustness(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose),
+    custom_relative_error_binned  = custom_relative_error_binned(SONN, Rdata, labels, predicted_output, verbose)
   )
+  
+  
+  # --- Clean invalid metrics (NULL, NA, or TRUE by accident) ---
+  for (name in names(perf_metrics)) {
+    val <- perf_metrics[[name]]
+    if (is.null(val) || any(is.na(val)) || isTRUE(val)) {
+      perf_metrics[[name]] <- NULL
+    }
+  }
   
   return(list(metrics = perf_metrics, names = names(perf_metrics)))
 }
 
 
-
-
-calculate_relevance <- function(SONN, Rdata, labels, model_iter_num, predicted_output, 
-                                        ensemble_number, weights, biases, activation_functions, verbose) {
+calculate_relevance <- function(SONN, Rdata, labels, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, verbose) {
   
   # --- Standardize single-layer to list format ---
   if (!is.list(SONN$weights)) {
     SONN$weights <- list(SONN$weights)
   }
   
-  # --- Inactive metrics (may implement later) ---
-  # hit_rate           : Proportion of relevant items successfully recommended
-  # precision_boolean  : Binary precision at threshold
-  # recall             : Proportion of actual relevant items retrieved
-  # f1_score           : Harmonic mean of precision and recall
-  # ndcg               : Ranking quality
-  # mean_precision     : Mean precision across ranks
-  # novelty            : Uncommon or surprising recommendations
-  
-  # --- Active metrics ---
+  # --- Active relevance metrics ---
   rel_metrics <- list(
-    # hit_rate = hit_rate(SONN, Rdata, predicted_output),
-    precision = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    # precision_boolean = precision_boolean(SONN, Rdata, labels, predicted_output),
-    # recall = recall(SONN, Rdata, predicted_output),
-    MAE = MAE(SONN, Rdata, labels, predicted_output),
-    # f1_score = f1_score(SONN, Rdata, labels),
-    # ndcg = ndcg(SONN, Rdata, predicted_output_l2),
-    # mean_precision = mean_precision(SONN, Rdata, labels, predicted_output),
-    diversity = diversity(SONN, Rdata, predicted_output),
-    RMSE = RMSE(SONN, Rdata, labels, predicted_output),
-    serendipity = serendipity(SONN, Rdata, predicted_output)
+    hit_rate     = tryCatch(hit_rate(SONN, Rdata, predicted_output, labels, verbose), error = function(e) NULL),
+    ndcg         = tryCatch(ndcg(SONN, Rdata, predicted_output, labels, verbose), error = function(e) NULL),
+    diversity    = tryCatch(diversityfunction(SONN, Rdata, predicted_output, verbose), error = function(e) NULL),
+    serendipity  = tryCatch(serendipityfunction(SONN, Rdata, predicted_output, verbose), error = function(e) NULL)
   )
   
-  # --- Validate and clean metrics ---
-  all_possible_metrics <- c("hit_rate", "precision", "precision_boolean", "recall", "MAE", "f1_score", "ndcg", "mean_precision", "diversity", "novelty", "serendipity", "RMSE")
+  
+  # --- Inactive for future implementation ---
+  # precision_boolean = precision_boolean(...)
+  # recall            = recall(...)
+  # f1_score          = f1_score(...)
+  # mean_precision    = mean_precision(...)
+  # novelty           = novelty(...)
+  
+  # --- Validate and clean ---
+  all_possible_metrics <- c("hit_rate", "ndcg", "diversity", "serendipity",
+                            "precision_boolean", "recall", "f1_score", "mean_precision", "novelty")
   
   for (metric_name in all_possible_metrics) {
     if (!metric_name %in% names(rel_metrics)) {
@@ -5704,18 +5096,13 @@ calculate_relevance <- function(SONN, Rdata, labels, model_iter_num, predicted_o
 }
 
 
-calculate_performance_learn <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold,
-                                        predicted_output, learn_time, ensemble_number, run_id = NULL) {
+calculate_performance_learn <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, predicted_output, learn_time, ensemble_number, run_id) {
   
   # --- Standardize single-layer as list ---
-  if (!is.list(SONN$weights)) {
-    SONN$weights <- list(SONN$weights)
-  }
-  if (!is.null(SONN$map) && !is.list(SONN$map)) {
-    SONN$map <- list(SONN$map)
-  }
+  if (!is.list(SONN$weights)) SONN$weights <- list(SONN$weights)
+  if (!is.null(SONN$map) && !is.list(SONN$map)) SONN$map <- list(SONN$map)
   
-  # --- Elbow method for clustering quality ---
+  # --- Elbow method for clustering ---
   calculate_wss <- function(Rdata, max_k = 15) {
     wss <- numeric(max_k)
     for (i in 2:max_k) {
@@ -5724,61 +5111,61 @@ calculate_performance_learn <- function(SONN, Rdata, labels, lr, model_iter_num,
     }
     return(wss)
   }
-  
   wss <- calculate_wss(Rdata)
   optimal_k <- which(diff(diff(wss)) == max(diff(diff(wss)))) + 1
-  result <- kmeans(Rdata, centers = optimal_k)
-  cluster_assignments <- result$cluster
+  cluster_assignments <- kmeans(Rdata, centers = optimal_k)$cluster
   
-  cat("Length of SONN$weights: ", length(SONN$weights), "\n")
-  cat("Length of SONN$map: ", if (is.null(SONN$map)) "NULL" else length(SONN$map), "\n")
+  # --- Final layer weights ---
+  final_weights <- SONN$weights[[length(SONN$weights)]]
   
-  # --- Final layer weights (used for most performance metrics) ---
-  final_layer_index <- length(SONN$weights)
-  final_weights <- SONN$weights[[final_layer_index]]
-  
-  # --- Topographic error: compute using first layer only (SOM map exists only there) ---
-  if (!is.null(SONN$map) && length(SONN$map) >= 1 && length(SONN$weights) >= 1) {
-    topo_layer_index <- 1
-    topo_weights <- SONN$weights[[topo_layer_index]]
-    topo_map <- as.matrix(SONN$map[[topo_layer_index]])
-    cat("[topographic error] using weights + map from layer", topo_layer_index, "\n")
+  # --- Topographic error (if map exists) ---
+  if (!is.null(SONN$map) && length(SONN$map) >= 1) {
+    topo_weights <- SONN$weights[[1]]
+    topo_map <- as.matrix(SONN$map[[1]])
     topo_error <- topographic_error(topo_weights, topo_map, Rdata, threshold)
   } else {
-    cat("[topographic error] skipped: no valid map or weights found for layer 1\n")
     topo_error <- NULL
   }
   
-  
-
-  
+  # --- Metrics ---
   perf_metrics <- list(
-    quantization_error     = quantization_error(final_weights, Rdata, run_id),
-    topographic_error      = topo_error,
-    clustering_quality_db  = clustering_quality_db(final_weights, Rdata, cluster_assignments),
-    MSE                    = MSE(final_weights, Rdata, labels, predicted_output),
-    speed                  = speed_learn(final_weights, learn_time),
-    memory_usage           = memory_usage(final_weights, Rdata)
+    quantization_error             = quantization_error(final_weights, Rdata, run_id, verbose),
+    topographic_error              = topo_error,
+    clustering_quality_db          = clustering_quality_db(final_weights, Rdata, cluster_assignments, verbose),
+    MSE                            = MSE(final_weights, Rdata, labels, predicted_output, verbose),
+    MAE                            = MAE(SONN, Rdata, labels, predicted_output, verbose),
+    RMSE                           = RMSE(SONN, Rdata, labels, predicted_output, verbose),
+    precision                      = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    recall                         = recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    f1_score                       = f1_score(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    speed                          = speed(final_weights, prediction_time, verbose),
+    speed_learn                    = speed_learn(SONN, learn_time, verbose),
+    memory_usage                   = memory_usage(final_weights, Rdata, verbose),
+    robustness                     = robustness(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose),
+    custom_relative_error_binned  = custom_relative_error_binned(SONN, Rdata, labels, predicted_output, verbose)
   )
+  
+  # --- Clean up invalids ---
+  for (name in names(perf_metrics)) {
+    val <- perf_metrics[[name]]
+    if (is.null(val) || any(is.na(val)) || isTRUE(val)) {
+      perf_metrics[[name]] <- NULL
+    }
+  }
   
   return(list(metrics = perf_metrics, names = names(perf_metrics)))
 }
 
-calculate_relevance_learn <- function(SONN, Rdata, labels, model_iter_num, predicted_output, 
-                                      ensemble_number, weights, biases, activation_functions) {
+calculate_relevance_learn <- function(SONN, Rdata, labels, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions) {
   
-  # --- Active metrics block ---
   rel_metrics <- list(
-    precision   = tryCatch(precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions), error = function(e) NULL),
-    MAE         = tryCatch(MAE(SONN, Rdata, labels, predicted_output), error = function(e) NULL),
-    diversity   = tryCatch(diversity(SONN, Rdata, predicted_output), error = function(e) NULL),
-    RMSE        = tryCatch(RMSE(SONN, Rdata, labels, predicted_output), error = function(e) NULL),
-    serendipity = tryCatch(serendipity(SONN, Rdata, predicted_output), error = function(e) NULL)
+    hit_rate     = tryCatch(hit_rate(SONN, Rdata, predicted_output, labels, verbose), error = function(e) NULL),
+    ndcg         = tryCatch(ndcg(SONN, Rdata, predicted_output, labels, verbose), error = function(e) NULL),
+    diversity    = tryCatch(diversityfunction(SONN, Rdata, predicted_output, verbose), error = function(e) NULL),
+    serendipity  = tryCatch(serendipityfunction(SONN, Rdata, predicted_output, verbose), error = function(e) NULL)
   )
   
-  # --- Clean up NULL, NA, or invalid values ---
-  all_possible_metrics <- c("precision", "MAE", "diversity", "RMSE", "serendipity",
-                            "hit_rate", "recall", "f1_score", "ndcg", "mean_precision", "novelty")
+  all_possible_metrics <- c("hit_rate", "ndcg", "diversity", "serendipity", "novelty")
   
   for (metric_name in all_possible_metrics) {
     if (!metric_name %in% names(rel_metrics)) {
@@ -5793,6 +5180,7 @@ calculate_relevance_learn <- function(SONN, Rdata, labels, model_iter_num, predi
   
   return(list(metrics = rel_metrics, names = names(rel_metrics)))
 }
+
 
 find_and_print_best_performing_models <- function(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best) {
   
@@ -6151,10 +5539,10 @@ add_network_to_ensemble <- function(ensembles, target_metric_name_best, removed_
       boxplot_stats = best_model$boxplot_stats,
       X = best_model$X,
       y = best_model$y,
-      weights_record = best_model$weights_record,
-      biases_record = best_model$biases_record,
-      weights_record2 = best_model$weights_record2,
-      biases_record2 = best_model$biases_record2,
+      best_weights_record = best_model$best_weights_record,
+      best_biases_record = best_model$best_biases_record,
+      weights_record2 = best_model$weights_record2, #will likely remove
+      biases_record2 = best_model$biases_record2, #will likely remove
       lossesatoptimalepoch = best_model$lossesatoptimalepoch,
       loss_increase_flag = best_model$loss_increase_flag,
       performance_metric = best_model$performance_metric,
@@ -6371,19 +5759,19 @@ loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
 
 
 
-#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-#     _     _      _     _      _     _      _     _      _     _      _     _      _     _    $$$$$$$$$$$$$$$$$$$$$$$
-#    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)   $$$$$$$$$$$$$$$$$$$$$$$
-#     / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \    $$$$$$$$$$$$$$$$$$$$$$$
-#   __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  $$$$$$$$$$$$$$$$$$$$$$$
-#  (_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._) $$$$$$$$$$$$$$$$$$$$$$$
-#    || M ||      || E ||      || T ||      || R ||      || I ||      || C ||      || S ||     $$$$$$$$$$$$$$$$$$$$$$$
-# _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._    $$$$$$$$$$$$$$$$$$$$$$$
-#(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-`\.-.)(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-`\.-.)   $$$$$$$$$$$$$$$$$$$$$$$
-#`-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'     $$$$$$$$$$$$$$$$$$$$$$$
-#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+#      _     _      _     _      _     _      _     _      _     _      _     _      _     _    $$$$$$$$$$$$$$$$$$$$$$$
+#     (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)   $$$$$$$$$$$$$$$$$$$$$$$
+#      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \    $$$$$$$$$$$$$$$$$$$$$$$
+#   __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__   $$$$$$$$$$$$$$$$$$$$$$$
+#  (_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)  $$$$$$$$$$$$$$$$$$$$$$$
+#    || M ||      || E ||      || T ||      || R ||      || I ||      || C ||      || S ||      $$$$$$$$$$$$$$$$$$$$$$$
+# _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._     $$$$$$$$$$$$$$$$$$$$$$$
+#(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-`\.-.)(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-`\.-.)    $$$$$$$$$$$$$$$$$$$$$$$
+#`-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'      $$$$$$$$$$$$$$$$$$$$$$$
+#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 
-quantization_error <- function(SONN, Rdata, run_id) {
+quantization_error <- function(SONN, Rdata, run_id, verbose) {
   
   if(ML_NN){
     # Ensure both SONN$weights and Rdata are numeric matrices
@@ -6488,7 +5876,7 @@ quantization_error <- function(SONN, Rdata, run_id) {
   }
 }
 
-topographic_error <- function(SONN, map, Rdata, threshold) {
+topographic_error <- function(SONN, map, Rdata, threshold, verbose) {
   
   adjacency_log <- list()
   
@@ -6578,9 +5966,8 @@ is.adjacent <- function(map, neuron1, neuron2) {
   return(grid_dist == 1)
 }
 
-
 # Clustering quality (Davies-Bouldin index)
-clustering_quality_db <- function(SONN, Rdata, cluster_assignments) {
+clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose) {
   # Check if cluster_assignments is available
   if (is.null(cluster_assignments)) {
     stop("Cluster assignments not available. Perform kmeans clustering first.")
@@ -6649,7 +6036,7 @@ clustering_quality_db <- function(SONN, Rdata, cluster_assignments) {
 }
 
 # Classification accuracy placeholder
-MSE <- function(SONN, Rdata, labels, predicted_output) {
+MSE <- function(SONN, Rdata, labels, predicted_output, verbose) {
   
   # for(i in num_layers){
   
@@ -6691,7 +6078,7 @@ MSE <- function(SONN, Rdata, labels, predicted_output) {
 }
 
 # Generalization ability
-generalization_ability <- function(SONN, Rdata) {
+generalization_ability <- function(SONN, Rdata, verbose) {
   # Split the Rdata into training and testing sets
   set.seed(123)
   train_idx <- sample(1:nrow(Rdata), 0.8 * nrow(Rdata))
@@ -6707,7 +6094,7 @@ generalization_ability <- function(SONN, Rdata) {
 }
 
 # Speed
-speed_learn <- function(SONN, learn_time) {
+speed_learn <- function(SONN, learn_time, verbose) {
   
   if (verbose) {
     print("speed")
@@ -6720,7 +6107,7 @@ speed_learn <- function(SONN, learn_time) {
 }
 
 # Speed
-speed <- function(SONN, prediction_time) {
+speed <- function(SONN, prediction_time, verbose) {
   
   if (verbose) {
     print("speed")
@@ -6733,7 +6120,7 @@ speed <- function(SONN, prediction_time) {
 }
 
 # Memory usage
-memory_usage <- function(SONN, Rdata) {
+memory_usage <- function(SONN, Rdata, verbose) {
   
   # Calculate the memory usage of the SONN object
   object_size <- object.size(SONN)
@@ -6752,7 +6139,23 @@ memory_usage <- function(SONN, Rdata) {
 }
 
 # Robustness
-robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number) {
+robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose) {
+  # --- DEBUG CHECK FOR CORRUPTED BIASES ---
+  cat(">>> DEBUG: Checking SONN$biases types...\n")
+  
+  if (is.null(SONN$biases)) {
+    cat("SONN$biases is NULL\n")
+  } else if (!is.list(SONN$biases)) {
+    cat("SONN$biases is not a list, type is:", class(SONN$biases), "\n")
+  } else {
+    for (i in seq_along(SONN$biases)) {
+      bias_class <- class(SONN$biases[[i]])
+      cat(sprintf("Layer %d bias type: %s\n", i, bias_class))
+      if (is.function(SONN$biases[[i]])) {
+        stop(sprintf("ERROR: SONN$biases[[%d]] is a function (closure). It should be numeric!", i))
+      }
+    }
+  }
   
   # my_robustness_vector <<- seq(40, 0.1, by = -0.2)
   # losses <- rep(0, length(my_robustness_vector))
@@ -6768,7 +6171,7 @@ robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, pred
   if(learnOnlyTrainingRun == FALSE){
     
     # Predict the class of the noisy Rdata
-    noisy_Rdata_predictions <- SONN$predict(noisy_Rdata, labels, activation_functions, dropout_rates) #(Rdata, weights, biases, activation_functions)
+    noisy_Rdata_predictions <- SONN$predict(noisy_Rdata, weights, biases, activation_functions)#(Rdata, weights, biases, activation_functions)
     
     # Add debug statements to print dimensions and lengths
     # print(paste("Dimensions of labels:", paste(dim(labels), collapse = " x ")))
@@ -6851,7 +6254,7 @@ robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, pred
 }
 
 # Hit Rate
-hit_rate <- function(SONN, Rdata,  predicted_output) {
+hit_rate <- function(SONN, Rdata, predicted_output, labels, verbose) {
   # Predict the output for each Rdata point
   # print("hit rate before predict")
   # predictions <- SONN$predict(Rdata, weights, biases, activation_functions)
@@ -6946,28 +6349,22 @@ precision <- function(SONN, Rdata, labels, predicted_output, weights, biases, ac
 }
 
 # Recall
-recall <- function(SONN, Rdata, predicted_output) {
-  # Predict the output for each Rdata point
-  # print("recall before predict")
-  # predictions <- SONN$predict(Rdata, weights, biases, activation_functions)
-  # print("recall after predict")
+recall <- function(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose = FALSE) {
   Rdata <- data.frame(Rdata)
-  # Identify the relevant Rdata points
   relevant_Rdata <- Rdata[Rdata$class == "relevant", ]
   
-  # Calculate the recall
-  recall <<- sum(predicted_output %in% relevant_Rdata$id) / nrow(relevant_Rdata)
+  recall_value <- sum(predicted_output %in% relevant_Rdata$id) / nrow(relevant_Rdata)
+  
   if (verbose) {
     print("recall")
-  }
-  # Return the recall
-  return(recall)
-  if (verbose) {
+    print(recall_value)
     print("recall complete")
   }
+  
+  return(recall_value)
 }
 
-MAE <- function(SONN, Rdata, labels, predicted_output) {
+MAE <- function(SONN, Rdata, labels, predicted_output, verbose) {
   
   if (ncol(labels) != ncol(predicted_output)) {
     if (ncol(predicted_output) < ncol(labels)) {
@@ -7008,10 +6405,10 @@ MAE <- function(SONN, Rdata, labels, predicted_output) {
 }
 
 # F1 Score
-f1_score <- function(SONN, Rdata, labels) {
+f1_score <- function(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose) {
   # Calculate the precision and recall
-  precision <- precision(SONN, Rdata, labels, predicted_output, activation_functions)
-  recall <- recall(SONN, Rdata)
+  precision <- precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose)
+  recall <-  recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions)
   
   # Calculate the F1-score
   f1_score <- 2 * (precision * recall) / (precision + recall)
@@ -7027,34 +6424,45 @@ f1_score <- function(SONN, Rdata, labels) {
 }
 
 # NDCG (Normalized Discounted Cumulative Gain)
-ndcg <- function(SONN, Rdata, predicted_output) {
-  # # Predict the output for each Rdata point
-  # predictions <- SONN$predict(Rdata, labels)
+ndcg <- function(SONN, Rdata, predicted_output, labels, verbose) {
+  # Convert to data frame if needed
+  Rdata <- data.frame(Rdata)
   
-  # Identify the relevant Rdata points
-  relevant_Rdata <- Rdata[Rdata$class == "relevant", ]
+  # Define relevance scores: assume binary relevance (1 for "relevant", 0 otherwise)
+  relevance_scores <- ifelse(labels == "relevant", 1, 0)
   
-  # Calculate the discounted cumulative gain (DCG)
-  dcg <- sum(2^rel - 1)
+  # Create a data frame to pair predicted outputs with relevance
+  df <- data.frame(
+    prediction = predicted_output,
+    relevance = relevance_scores
+  )
   
-  # Calculate the ideal discounted cumulative gain (IDCG)
-  idcg <- sum(2^(sort(rel, decreasing = TRUE)) - 1)
+  # Sort by prediction score descending (as if ranked)
+  df_sorted <- df[order(-df$prediction), ]
   
-  # Calculate the NDCG
-  ndcg <- dcg / idcg
-  if (verbose) {
+  # Compute DCG
+  gains <- (2^df_sorted$relevance - 1) / log2(1 + seq_along(df_sorted$relevance))
+  dcg <- sum(gains)
+  
+  # Compute ideal DCG (perfect ranking)
+  ideal_relevance <- sort(df$relevance, decreasing = TRUE)
+  ideal_gains <- (2^ideal_relevance - 1) / log2(1 + seq_along(ideal_relevance))
+  idcg <- sum(ideal_gains)
+  
+  # Avoid division by zero
+  ndcg_value <- if (idcg == 0) 0 else dcg / idcg
+  
+  if (exists("verbose") && verbose) {
     print("ndcg")
-    print(ndcg)
+    print(ndcg_value)
   }
-  # Return the NDCG
-  return(ndcg)
-  if (verbose) {
-    print("ndcg complete")
-  }
+  
+  return(ndcg_value)
 }
 
+
 # MAP (Mean Average Precision)
-mean_precision <- function(SONN, Rdata, labels, predicted_output) {
+custom_relative_error_binned <- function(SONN, Rdata, labels, predicted_output, verbose) {
   
   if (ncol(labels) != ncol(predicted_output)) {
     if (ncol(predicted_output) < ncol(labels)) {
@@ -7081,7 +6489,7 @@ mean_precision <- function(SONN, Rdata, labels, predicted_output) {
   
   
   # Calculate percentage difference between actual and predicted values
-  percentage_difference <<- abs(lerror_prediction) / abs(labels)
+  percentage_difference <<- abs(error_prediction) / abs(labels)
   
   # Define precision percentage bins
   bins <- c(0, 0.05, 0.1, 0.5, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
@@ -7119,34 +6527,34 @@ mean_precision <- function(SONN, Rdata, labels, predicted_output) {
 }
 
 # Diversity
-diversity <- function(SONN, Rdata, predicted_output, verbose = FALSE) {
-  # Ensure there are no zero values in predicted_output to avoid log2(0)
+diversity <- function(SONN, Rdata, predicted_output, verbose) {
+  # Replace zero values to avoid log2(0)
   predicted_output[predicted_output == 0] <- .Machine$double.eps
   
-  # Calculate the entropy of the predictions
-  entropy <- suppressWarnings(-sum(predicted_output * log2(predicted_output)))
-  suppressWarnings({
-    # Handle Inf and NaN values
-    if (is.infinite(entropy) || is.nan(entropy)) {
-      entropy <- NA
-      warning("Calculated entropy is Inf or NaN. Returning NA.")
-    }
-  })
+  # Normalize predicted_output to a valid probability distribution if needed
+  if (sum(predicted_output) != 1) {
+    predicted_output <- predicted_output / sum(predicted_output)
+  }
+  
+  # Calculate entropy (Shannon diversity)
+  entropy <- -sum(predicted_output * log2(predicted_output), na.rm = TRUE)
+  
+  # Handle unexpected Inf/NaN
+  if (!is.finite(entropy)) {
+    entropy <- NA
+    warning("Entropy calculation returned Inf or NaN. Setting to NA.")
+  }
+  
   if (verbose) {
-    print("diversity")
+    cat("Diversity (entropy):\n")
     print(entropy)
   }
   
-  # Return the entropy
   return(entropy)
-  
-  if (verbose) {
-    print("diversity complete")
-  }
 }
 
 # Novelty placeholder
-RMSE <- function(SONN, Rdata, labels, predicted_output) {
+RMSE <- function(SONN, Rdata, labels, predicted_output, verbose) {
   # Calculate the squared error between each prediction and its corresponding label
   squared_errors <- mapply(function(x, y) {
     (x - y)^2  # Squared error calculation
@@ -7169,7 +6577,7 @@ RMSE <- function(SONN, Rdata, labels, predicted_output) {
 }
 
 # Serendipity
-serendipity <- function(SONN, Rdata, predicted_output) {
+serendipity <- function(SONN, Rdata, predicted_output, verbose) {
   # # Predict the output for each Rdata point
   # predictions <- SONN$predict(Rdata, labels)
   

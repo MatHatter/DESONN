@@ -3,7 +3,7 @@ source("DESONN.R")
 # Initialize activation functions
 # self$activation_functions <- vector("list", self$num_layers)
 # self$activation_functions_learn <- vector("list", self$num_layers)
-library(caret)
+
 ###############################################################################
 function(test1){
   # test1
@@ -81,7 +81,7 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
-num_epochs <- 3
+num_epochs <- 100
 custom_scale <- .05
 threshold <- .98
 # ML_NN <- TRUE
@@ -107,7 +107,7 @@ dropout_rates_learn <- dropout_rates
 num_layers <- length(hidden_sizes) + 1
 output_size <- 1  # For binary classification
 num_networks <- 1  # Number of trees in the Random Forest
-
+threshold_function <- tune_threshold_accuracy
 # threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
 
 # Load the dataset
@@ -340,7 +340,7 @@ metric_name <- 'MSE'
 #########################################################################################################################
 
 nruns <- 5
-verbose <<- TRUE
+verbose <- TRUE
 hyperparameter_grid_setup <- TRUE
 reg_type = "L2" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
@@ -373,6 +373,9 @@ Run1.2 <- FALSE
 hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
 results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
 j <- 1
+ensembles <- list(main_ensemble = list(), temp_ensemble = list())
+
+
 if (hyperparameter_grid_setup) {
   # Define grid of learning rates and regularization values
   lr_vals <- c(0.3)
@@ -394,6 +397,7 @@ if (hyperparameter_grid_setup) {
         N = N,
         lambda = lambda,
         ensemble_number = j,
+        ensembles = ensembles,
         ML_NN = ML_NN,
         method = init_method,
         custom_scale = custom_scale
@@ -406,6 +410,7 @@ if (hyperparameter_grid_setup) {
         N = N,
         lambda = lambda,
         ensemble_number = j,
+        ensembles = ensembles,
         ML_NN = ML_NN,
         method = init_method,
         custom_scale = custom_scale
@@ -441,7 +446,9 @@ if (hyperparameter_grid_setup) {
       loss_type = loss_type,
       sample_weights = sample_weights,
       X_validation = X_validation,
-      y_validation = y_validation
+      y_validation = y_validation,
+      threshold_function = threshold_function,
+      verbose = verbose
     )
     
     # === Save result to results table ===
@@ -467,7 +474,8 @@ if (hyperparameter_grid_setup) {
       output_size = output_size,
       N = N,
       lambda = lambda,
-      ensemble_number = 1,
+      ensemble_number = j,
+      ensembles = ensembles,
       ML_NN = ML_NN,
       method = init_method,
       custom_scale = custom_scale
@@ -479,7 +487,8 @@ if (hyperparameter_grid_setup) {
       output_size = output_size,
       N = N,
       lambda = lambda,
-      ensemble_number = 1,
+      ensemble_number = j,
+      ensembles = ensembles,
       ML_NN = ML_NN,
       method = init_method,
       custom_scale = custom_scale
@@ -514,7 +523,9 @@ if (hyperparameter_grid_setup) {
     loss_type = loss_type,
     sample_weights = sample_weights,
     X_validation = X_validation,
-    y_validation = y_validation
+    y_validation = y_validation,
+    threshold_function = threshold_function,
+    verbose = verbose
   )
   
   # Save manual run result
