@@ -2752,11 +2752,18 @@ DESONN <- R6Class(
       # Initialize an ensemble of SONN networks
       self$ensemble <- lapply(1:num_networks, function(i) {
         # Determine ensemble and model names
-        if (hyperparameter_grid_setup) {
+        # if (hyperparameter_grid_setup) {
+        #   ensemble_number <- j
+        # } else {
+        #   ensemble_number <- j
+        # }
+        
+        if (firstRun) {
           ensemble_number <- j
         } else {
           ensemble_number <- j + 1
         }
+        
         ensemble_name <- ensemble_number
         model_name <- i
         
@@ -3087,7 +3094,6 @@ DESONN <- R6Class(
           ensemble_name_model_name <- paste("Ensemble:", ensemble_name, "Model:", model_name)
           model_iter_num <- i
           
-          
           all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
           
           all_model_iter_num[[i]] <- model_iter_num
@@ -3185,7 +3191,6 @@ DESONN <- R6Class(
             
             ###########code from old code###########
             print(all_ensemble_name_model_name)
-            all_ensemble_name_model_name <- do.call(c, all_ensemble_name_model_name)
 
             performance_relevance_plots <- self$update_performance_and_relevance(
               Rdata, labels, lr, ensemble_number,
@@ -3200,7 +3205,8 @@ DESONN <- R6Class(
               all_predicted_outputAndTime = all_predicted_outputAndTime,
               all_weights = all_weights,
               all_biases = all_biases,
-              all_activation_functions = all_activation_functions
+              all_activation_functions = all_activation_functions,
+              all_ensemble_name_model_name = all_ensemble_name_model_name
             )
             
 
@@ -3228,7 +3234,7 @@ DESONN <- R6Class(
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions) {
+    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, all_ensemble_name_model_name) {
 
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -3243,19 +3249,26 @@ DESONN <- R6Class(
         for (i in 1:length(self$ensemble)) {
           
 
+          # Skip uninitialized models safely during first ensemble build
+          if (ensemble_number == 1) {
+            if (is.null(predicted_output_list[[i]]) || is.null(all_predicted_outputAndTime[[i]])) {
+              cat("⛔ Skipping model", i, "in ensemble", ensemble_number, "due to NULLs\n")
+              next
+            }
+          }
+
           
           single_predicted_outputAndTime <- all_predicted_outputAndTime[[i]]  # metadata
           single_predicted_output <- predicted_output_list[[i]]
-          single_ensemble_name_model_name <- all_ensemble_name_model_name[[i]]
-          
+       
           if (learnOnlyTrainingRun == FALSE) {
             
             if (hyperparameter_grid_setup) {
               cat("___________________________________________________________________________\n")
-              cat("______________________________DESONN_", ensemble_number , "_SONN_", i, "______________________________\n", sep = "")
+              cat("______________________________DESONN_", ensemble_number , "_SONN_", model_iter_num[[i]], "______________________________\n", sep = "")
             } else {
               cat("___________________________________________________________________________\n")
-              cat("______________________________DESONN_", ensemble_number, "_SONN_", i, "______________________________\n", sep = "")
+              cat("______________________________DESONN_", ensemble_number, "_SONN_", model_iter_num[[i]], "______________________________\n", sep = "")
             }
             
             single_prediction_time <- prediction_time_list[[i]]
@@ -3354,14 +3367,14 @@ DESONN <- R6Class(
           cat("🔍 DEBUG: Preparing to store metadata\n")
           cat("Ensemble number: ", ensemble_number, "\n")
           cat("Model iteration: ", i, "\n")
-          cat("Run ID: ", single_ensemble_name_model_name, "\n")
+          cat("Run ID: ", model_iter_num[[i]], "\n") #single_ensemble_name_model_name
           cat("Predicted output shape:\n"); print(dim(single_predicted_output))
           cat("Checking self$ensemble[[", i, "]]\n")
           print(str(self$ensemble[[i]]))
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
+          self$store_metadata(run_id = model_iter_num[[i]], ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
           
         }
       }else if(never_ran_flag == FALSE){

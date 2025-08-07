@@ -81,7 +81,7 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
-num_epochs <- 100
+num_epochs <- 3
 custom_scale <- .05
 threshold <- .98
 # ML_NN <- TRUE
@@ -106,7 +106,7 @@ dropout_rates_learn <- dropout_rates
 
 num_layers <- length(hidden_sizes) + 1
 output_size <- 1  # For binary classification
-num_networks <- 1  # Number of trees in the Random Forest
+num_networks <- 2
 threshold_function <- tune_threshold_accuracy
 # threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
 
@@ -339,7 +339,7 @@ target_metric_name_worst <- 'MSE' #<<-
 metric_name <- 'MSE'
 #########################################################################################################################
 
-nruns <- 5
+
 verbose <- TRUE
 hyperparameter_grid_setup <- TRUE
 reg_type = "L2" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
@@ -350,7 +350,6 @@ loading_ensemble_1_run_ids <- FALSE
 #########################################################################################################################
 never_ran_flag <- TRUE
 
-results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
 # if(hyperparameter_grid_setup){
 #     loading_ensemble_1_run_ids <- TRUE #change back to false
 # }else if(!hyperparameter_grid_setup){
@@ -372,57 +371,39 @@ Run1.2 <- FALSE
 # === Step 1: Hyperparameter setup ===
 hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
 results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
-j <- 1
-ensembles <- list(main_ensemble = list(), temp_ensemble = list())
+firstRun <- TRUE
 
+model <- 1
+ensembles <- list(
+  main_ensemble = vector("list", num_networks),
+  temp_ensemble = list()
+)
 
-if (hyperparameter_grid_setup) {
-  # Define grid of learning rates and regularization values
-  lr_vals <- c(0.3)
-  lambda_vals <- c(0.000028, 0.000011)
-  hyper_grid <- expand.grid(lr = lr_vals, lambda = lambda_vals)
+if (firstRun) {
+  cat("First run: initializing main_ensemble\n")
   
-  # Loop through all combinations
-  for (j in 1:nrow(hyper_grid)) {
-    lr <- hyper_grid$lr[j]
-    lambda <- hyper_grid$lambda[j]
+  for (model in 1:num_networks) {
+    model <- DESONN$new(
+      num_networks = num_networks,
+      input_size = input_size,
+      hidden_sizes = hidden_sizes,
+      output_size = output_size,
+      N = N,
+      lambda = lambda,
+      ensemble_number = 1,
+      ensembles = ensembles,
+      ML_NN = ML_NN,
+      method = init_method,
+      custom_scale = custom_scale
+    )
     
-    # === Initialize DESONN model ===
-    if (ML_NN) {
-      DESONN_model <- DESONN$new(
-        num_networks = num_networks,
-        input_size = input_size,
-        hidden_sizes = hidden_sizes,
-        output_size = output_size,
-        N = N,
-        lambda = lambda,
-        ensemble_number = j,
-        ensembles = ensembles,
-        ML_NN = ML_NN,
-        method = init_method,
-        custom_scale = custom_scale
-      )
-    } else {
-      DESONN_model <- DESONN$new(
-        num_networks = num_networks,
-        input_size = input_size,
-        output_size = output_size,
-        N = N,
-        lambda = lambda,
-        ensemble_number = j,
-        ensembles = ensembles,
-        ML_NN = ML_NN,
-        method = init_method,
-        custom_scale = custom_scale
-      )
-    }
+    ensembles$main_ensemble[[1]] <- model
     
-    # === Train the model ===
-    run_result <- DESONN_model$train(
+    run_result <- model$train(
       Rdata = X,
       labels = y,
       lr = lr,
-      ensemble_number = j,
+      ensemble_number = 1,
       num_epochs = num_epochs,
       threshold = threshold,
       reg_type = reg_type,
@@ -451,92 +432,204 @@ if (hyperparameter_grid_setup) {
       verbose = verbose
     )
     
-    # === Save result to results table ===
     results <- rbind(results, data.frame(
       lr = lr,
       lambda = lambda,
       accuracy = run_result$accuracy
     ))
     
-    cat("Finished grid run", j, "of", nrow(hyper_grid), "-> Accuracy:", run_result$accuracy, "\n")
+    cat("Initialized model", i, "-> Accuracy:", run_result$accuracy, "\n")
   }
   
-} else {
-  # === Manual run with provided lr1 and lambda1 ===
-  lr <- lr
-  lambda <- lambda
-  
-  if (ML_NN) {
-    DESONN_model <- DESONN$new(
-      num_networks = num_networks,
-      input_size = input_size,
-      hidden_sizes = hidden_sizes,
-      output_size = output_size,
-      N = N,
-      lambda = lambda,
-      ensemble_number = j,
-      ensembles = ensembles,
-      ML_NN = ML_NN,
-      method = init_method,
-      custom_scale = custom_scale
-    )
-  } else {
-    DESONN_model <- DESONN$new(
-      num_networks = num_networks,
-      input_size = input_size,
-      output_size = output_size,
-      N = N,
-      lambda = lambda,
-      ensemble_number = j,
-      ensembles = ensembles,
-      ML_NN = ML_NN,
-      method = init_method,
-      custom_scale = custom_scale
-    )
-  }
-  
-  run_result <- DESONN_model$train(
-    Rdata = X,
-    labels = y,
-    lr = lr,
-    ensemble_number = 1,
-    num_epochs = num_epochs,
-    threshold = threshold,
-    reg_type = reg_type,
-    numeric_columns = numeric_columns,
-    activation_functions_learn = activation_functions_learn,
-    activation_functions = activation_functions,
-    dropout_rates_learn = dropout_rates_learn,
-    dropout_rates = dropout_rates,
-    optimizer = optimizer,
-    beta1 = beta1,
-    beta2 = beta2,
-    epsilon = epsilon,
-    lookahead_step = lookahead_step,
-    batch_normalize_data = batch_normalize_data,
-    gamma_bn = gamma_bn,
-    beta_bn = beta_bn,
-    epsilon_bn = epsilon_bn,
-    momentum_bn = momentum_bn,
-    is_training_bn = is_training_bn,
-    shuffle_bn = shuffle_bn,
-    loss_type = loss_type,
-    sample_weights = sample_weights,
-    X_validation = X_validation,
-    y_validation = y_validation,
-    threshold_function = threshold_function,
-    verbose = verbose
-  )
-  
-  # Save manual run result
-  results <- rbind(results, data.frame(
-    lr = lr,
-    lambda = lambda,
-    accuracy = run_result$accuracy
-  ))
-  
-  cat("Manual run -> Accuracy:", run_result$accuracy, "\n")
+  firstRun <- FALSE
 }
+
+# === After first ensemble is built, enter candidate loop ===
+for (num_ensembles in 1:num_ensembles) {  # you can define this or use while loop
+  cat("Future run: prune and add logic for candidate model", j, "\n")
+  
+  # === PRUNE WORST MODEL ===
+  pruned_result <- prune_network_from_ensemble(ensembles, metric_name)
+  
+  if (!is.null(pruned_result$removed_network)) {
+    # === ADD NEW MODEL IN PLACE OF REMOVED ONE ===
+    main_ensemble_copy_return <- add_network_to_ensemble(
+      updated_ensemble = pruned_result$updated_ensemble,
+      metric_name,
+      removed_network = pruned_result$removed_network,
+      ensemble_number = num_ensembles
+    )
+    
+    ensembles$main_ensemble <- main_ensemble_copy_return
+    cat("✅ Replaced a model in main_ensemble\n")
+    
+  } else {
+    cat("❌ No model removed. No new model added.\n")
+  }
+}
+
+# if (hyperparameter_grid_setup) {
+#   # Define grid of learning rates and regularization values
+#   lr_vals <- c(0.3)
+#   lambda_vals <- c(0.000028, 0.000011)
+#   hyper_grid <- expand.grid(lr = lr_vals, lambda = lambda_vals)
+#   
+#   # Loop through all combinations
+#   for (j in 1:nrow(hyper_grid)) {
+#     lr <- hyper_grid$lr[j]
+#     lambda <- hyper_grid$lambda[j]
+#     
+#     # === Initialize DESONN model ===
+#     if (ML_NN) {
+#       DESONN_model <- DESONN$new(
+#         num_networks = num_networks,
+#         input_size = input_size,
+#         hidden_sizes = hidden_sizes,
+#         output_size = output_size,
+#         N = N,
+#         lambda = lambda,
+#         ensemble_number = j,
+#         ensembles = ensembles,
+#         ML_NN = ML_NN,
+#         method = init_method,
+#         custom_scale = custom_scale
+#       )
+#     } else {
+#       DESONN_model <- DESONN$new(
+#         num_networks = num_networks,
+#         input_size = input_size,
+#         output_size = output_size,
+#         N = N,
+#         lambda = lambda,
+#         ensemble_number = j,
+#         ensembles = ensembles,
+#         ML_NN = ML_NN,
+#         method = init_method,
+#         custom_scale = custom_scale
+#       )
+#     }
+#     
+#     # === Train the model ===
+#     run_result <- DESONN_model$train(
+#       Rdata = X,
+#       labels = y,
+#       lr = lr,
+#       ensemble_number = j,
+#       num_epochs = num_epochs,
+#       threshold = threshold,
+#       reg_type = reg_type,
+#       numeric_columns = numeric_columns,
+#       activation_functions_learn = activation_functions_learn,
+#       activation_functions = activation_functions,
+#       dropout_rates_learn = dropout_rates_learn,
+#       dropout_rates = dropout_rates,
+#       optimizer = optimizer,
+#       beta1 = beta1,
+#       beta2 = beta2,
+#       epsilon = epsilon,
+#       lookahead_step = lookahead_step,
+#       batch_normalize_data = batch_normalize_data,
+#       gamma_bn = gamma_bn,
+#       beta_bn = beta_bn,
+#       epsilon_bn = epsilon_bn,
+#       momentum_bn = momentum_bn,
+#       is_training_bn = is_training_bn,
+#       shuffle_bn = shuffle_bn,
+#       loss_type = loss_type,
+#       sample_weights = sample_weights,
+#       X_validation = X_validation,
+#       y_validation = y_validation,
+#       threshold_function = threshold_function,
+#       verbose = verbose
+#     )
+#     
+#     # === Save result to results table ===
+#     results <- rbind(results, data.frame(
+#       lr = lr,
+#       lambda = lambda,
+#       accuracy = run_result$accuracy
+#     ))
+#     
+#     cat("Finished grid run", j, "of", nrow(hyper_grid), "-> Accuracy:", run_result$accuracy, "\n")
+#   }
+#   
+# } else {
+#   # === Manual run with provided lr1 and lambda1 ===
+#   lr <- lr
+#   lambda <- lambda
+#   
+#   if (ML_NN) {
+#     DESONN_model <- DESONN$new(
+#       num_networks = num_networks,
+#       input_size = input_size,
+#       hidden_sizes = hidden_sizes,
+#       output_size = output_size,
+#       N = N,
+#       lambda = lambda,
+#       ensemble_number = j,
+#       ensembles = ensembles,
+#       ML_NN = ML_NN,
+#       method = init_method,
+#       custom_scale = custom_scale
+#     )
+#   } else {
+#     DESONN_model <- DESONN$new(
+#       num_networks = num_networks,
+#       input_size = input_size,
+#       output_size = output_size,
+#       N = N,
+#       lambda = lambda,
+#       ensemble_number = j,
+#       ensembles = ensembles,
+#       ML_NN = ML_NN,
+#       method = init_method,
+#       custom_scale = custom_scale
+#     )
+#   }
+#   
+#   run_result <- DESONN_model$train(
+#     Rdata = X,
+#     labels = y,
+#     lr = lr,
+#     ensemble_number = 1,
+#     num_epochs = num_epochs,
+#     threshold = threshold,
+#     reg_type = reg_type,
+#     numeric_columns = numeric_columns,
+#     activation_functions_learn = activation_functions_learn,
+#     activation_functions = activation_functions,
+#     dropout_rates_learn = dropout_rates_learn,
+#     dropout_rates = dropout_rates,
+#     optimizer = optimizer,
+#     beta1 = beta1,
+#     beta2 = beta2,
+#     epsilon = epsilon,
+#     lookahead_step = lookahead_step,
+#     batch_normalize_data = batch_normalize_data,
+#     gamma_bn = gamma_bn,
+#     beta_bn = beta_bn,
+#     epsilon_bn = epsilon_bn,
+#     momentum_bn = momentum_bn,
+#     is_training_bn = is_training_bn,
+#     shuffle_bn = shuffle_bn,
+#     loss_type = loss_type,
+#     sample_weights = sample_weights,
+#     X_validation = X_validation,
+#     y_validation = y_validation,
+#     threshold_function = threshold_function,
+#     verbose = verbose
+#   )
+#   
+#   # Save manual run result
+#   results <- rbind(results, data.frame(
+#     lr = lr,
+#     lambda = lambda,
+#     accuracy = run_result$accuracy
+#   ))
+#   
+#   cat("Manual run -> Accuracy:", run_result$accuracy, "\n")
+# }
+# 
 
 
 # === Step 4: Save all results ===
