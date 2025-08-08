@@ -379,94 +379,161 @@ ensembles <- list(
   temp_ensemble = list()
 )
 
-if (firstRun) {
+## ===== First fill MAIN, then compare TEMP vs MAIN via prune/add (metrics live inside those funcs) =====
+## Assumes needed vars exist (num_networks, num_ensembles, inputs, hyperparams, etc.)
+
+# Ensure scaffolding
+if (!exists("ensembles") || is.null(ensembles)) {
+  ensembles <- list(main_ensemble = vector("list", num_networks),
+                    temp_ensemble = list())
+}
+if (!exists("results")) {
+  results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric())
+}
+
+## -------------------------
+## Phase 1: Build main_ensemble
+## -------------------------
+if (isTRUE(firstRun)) {
   cat("First run: initializing main_ensemble\n")
   
-  for (model in 1:num_networks) {
-    model <- DESONN$new(
-      num_networks = num_networks,
-      input_size = input_size,
-      hidden_sizes = hidden_sizes,
-      output_size = output_size,
-      N = N,
-      lambda = lambda,
+    main_model <- DESONN$new(
+      num_networks    = num_networks,
+      input_size      = input_size,
+      hidden_sizes    = hidden_sizes,
+      output_size     = output_size,
+      N               = N,
+      lambda          = lambda,
       ensemble_number = 1,
-      ensembles = ensembles,
-      ML_NN = ML_NN,
-      method = init_method,
-      custom_scale = custom_scale
+      ensembles       = ensembles,
+      ML_NN           = ML_NN,
+      method          = init_method,
+      custom_scale    = custom_scale
     )
     
-    ensembles$main_ensemble[[1]] <- model
+    ensembles$main_ensemble[[m]] <- main_model
     
-    run_result <- model$train(
-      Rdata = X,
-      labels = y,
-      lr = lr,
-      ensemble_number = 1,
-      num_epochs = num_epochs,
-      threshold = threshold,
-      reg_type = reg_type,
-      numeric_columns = numeric_columns,
+    res_main <- main_model$train(
+      Rdata                      = X,
+      labels                     = y,
+      lr                         = lr,
+      ensemble_number            = 1,
+      num_epochs                 = num_epochs,
+      threshold                  = threshold,
+      reg_type                   = reg_type,
+      numeric_columns            = numeric_columns,
       activation_functions_learn = activation_functions_learn,
-      activation_functions = activation_functions,
-      dropout_rates_learn = dropout_rates_learn,
-      dropout_rates = dropout_rates,
-      optimizer = optimizer,
-      beta1 = beta1,
-      beta2 = beta2,
-      epsilon = epsilon,
-      lookahead_step = lookahead_step,
-      batch_normalize_data = batch_normalize_data,
-      gamma_bn = gamma_bn,
-      beta_bn = beta_bn,
-      epsilon_bn = epsilon_bn,
-      momentum_bn = momentum_bn,
-      is_training_bn = is_training_bn,
-      shuffle_bn = shuffle_bn,
-      loss_type = loss_type,
-      sample_weights = sample_weights,
-      X_validation = X_validation,
-      y_validation = y_validation,
-      threshold_function = threshold_function,
-      verbose = verbose
+      activation_functions       = activation_functions,
+      dropout_rates_learn        = dropout_rates_learn,
+      dropout_rates              = dropout_rates,
+      optimizer                  = optimizer,
+      beta1                      = beta1,
+      beta2                      = beta2,
+      epsilon                    = epsilon,
+      lookahead_step             = lookahead_step,
+      batch_normalize_data       = batch_normalize_data,
+      gamma_bn                   = gamma_bn,
+      beta_bn                    = beta_bn,
+      epsilon_bn                 = epsilon_bn,
+      momentum_bn                = momentum_bn,
+      is_training_bn             = is_training_bn,
+      shuffle_bn                 = shuffle_bn,
+      loss_type                  = loss_type,
+      sample_weights             = sample_weights,
+      X_validation               = X_validation,
+      y_validation               = y_validation,
+      threshold_function         = threshold_function,
+      verbose                    = verbose
     )
     
-    results <- rbind(results, data.frame(
-      lr = lr,
-      lambda = lambda,
-      accuracy = run_result$accuracy
-    ))
-    
-    cat("Initialized model", i, "-> Accuracy:", run_result$accuracy, "\n")
+    results <- rbind(results, data.frame(lr = lr, lambda = lambda, accuracy = res_main$accuracy))
+    cat("Initialized MAIN model", m, "→ Acc:", res_main$accuracy, "\n")
   }
   
   firstRun <- FALSE
-}
 
-# === After first ensemble is built, enter candidate loop ===
-for (num_ensembles in 1:num_ensembles) {  # you can define this or use while loop
-  cat("Future run: prune and add logic for candidate model", j, "\n")
+
+## -------------------------------------------------
+## Phase 2: j iterations — build TEMP, then prune/add
+## -------------------------------------------------
+for (j in 1:num_ensembles) {
+  cat("\n— Iteration", j, ": build TEMP and run prune/add —\n")
   
-  # === PRUNE WORST MODEL ===
+  # Fresh temp_ensemble
+  ensembles$temp_ensemble <- vector("list", num_networks)
+  
+  for (m in 1:num_networks) {
+    temp_model <- DESONN$new(
+      num_networks    = num_networks,
+      input_size      = input_size,
+      hidden_sizes    = hidden_sizes,
+      output_size     = output_size,
+      N               = N,
+      lambda          = lambda,
+      ensemble_number = j + 1,   # distinguish from main pass
+      ensembles       = ensembles,
+      ML_NN           = ML_NN,
+      method          = init_method,
+      custom_scale    = custom_scale
+    )
+    
+    ensembles$temp_ensemble[[m]] <- temp_model
+    
+    invisible(temp_model$train(
+      Rdata                      = X,
+      labels                     = y,
+      lr                         = lr,
+      ensemble_number            = j + 1,
+      num_epochs                 = num_epochs,
+      threshold                  = threshold,
+      reg_type                   = reg_type,
+      numeric_columns            = numeric_columns,
+      activation_functions_learn = activation_functions_learn,
+      activation_functions       = activation_functions,
+      dropout_rates_learn        = dropout_rates_learn,
+      dropout_rates              = dropout_rates,
+      optimizer                  = optimizer,
+      beta1                      = beta1,
+      beta2                      = beta2,
+      epsilon                    = epsilon,
+      lookahead_step             = lookahead_step,
+      batch_normalize_data       = batch_normalize_data,
+      gamma_bn                   = gamma_bn,
+      beta_bn                    = beta_bn,
+      epsilon_bn                 = epsilon_bn,
+      momentum_bn                = momentum_bn,
+      is_training_bn             = is_training_bn,
+      shuffle_bn                 = shuffle_bn,
+      loss_type                  = loss_type,
+      sample_weights             = sample_weights,
+      X_validation               = X_validation,
+      y_validation               = y_validation,
+      threshold_function         = threshold_function,
+      verbose                    = verbose
+    ))
+  }
+  
+  # Metrics + replacement are handled INSIDE these functions:
   pruned_result <- prune_network_from_ensemble(ensembles, metric_name)
   
   if (!is.null(pruned_result$removed_network)) {
-    # === ADD NEW MODEL IN PLACE OF REMOVED ONE ===
     main_ensemble_copy_return <- add_network_to_ensemble(
       updated_ensemble = pruned_result$updated_ensemble,
-      metric_name,
-      removed_network = pruned_result$removed_network,
-      ensemble_number = num_ensembles
+      metric_name      = metric_name,
+      removed_network  = pruned_result$removed_network,
+      ensemble_number  = j
     )
     
     ensembles$main_ensemble <- main_ensemble_copy_return
-    cat("✅ Replaced a model in main_ensemble\n")
-    
+    cat("✅ main_ensemble updated via prune/add\n")
   } else {
-    cat("❌ No model removed. No new model added.\n")
+    cat("❌ No model removed — no add performed\n")
   }
+  
+  # optional: clear temp
+  ensembles$temp_ensemble <- list()
 }
+
 
 # if (hyperparameter_grid_setup) {
 #   # Define grid of learning rates and regularization values

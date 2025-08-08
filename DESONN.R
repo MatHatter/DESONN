@@ -2872,6 +2872,10 @@ DESONN <- R6Class(
       results_list_learnOnly <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
       results_list <- list() #vector("list", length(self$ensemble) * 2) #* nrow(hyperparameter_grid))
       self$numeric_columns <- NULL
+      
+      self$ensembles <- ensembles
+      
+      
       # if(!hyperparameter_grid_setup){
         # ensembles$main_ensemble <- list(
           # run_results_1_1
@@ -3092,11 +3096,12 @@ DESONN <- R6Class(
           model_name <- attr(self$ensemble[[i]], "model_name")
           
           ensemble_name_model_name <- paste("Ensemble:", ensemble_name, "Model:", model_name)
+
           model_iter_num <- i
+
           
-          all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
+
           
-          all_model_iter_num[[i]] <- model_iter_num
           self$ensemble[[i]]$self_organize(Rdata, labels, lr)
           if (learnOnlyTrainingRun == FALSE) {
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
@@ -3111,6 +3116,7 @@ DESONN <- R6Class(
             
             # -- Start: Store core model info --
             all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
+
             all_model_iter_num[[i]] <- model_iter_num
             
             all_predicted_outputAndTime[[i]] <- list(
@@ -3187,27 +3193,66 @@ DESONN <- R6Class(
               )
             }
             
-            
+          }
+        }
             
             ###########code from old code###########
             print(all_ensemble_name_model_name)
-
-            performance_relevance_plots <- self$update_performance_and_relevance(
-              Rdata, labels, lr, ensemble_number,
-              model_iter_num = all_model_iter_num,
-              num_epochs = num_epochs,
-              threshold = threshold,
-              learn_results = learn_results,
-              predicted_output_list = all_predicted_outputs,
-              learn_time = NULL,
-              prediction_time_list = all_prediction_times,
-              run_id = all_ensemble_name_model_name,
-              all_predicted_outputAndTime = all_predicted_outputAndTime,
-              all_weights = all_weights,
-              all_biases = all_biases,
-              all_activation_functions = all_activation_functions,
-              all_ensemble_name_model_name = all_ensemble_name_model_name
-            )
+                
+        
+        for (i in seq_along(all_predicted_outputAndTime)) {
+          cat("\n── Model", i, "──\n")
+          model_result <- all_predicted_outputAndTime[[i]]
+          
+          if (is.null(model_result)) {
+            cat("Empty slot.\n")
+            next
+          }
+          
+          cat("Prediction length:", length(model_result$predicted_output), "\n")
+          cat("Prediction time:", model_result$prediction_time, "\n")
+          cat("Training time:", model_result$training_time, "\n")
+          cat("Optimal epoch:", model_result$optimal_epoch, "\n")
+          cat("Loss at optimal:", model_result$losses_at_optimal_epoch, "\n")
+          
+          cat("Weights record dims (layer 1): ")
+          if (!is.null(model_result$weights_record[[1]])) {
+            print(dim(model_result$weights_record[[1]]))
+          } else {
+            cat("NULL\n")
+          }
+          
+          cat("Biases record dims (layer 1): ")
+          if (!is.null(model_result$biases_record[[1]])) {
+            print(length(model_result$biases_record[[1]]))
+          } else {
+            cat("NULL\n")
+          }
+          
+          Sys.sleep(0.25)  # pause slightly for readability
+        }
+        
+        # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
+        
+        performance_relevance_plots <- self$update_performance_and_relevance(
+          Rdata                        = Rdata,
+          labels                       = labels,
+          lr                           = lr,
+          ensemble_number              = ensemble_number,
+          model_iter_num               = model_iter_num,
+          num_epochs                   = num_epochs,
+          threshold                    = threshold,
+          learn_results                = learn_results,
+          predicted_output_list        = all_predicted_outputs,
+          learn_time                   = NULL,
+          prediction_time_list         = all_prediction_times,
+          run_id                       = all_ensemble_name_model_name,
+          all_predicted_outputAndTime  = all_predicted_outputAndTime,
+          all_weights                  = all_weights,
+          all_biases                   = all_biases,
+          all_activation_functions     = all_activation_functions
+        )
+        
             
 
             if (showMeanBoxPlots == TRUE) {
@@ -3224,9 +3269,9 @@ DESONN <- R6Class(
             predicted_outputAndTime$loss_status <- 'exceeds_10000'
             
             
+      
             
-            
-          }}       
+      
 
       }
       
@@ -3234,8 +3279,8 @@ DESONN <- R6Class(
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, all_ensemble_name_model_name) {
-
+    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions) {
+      
       
       # Initialize lists to store performance and relevance metrics for each SONN
       performance_list <- list()
@@ -3248,27 +3293,20 @@ DESONN <- R6Class(
         
         for (i in 1:length(self$ensemble)) {
           
-
-          # Skip uninitialized models safely during first ensemble build
-          if (ensemble_number == 1) {
-            if (is.null(predicted_output_list[[i]]) || is.null(all_predicted_outputAndTime[[i]])) {
-              cat("⛔ Skipping model", i, "in ensemble", ensemble_number, "due to NULLs\n")
-              next
-            }
-          }
-
+          
           
           single_predicted_outputAndTime <- all_predicted_outputAndTime[[i]]  # metadata
           single_predicted_output <- predicted_output_list[[i]]
-       
+          single_ensemble_name_model_name <- run_id[[i]]
+          
           if (learnOnlyTrainingRun == FALSE) {
             
             if (hyperparameter_grid_setup) {
               cat("___________________________________________________________________________\n")
-              cat("______________________________DESONN_", ensemble_number , "_SONN_", model_iter_num[[i]], "______________________________\n", sep = "")
+              cat("______________________________DESONN_", ensemble_number , "_SONN_", i, "______________________________\n", sep = "")
             } else {
               cat("___________________________________________________________________________\n")
-              cat("______________________________DESONN_", ensemble_number, "_SONN_", model_iter_num[[i]], "______________________________\n", sep = "")
+              cat("______________________________DESONN_", ensemble_number, "_SONN_", i, "______________________________\n", sep = "")
             }
             
             single_prediction_time <- prediction_time_list[[i]]
@@ -3293,7 +3331,7 @@ DESONN <- R6Class(
             )
             
             
-           
+            
             relevance_list[[i]] <- calculate_relevance(
               self$ensemble[[i]],
               Rdata, labels, i,
@@ -3360,21 +3398,21 @@ DESONN <- R6Class(
             relevance_metric <- relevance_list[[i]]$metrics
             
             self$store_metadata_precursor(run_id = single_ensemble_name_model_name, model_iter_num = i, num_epochs, threshold, all_weights, all_biases, single_predicted_output_learn, single_learn_time, actual_values = y)
-
+            
           }
           
           cat("\n====================================\n")
           cat("🔍 DEBUG: Preparing to store metadata\n")
           cat("Ensemble number: ", ensemble_number, "\n")
           cat("Model iteration: ", i, "\n")
-          cat("Run ID: ", model_iter_num[[i]], "\n") #single_ensemble_name_model_name
+          cat("Run ID: ", single_ensemble_name_model_name, "\n")
           cat("Predicted output shape:\n"); print(dim(single_predicted_output))
           cat("Checking self$ensemble[[", i, "]]\n")
           print(str(self$ensemble[[i]]))
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = model_iter_num[[i]], ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
+          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
           
         }
       }else if(never_ran_flag == FALSE){
@@ -3607,8 +3645,8 @@ DESONN <- R6Class(
       # Return the lists of plots
       return(list(performance_high_mean_plots = performance_high_mean_plots, performance_low_mean_plots = performance_low_mean_plots, relevance_high_mean_plots = relevance_high_mean_plots, relevance_low_mean_plots = relevance_low_mean_plots))
       
-    },
     
+    },
     # Function to identify outliers
     identify_outliers = function(y) {
       o <- boxplot.stats(y)$out
