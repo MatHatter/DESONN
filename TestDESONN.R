@@ -106,7 +106,7 @@ dropout_rates_learn <- dropout_rates
 
 num_layers <- length(hidden_sizes) + 1
 output_size <- 1  # For binary classification
-num_networks <- 2
+
 threshold_function <- tune_threshold_accuracy
 # threshold <- 0.98  # Classification threshold (not directly used in Random Forest)
 
@@ -331,12 +331,11 @@ binary_flag <- is_binary(y)
 #██████  ██████  ██   ████    ██    ██   ██  ██████  ███████     ██      ██   ██ ██   ████ ███████ ███████ $$$$$$$$$$$$$$
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 showMeanBoxPlots <- FALSE
+viewTables <- FALSE
 Losses_At_Optimal_Epoch_filenumber <- 3
 writeTofiles <- FALSE
 #########################################################################################################################
-target_metric_name_best <- 'MSE' #<<-
-target_metric_name_worst <- 'MSE' #<<-
-metric_name <- 'MSE'
+
 #########################################################################################################################
 
 
@@ -362,7 +361,7 @@ never_ran_flag <- TRUE
 plot_robustness <- FALSE
 predict_models <- FALSE
 use_loaded_weights <- FALSE
-saveToDisk <- FALSE
+saveToDisk <- TRUE
 Run1 <- TRUE
 Run2 <- FALSE
 Run3 <- FALSE
@@ -370,169 +369,560 @@ Run1.1 <- FALSE
 Run1.2 <- FALSE
 # === Step 1: Hyperparameter setup ===
 hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
-results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
-firstRun <- TRUE
+## ====== REQUIRED PACKAGES (only if not already loaded) ======
+suppressWarnings({
+  if (!requireNamespace("dplyr", quietly = TRUE))   stop("Please install.packages('dplyr')")
+  if (!requireNamespace("tidyr", quietly = TRUE))   stop("Please install.packages('tidyr')")
+  if (!requireNamespace("purrr", quietly = TRUE))   stop("Please install.packages('purrr')")
+})
+library(dplyr)
+library(tidyr)
+library(purrr)
 
-model <- 1
-ensembles <- list(
-  main_ensemble = vector("list", num_networks),
-  temp_ensemble = list()
-)
+## ====== GLOBALS ======
+results   <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
+firstRun  <- TRUE
+num_networks <- 2
+j <- 1
+ensembles <- list(main_ensemble = vector("list"), temp_ensemble = vector("list"))
 
-## ===== First fill MAIN, then compare TEMP vs MAIN via prune/add (metrics live inside those funcs) =====
-## Assumes needed vars exist (num_networks, num_ensembles, inputs, hyperparams, etc.)
+metric_name <- "MSE"
+viewTables  <- FALSE
 
-# Ensure scaffolding
-if (!exists("ensembles") || is.null(ensembles)) {
-  ensembles <- list(main_ensemble = vector("list", num_networks),
-                    temp_ensemble = list())
+## ====== HELPERS ======
+`%||%` <- function(a,b) if (is.null(a) || length(a)==0) b else a
+is_real_serial <- function(x) is.character(x) && length(x) == 1 && !is.na(x) && nzchar(x)
+.metric_minimize <- function(m) grepl("mse|mae|rmse|error|loss|quantization_error|topographic_error", tolower(m))
+
+main_meta_var  <- function(i) sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(i))
+temp_meta_var  <- function(e,i) sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(e), as.integer(i))
+
+.resolve_metric_from_pm <- function(pm, metric_name) {
+  if (is.null(pm)) return(NA_real_)
+  if (is.list(pm) || is.environment(pm)) {
+    val <- pm[[metric_name]]; if (!is.null(val)) return(as.numeric(val)[1])
+    nm <- names(pm)
+    if (!is.null(nm)) {
+      hit <- which(tolower(nm) == tolower(metric_name))
+      if (length(hit)) return(as.numeric(pm[[ nm[hit[1]] ]])[1])
+    }
+  }
+  if (is.atomic(pm) && !is.null(names(pm))) {
+    nm <- names(pm)
+    if (metric_name %in% nm) return(as.numeric(pm[[metric_name]])[1])
+    hit <- which(tolower(nm) == tolower(metric_name))
+    if (length(hit)) return(as.numeric(pm[[ hit[1] ]])[1])
+  }
+  if (is.data.frame(pm)) {
+    if (metric_name %in% names(pm)) return(as.numeric(pm[[metric_name]][1]))
+    hit <- which(tolower(names(pm)) == tolower(metric_name))
+    if (length(hit)) return(as.numeric(pm[[ hit[1] ]][1]))
+    cn <- tolower(names(pm))
+    if (all(c("metric","value") %in% cn)) {
+      midx <- which(cn == "metric")[1]; vidx <- which(cn == "value")[1]
+      rows <- which(tolower(pm[[midx]]) == tolower(metric_name))
+      if (length(rows)) return(as.numeric(pm[[vidx]][ rows[1] ]))
+    }
+  }
+  NA_real_
 }
-if (!exists("results")) {
-  results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric())
+
+serial_to_meta_name <- function(serial) {
+  if (!is_real_serial(serial)) return(NA_character_)
+  p <- strsplit(serial, "\\.")[[1]]
+  if (length(p) < 3) return(NA_character_)
+  e <- suppressWarnings(as.integer(p[1])); i <- suppressWarnings(as.integer(p[3]))
+  if (is.na(e) || is.na(i)) return(NA_character_)
+  if (e == 1) sprintf("Ensemble_Main_%d_model_%d_metadata", e, i)
+  else        sprintf("Ensemble_Temp_%d_model_%d_metadata", e, i)
 }
 
-## -------------------------
-## Phase 1: Build main_ensemble
-## -------------------------
+get_metric_by_serial <- function(serial, metric_name) {
+  var <- serial_to_meta_name(serial)
+  if (nzchar(var) && exists(var, envir = .GlobalEnv)) {
+    md <- get(var, envir = .GlobalEnv)
+    return(.resolve_metric_from_pm(md$performance_metric, metric_name))
+  }
+  NA_real_
+}
+
+snapshot_main_serials_meta <- function() {
+  vars <- grep("^Ensemble_Main_1_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
+  if (!length(vars)) return(character())
+  ord <- as.integer(sub("^Ensemble_Main_1_model_(\\d+)_metadata$", "\\1", vars))
+  vars <- vars[order(ord)]
+  vapply(vars, function(v) {
+    md <- get(v, envir = .GlobalEnv)
+    s  <- md$model_serial_num
+    if (!is.null(s) && nzchar(as.character(s))) as.character(s) else NA_character_
+  }, character(1))
+}
+
+get_temp_serials_meta <- function(j) {
+  e <- j + 1
+  vars <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e), ls(.GlobalEnv), value = TRUE)
+  if (!length(vars)) return(character())
+  ord <- as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e), "\\1", vars))
+  vars <- vars[order(ord)]
+  vapply(vars, function(v) {
+    md <- get(v, envir = .GlobalEnv)
+    s  <- md$model_serial_num
+    if (!is.null(s) && nzchar(as.character(s))) as.character(s) else NA_character_
+  }, character(1))
+}
+
+.pp <- function(df, title = NULL) {
+  if (!is.null(title)) cat("\n", title, "\n", sep = "")
+  if (NROW(df)) print(df, row.names = TRUE) else cat("(none)\n")
+}
+.collect_vals <- function(serials, metric_name) {
+  if (!length(serials)) return(data.frame(serial = character(), value = numeric()))
+  data.frame(
+    serial = as.character(serials),
+    value  = vapply(serials, get_metric_by_serial, numeric(1), metric_name),
+    stringsAsFactors = FALSE
+  )
+}
+
+## ====== LOG TABLES ======
+if (is.null(ensembles$tables)) ensembles$tables <- list()
+
+# Movement log (row.names used; keep visually stable)
+if (is.null(ensembles$tables$movement_log)) {
+  ensembles$tables$movement_log <- data.frame(
+    iteration      = integer(),
+    phase          = character(),  # main_before | temp | removed | added | main_after
+    slot           = integer(),    # MAIN slot index for main_* phases, NA otherwise
+    role           = character(),  # main | temp | removed | added
+    serial         = character(),  # serial "E.0.I"
+    metric_name    = character(),
+    metric_value   = numeric(),
+    current_serial = character(),  # latest serial for this MAIN slot (from lineage)
+    message        = character(),
+    timestamp      = as.POSIXct(character()),
+    stringsAsFactors = FALSE
+  )
+  rownames(ensembles$tables$movement_log) <- character(0)
+}
+if (is.null(ensembles$tables$movement_log_path)) {
+  ensembles$tables$movement_log_path <- file.path(getwd(), sprintf("movement_log_%s.rds", format(Sys.time(), "%Y%m%d_%H%M%S")))
+}
+
+# Change log (diffs only)
+if (is.null(ensembles$tables$change_log)) {
+  ensembles$tables$change_log <- data.frame(
+    iteration    = integer(),
+    role         = character(),  # removed | added
+    serial       = character(),
+    metric_name  = character(),
+    metric_value = numeric(),
+    message      = character(),
+    timestamp    = as.POSIXct(character()),
+    stringsAsFactors = FALSE
+  )
+}
+if (is.null(ensembles$tables$change_log_path)) {
+  ensembles$tables$change_log_path <- file.path(getwd(), sprintf("change_log_%s.rds", format(Sys.time(), "%Y%m%d_%H%M%S")))
+}
+
+## ====== LINEAGE REGISTRY (per MAIN slot) ======
+# lineage[[i]] = c("1.0.i", "2.0.1", "3.0.2", ...)
+if (is.null(ensembles$tables$lineage)) ensembles$tables$lineage <- vector("list", length = 0)
+
+init_lineage_if_needed <- function(main_serials) {
+  n <- length(main_serials)
+  if (length(ensembles$tables$lineage) < n) {
+    length(ensembles$tables$lineage) <<- n
+  }
+  for (i in seq_len(n)) {
+    if (is.null(ensembles$tables$lineage[[i]]) || !length(ensembles$tables$lineage[[i]])) {
+      s <- main_serials[i]
+      if (is_real_serial(s)) ensembles$tables$lineage[[i]] <<- c(as.character(s))
+    }
+  }
+}
+lineage_append <- function(slot, new_serial) {
+  if (slot <= 0) return()
+  if (is.null(ensembles$tables$lineage[[slot]])) ensembles$tables$lineage[[slot]] <<- character(0)
+  ensembles$tables$lineage[[slot]] <<- c(ensembles$tables$lineage[[slot]], as.character(new_serial))
+}
+lineage_current <- function(slot) {
+  v <- ensembles$tables$lineage[[slot]]
+  if (!length(v)) return(NA_character_)
+  v[length(v)]
+}
+# Ensure movement_log has enough lineage_k columns for the maximum lineage depth
+ensure_lineage_columns <- function() {
+  max_depth <- 0L
+  for (v in ensembles$tables$lineage) max_depth <- max(max_depth, length(v))
+  for (k in seq_len(max_depth)) {
+    nm <- sprintf("lineage_%d", k)
+    if (!nm %in% names(ensembles$tables$movement_log)) {
+      # set column to correct length for current log
+      if (nrow(ensembles$tables$movement_log))
+        ensembles$tables$movement_log[[nm]] <- rep(NA_character_, nrow(ensembles$tables$movement_log))
+      else
+        ensembles$tables$movement_log[[nm]] <- character(0)
+    }
+  }
+}
+
+## ====== ALIGN & APPEND ======
+.align_rows_to_log <- function(rows) {
+  logdf  <- ensembles$tables$movement_log
+  target <- names(logdf)
+  nlog   <- nrow(logdf)
+  nrows  <- nrow(rows)
+  
+  # 1) Add missing columns into incoming rows, filling to nrows
+  add_missing_to_rows <- setdiff(target, names(rows))
+  if (length(add_missing_to_rows)) {
+    for (nm in add_missing_to_rows) {
+      if (nm %in% c("iteration","slot")) {
+        rows[[nm]] <- rep(NA_integer_, nrows)
+      } else if (nm %in% c("metric_value")) {
+        rows[[nm]] <- rep(NA_real_, nrows)
+      } else if (nm %in% c("timestamp")) {
+        rows[[nm]] <- as.POSIXct(rep(NA, nrows))
+      } else {
+        rows[[nm]] <- rep(NA_character_, nrows)
+      }
+    }
+  }
+  # 2) Add extra columns from rows into the LOG (filled with NA to nlog length)
+  extra_cols <- setdiff(names(rows), target)
+  if (length(extra_cols)) {
+    for (nm in extra_cols) {
+      col <- rows[[nm]]
+      if (is.integer(col)) {
+        ensembles$tables$movement_log[[nm]] <<- if (nlog) rep(NA_integer_, nlog) else integer(0)
+      } else if (is.numeric(col)) {
+        ensembles$tables$movement_log[[nm]] <<- if (nlog) rep(NA_real_, nlog) else numeric(0)
+      } else if (inherits(col, "POSIXct")) {
+        ensembles$tables$movement_log[[nm]] <<- if (nlog) as.POSIXct(rep(NA, nlog)) else as.POSIXct(character())
+      } else {
+        ensembles$tables$movement_log[[nm]] <<- if (nlog) rep(NA_character_, nlog) else character(0)
+      }
+    }
+    target <- names(ensembles$tables$movement_log)
+  }
+  # 3) Reorder and drop rownames (we set them later)
+  rows <- rows[, target, drop = FALSE]
+  rownames(rows) <- NULL
+  rows
+}
+
+append_movement_block_named <- function(rows, row_ids, fill_lineage_for_slots = NULL) {
+  if (!NROW(rows)) return(invisible())
+  
+  ensure_lineage_columns()
+  # Inject lineage columns into rows if missing
+  line_cols <- grep("^lineage_\\d+$", names(ensembles$tables$movement_log), value = TRUE)
+  for (nm in line_cols) if (!(nm %in% names(rows))) rows[[nm]] <- NA_character_
+  if (!("current_serial" %in% names(rows))) rows$current_serial <- NA_character_
+  
+  # Fill lineage for MAIN rows if requested
+  if (!is.null(fill_lineage_for_slots)) {
+    fs <- rep_len(fill_lineage_for_slots, nrow(rows))
+    for (idx in seq_len(nrow(rows))) {
+      slot <- fs[idx]
+      if (!is.na(slot) && slot > 0) {
+        rows$current_serial[idx] <- lineage_current(slot)
+        v <- ensembles$tables$lineage[[slot]] %||% character(0)
+        if (length(v)) {
+          for (k in seq_along(v)) {
+            nm <- sprintf("lineage_%d", k)
+            if (!(nm %in% names(rows))) rows[[nm]] <- NA_character_
+            rows[[nm]][idx] <- v[k]
+          }
+        }
+      }
+    }
+  }
+  rows <- .align_rows_to_log(rows)
+  # Set custom rownames (can be "" for change rows)
+  rn <- as.character(row_ids)
+  rn[rn == ""] <- paste0("ChangeRow_", seq_len(sum(rn == "")), "_", format(Sys.time(), "%H%M%S%OS3"))
+  rownames(rows) <- rn
+  
+  ensembles$tables$movement_log <<- rbind(ensembles$tables$movement_log, rows)
+  saveRDS(ensembles$tables$movement_log, ensembles$tables$movement_log_path)
+}
+
+append_change_rows <- function(rows) {
+  if (!NROW(rows)) return(invisible())
+  ensembles$tables$change_log <<- rbind(ensembles$tables$change_log, rows)
+  saveRDS(ensembles$tables$change_log, ensembles$tables$change_log_path)
+}
+
+## ====== PRUNE (choose worst by metadata; DO NOT delete holder) ======
+prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
+  minimize <- .metric_minimize(target_metric_name_worst)
+  main_serials <- snapshot_main_serials_meta()
+  main_vals    <- if (length(main_serials)) vapply(main_serials, get_metric_by_serial, numeric(1), target_metric_name_worst) else numeric(0)
+  
+  tbl <- data.frame(slot = seq_along(main_serials), serial = main_serials, value = main_vals, stringsAsFactors = FALSE)
+  cat("\n==== PRUNE DIAGNOSTICS ====\n")
+  cat("Metric:", target_metric_name_worst, " | Direction:", if (minimize) "MINIMIZE (lower better)" else "MAXIMIZE (higher better)", "\n")
+  if (NROW(tbl)) print(tbl, row.names = FALSE) else { cat("(no main rows)\n"); return(NULL) }
+  if (all(!is.finite(tbl$value))) { cat("No finite main values; abort prune.\n"); return(NULL) }
+  
+  worst_idx <- if (minimize) which.max(tbl$value) else which.min(tbl$value)
+  worst_row <- tbl[worst_idx, , drop = FALSE]
+  cat(sprintf("Chosen WORST serial = %s | value=%.6f\n", worst_row$serial, worst_row$value))
+  
+  list(
+    removed_network   = ensembles$main_ensemble[[1]],  # holder is a single DESONN; metadata swap only
+    updated_ensemble  = ensembles,
+    worst_model_index = 1L,
+    worst_serial      = worst_row$serial,
+    worst_value       = as.numeric(worst_row$value)
+  )
+}
+
+## ====== ADD/REPLACE (copy best TEMP metadata → MAIN worst metadata) ======
+add_network_to_ensemble <- function(ensembles, target_metric_name_best, removed_network, ensemble_number, worst_model_index,
+                                    removed_serial, removed_value) {
+  minimize <- .metric_minimize(target_metric_name_best)
+  temp_serials <- get_temp_serials_meta(ensemble_number)
+  temp_vals    <- if (length(temp_serials)) vapply(temp_serials, get_metric_by_serial, numeric(1), target_metric_name_best) else numeric(0)
+  
+  cat("\n==== ADD DIAGNOSTICS ====\n")
+  if (!length(temp_serials)) {
+    cat("No TEMP serials; abort add.\n")
+    return(list(updated_ensemble = ensembles$main_ensemble, removed_network = removed_network, added_network = NULL, added_serial = NA_character_))
+  }
+  temp_tbl <- data.frame(temp_serial = temp_serials, value = temp_vals, stringsAsFactors = FALSE)
+  print(temp_tbl, row.names = FALSE)
+  
+  best_idx <- if (minimize) which.min(temp_tbl$value) else which.max(temp_tbl$value)
+  best_row <- temp_tbl[best_idx, , drop = FALSE]
+  
+  removed_val <- removed_value
+  if (!is.finite(removed_val) && is_real_serial(removed_serial)) removed_val <- get_metric_by_serial(removed_serial, target_metric_name_best)
+  if (!is.finite(removed_val)) removed_val <- .resolve_metric_from_pm(removed_network$performance_metric, target_metric_name_best)
+  
+  cat(sprintf("Compare TEMP(best) %s=%.6f vs REMOVED %s on %s (%s better)\n",
+              best_row$temp_serial, best_row$value,
+              if (is.finite(removed_val)) sprintf("%.6f", removed_val) else "NA",
+              target_metric_name_best, if (minimize) "lower" else "higher"))
+  
+  if (!is.finite(best_row$value) || !is.finite(removed_val)) {
+    cat("→ INDETERMINATE (NA) — keep removed.\n")
+    return(list(updated_ensemble = ensembles$main_ensemble, removed_network = removed_network, added_network = NULL, added_serial = NA_character_))
+  }
+  do_replace <- if (minimize) (best_row$value < removed_val) else (best_row$value > removed_val)
+  
+  if (!do_replace) {
+    cat("→ KEEP REMOVED (TEMP not better).\n")
+    return(list(updated_ensemble = ensembles$main_ensemble, removed_network = removed_network, added_network = NULL, added_serial = NA_character_))
+  }
+  
+  # Parse worst slot from removed serial "1.0.i"
+  parts <- strsplit(removed_serial, "\\.")[[1]]
+  worst_slot <- suppressWarnings(as.integer(parts[3])); if (!is.finite(worst_slot) || is.na(worst_slot)) worst_slot <- 1L
+  
+  # Copy TEMP metadata object into MAIN slot and update serial to the TEMP best
+  temp_parts <- strsplit(best_row$temp_serial, "\\.")[[1]]
+  temp_e  <- suppressWarnings(as.integer(temp_parts[1]))
+  temp_i  <- suppressWarnings(as.integer(temp_parts[3]))
+  tvar    <- temp_meta_var(temp_e, temp_i)
+  mvar    <- main_meta_var(worst_slot)
+  
+  if (!exists(tvar, envir = .GlobalEnv)) {
+    cat("→ ERROR: TEMP metadata var not found:", tvar, "— aborting replace.\n")
+    return(list(updated_ensemble = ensembles$main_ensemble, removed_network = removed_network, added_network = NULL, added_serial = NA_character_))
+  }
+  tmd <- get(tvar, envir = .GlobalEnv)
+  tmd$model_serial_num <- best_row$temp_serial
+  assign(mvar, tmd, envir = .GlobalEnv)
+  cat(sprintf("→ REPLACED MAIN metadata slot %d: %s -> %s\n", worst_slot, removed_serial, best_row$temp_serial))
+  
+  ## Lineage: append this TEMP serial to the MAIN slot lineage
+  lineage_append(worst_slot, best_row$temp_serial)
+  
+  list(
+    updated_ensemble = ensembles$main_ensemble,  # holder unchanged
+    removed_network  = removed_network,
+    added_network    = NULL,
+    added_serial     = best_row$temp_serial,
+    worst_slot       = worst_slot
+  )
+}
+
+## ====== PHASE 1: build MAIN holder ======
 if (isTRUE(firstRun)) {
   cat("First run: initializing main_ensemble\n")
-  
-    main_model <- DESONN$new(
-      num_networks    = num_networks,
-      input_size      = input_size,
-      hidden_sizes    = hidden_sizes,
-      output_size     = output_size,
-      N               = N,
-      lambda          = lambda,
-      ensemble_number = 1,
-      ensembles       = ensembles,
-      ML_NN           = ML_NN,
-      method          = init_method,
-      custom_scale    = custom_scale
-    )
-    
-    ensembles$main_ensemble[[m]] <- main_model
-    
-    res_main <- main_model$train(
-      Rdata                      = X,
-      labels                     = y,
-      lr                         = lr,
-      ensemble_number            = 1,
-      num_epochs                 = num_epochs,
-      threshold                  = threshold,
-      reg_type                   = reg_type,
-      numeric_columns            = numeric_columns,
-      activation_functions_learn = activation_functions_learn,
-      activation_functions       = activation_functions,
-      dropout_rates_learn        = dropout_rates_learn,
-      dropout_rates              = dropout_rates,
-      optimizer                  = optimizer,
-      beta1                      = beta1,
-      beta2                      = beta2,
-      epsilon                    = epsilon,
-      lookahead_step             = lookahead_step,
-      batch_normalize_data       = batch_normalize_data,
-      gamma_bn                   = gamma_bn,
-      beta_bn                    = beta_bn,
-      epsilon_bn                 = epsilon_bn,
-      momentum_bn                = momentum_bn,
-      is_training_bn             = is_training_bn,
-      shuffle_bn                 = shuffle_bn,
-      loss_type                  = loss_type,
-      sample_weights             = sample_weights,
-      X_validation               = X_validation,
-      y_validation               = y_validation,
-      threshold_function         = threshold_function,
-      verbose                    = verbose
-    )
-    
-    results <- rbind(results, data.frame(lr = lr, lambda = lambda, accuracy = res_main$accuracy))
-    cat("Initialized MAIN model", m, "→ Acc:", res_main$accuracy, "\n")
-  }
-  
+  main_model <- DESONN$new(
+    num_networks    = num_networks,
+    input_size      = input_size,
+    hidden_sizes    = hidden_sizes,
+    output_size     = output_size,
+    N               = N,
+    lambda          = lambda,
+    ensemble_number = 1,
+    ensembles       = ensembles,
+    ML_NN           = ML_NN,
+    method          = init_method,
+    custom_scale    = custom_scale
+  )
+  invisible(main_model$train(
+    Rdata=X, labels=y, lr=lr, ensemble_number=1, num_epochs=num_epochs,
+    threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
+    activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+    dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+    beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
+    batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
+    epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
+    shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
+    X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function,
+    verbose=verbose
+  ))
+  ensembles$main_ensemble[[1]] <- main_model
   firstRun <- FALSE
+}
 
+## ====== LOOP ======
+debug_prune <- TRUE
+num_ensembles <- 2
 
-## -------------------------------------------------
-## Phase 2: j iterations — build TEMP, then prune/add
-## -------------------------------------------------
 for (j in 1:num_ensembles) {
   cat("\n— Iteration", j, ": build TEMP and run prune/add —\n")
+  ts_iter <- Sys.time()
   
-  # Fresh temp_ensemble
-  ensembles$temp_ensemble <- vector("list", num_networks)
-  
-  for (m in 1:num_networks) {
-    temp_model <- DESONN$new(
-      num_networks    = num_networks,
-      input_size      = input_size,
-      hidden_sizes    = hidden_sizes,
-      output_size     = output_size,
-      N               = N,
-      lambda          = lambda,
-      ensemble_number = j + 1,   # distinguish from main pass
-      ensembles       = ensembles,
-      ML_NN           = ML_NN,
-      method          = init_method,
-      custom_scale    = custom_scale
+  ## MAIN BEFORE — init lineage and log with fixed row names
+  main_before <- snapshot_main_serials_meta()
+  init_lineage_if_needed(main_before)
+  main_tbl_before <- .collect_vals(main_before, metric_name)
+  rows_before <- if (length(main_before)) {
+    data.frame(
+      iteration = j, phase = "main_before", slot = seq_along(main_before),
+      role = "main", serial = main_before, metric_name = metric_name,
+      metric_value = main_tbl_before$value, current_serial = NA_character_,
+      message = "", timestamp = ts_iter, stringsAsFactors = FALSE
     )
+  } else data.frame()
+  ids_before <- if (length(main_before)) vapply(seq_along(main_before), function(i) main_meta_var(i), character(1)) else character(0)
+  append_movement_block_named(rows_before, ids_before, fill_lineage_for_slots = if (length(main_before)) seq_along(main_before) else NULL)
+  
+  ## Build TEMP (creates Ensemble_Temp_* metadata)
+  ensembles$temp_ensemble <- vector("list", 1)
+  temp_model <- DESONN$new(
+    num_networks    = num_networks,
+    input_size      = input_size,
+    hidden_sizes    = hidden_sizes,
+    output_size     = output_size,
+    N               = N,
+    lambda          = lambda,
+    ensemble_number = j + 1,
+    ensembles       = ensembles,
+    ML_NN           = ML_NN,
+    method          = init_method,
+    custom_scale    = custom_scale
+  )
+  ensembles$temp_ensemble[[1]] <- temp_model
+  invisible(temp_model$train(
+    Rdata=X, labels=y, lr=lr, ensemble_number=j+1, num_epochs=num_epochs,
+    threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
+    activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+    dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+    beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
+    batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
+    epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
+    shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
+    X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function,
+    verbose=verbose
+  ))
+  
+  ## TEMP snapshot
+  t_sers <- get_temp_serials_meta(j)
+  t_vals <- if (length(t_sers)) vapply(t_sers, get_metric_by_serial, numeric(1), metric_name) else numeric(0)
+  rows_temp <- if (length(t_sers)) {
+    data.frame(
+      iteration = j, phase = "temp", slot = NA_integer_,
+      role = "temp", serial = t_sers, metric_name = metric_name,
+      metric_value = t_vals, current_serial = NA_character_,
+      message = "", timestamp = ts_iter, stringsAsFactors = FALSE
+    )
+  } else data.frame()
+  ids_temp <- if (length(t_sers)) vapply(seq_along(t_sers), function(i) temp_meta_var(j+1, i), character(1)) else character(0)
+  append_movement_block_named(rows_temp, ids_temp)
+  
+  ## PRUNE / ADD
+  pruned <- prune_network_from_ensemble(ensembles, metric_name)
+  removed_serial <- NA_character_
+  added_serial   <- NA_character_
+  worst_slot     <- NA_integer_
+  
+  if (!is.null(pruned)) {
+    added <- add_network_to_ensemble(
+      ensembles               = pruned$updated_ensemble,
+      target_metric_name_best = metric_name,
+      removed_network         = pruned$removed_network,
+      ensemble_number         = j,
+      worst_model_index       = pruned$worst_model_index,
+      removed_serial          = pruned$worst_serial,
+      removed_value           = pruned$worst_value
+    )
+    ensembles$main_ensemble <- added$updated_ensemble
+    removed_serial <- pruned$worst_serial
+    added_serial   <- added$added_serial %||% NA_character_
+    worst_slot     <- added$worst_slot %||% NA_integer_
     
-    ensembles$temp_ensemble[[m]] <- temp_model
-    
-    invisible(temp_model$train(
-      Rdata                      = X,
-      labels                     = y,
-      lr                         = lr,
-      ensemble_number            = j + 1,
-      num_epochs                 = num_epochs,
-      threshold                  = threshold,
-      reg_type                   = reg_type,
-      numeric_columns            = numeric_columns,
-      activation_functions_learn = activation_functions_learn,
-      activation_functions       = activation_functions,
-      dropout_rates_learn        = dropout_rates_learn,
-      dropout_rates              = dropout_rates,
-      optimizer                  = optimizer,
-      beta1                      = beta1,
-      beta2                      = beta2,
-      epsilon                    = epsilon,
-      lookahead_step             = lookahead_step,
-      batch_normalize_data       = batch_normalize_data,
-      gamma_bn                   = gamma_bn,
-      beta_bn                    = beta_bn,
-      epsilon_bn                 = epsilon_bn,
-      momentum_bn                = momentum_bn,
-      is_training_bn             = is_training_bn,
-      shuffle_bn                 = shuffle_bn,
-      loss_type                  = loss_type,
-      sample_weights             = sample_weights,
-      X_validation               = X_validation,
-      y_validation               = y_validation,
-      threshold_function         = threshold_function,
-      verbose                    = verbose
-    ))
+    # If replacement happened, write removed/added (blank row names)
+    if (is_real_serial(removed_serial) && is_real_serial(added_serial)) {
+      rrow <- data.frame(
+        iteration=j, phase="removed", slot=worst_slot, role="removed",
+        serial=removed_serial, metric_name=metric_name,
+        metric_value=get_metric_by_serial(removed_serial, metric_name),
+        current_serial=NA_character_,
+        message=sprintf("%s replaced by %s", removed_serial, added_serial),
+        timestamp=ts_iter, stringsAsFactors = FALSE
+      )
+      arow <- data.frame(
+        iteration=j, phase="added", slot=worst_slot, role="added",
+        serial=added_serial, metric_name=metric_name,
+        metric_value=get_metric_by_serial(added_serial, metric_name),
+        current_serial=NA_character_,
+        message=sprintf("%s replaced by %s", removed_serial, added_serial),
+        timestamp=ts_iter, stringsAsFactors = FALSE
+      )
+      append_movement_block_named(rrow, "", fill_lineage_for_slots = worst_slot)
+      append_movement_block_named(arow, "", fill_lineage_for_slots = worst_slot)
+      
+      # change log
+      append_change_rows(rbind(
+        data.frame(iteration=j, role="removed", serial=removed_serial, metric_name=metric_name,
+                   metric_value=get_metric_by_serial(removed_serial, metric_name),
+                   message=sprintf("%s replaced by %s", removed_serial, added_serial),
+                   timestamp=ts_iter, stringsAsFactors = FALSE),
+        data.frame(iteration=j, role="added",   serial=added_serial,   metric_name=metric_name,
+                   metric_value=get_metric_by_serial(added_serial, metric_name),
+                   message=sprintf("%s replaced by %s", removed_serial, added_serial),
+                   timestamp=ts_iter, stringsAsFactors = FALSE)
+      ))
+    }
   }
   
-  # Metrics + replacement are handled INSIDE these functions:
-  pruned_result <- prune_network_from_ensemble(ensembles, metric_name)
-  
-  if (!is.null(pruned_result$removed_network)) {
-    main_ensemble_copy_return <- add_network_to_ensemble(
-      updated_ensemble = pruned_result$updated_ensemble,
-      metric_name      = metric_name,
-      removed_network  = pruned_result$removed_network,
-      ensemble_number  = j
+  ## MAIN AFTER — fixed row names, with lineage columns populated
+  main_after <- snapshot_main_serials_meta()
+  main_tbl_after <- .collect_vals(main_after, metric_name)
+  rows_after <- if (length(main_after)) {
+    data.frame(
+      iteration = j, phase = "main_after", slot = seq_along(main_after),
+      role = "main", serial = main_after, metric_name = metric_name,
+      metric_value = main_tbl_after$value, current_serial = NA_character_,
+      message = if (is_real_serial(removed_serial) && is_real_serial(added_serial))
+        sprintf("%s replaced by %s", removed_serial, added_serial) else "",
+      timestamp = ts_iter, stringsAsFactors = FALSE
     )
-    
-    ensembles$main_ensemble <- main_ensemble_copy_return
-    cat("✅ main_ensemble updated via prune/add\n")
-  } else {
-    cat("❌ No model removed — no add performed\n")
-  }
-  
-  # optional: clear temp
-  ensembles$temp_ensemble <- list()
+  } else data.frame()
+  ids_after <- if (length(main_after)) vapply(seq_along(main_after), function(i) main_meta_var(i), character(1)) else character(0)
+  append_movement_block_named(rows_after, ids_after, fill_lineage_for_slots = if (length(main_after)) seq_along(main_after) else NULL)
 }
+
+
+
 
 
 # if (hyperparameter_grid_setup) {
@@ -625,90 +1015,18 @@ for (j in 1:num_ensembles) {
 #   lr <- lr
 #   lambda <- lambda
 #   
-#   if (ML_NN) {
-#     DESONN_model <- DESONN$new(
-#       num_networks = num_networks,
-#       input_size = input_size,
-#       hidden_sizes = hidden_sizes,
-#       output_size = output_size,
-#       N = N,
-#       lambda = lambda,
-#       ensemble_number = j,
-#       ensembles = ensembles,
-#       ML_NN = ML_NN,
-#       method = init_method,
-#       custom_scale = custom_scale
-#     )
-#   } else {
-#     DESONN_model <- DESONN$new(
-#       num_networks = num_networks,
-#       input_size = input_size,
-#       output_size = output_size,
-#       N = N,
-#       lambda = lambda,
-#       ensemble_number = j,
-#       ensembles = ensembles,
-#       ML_NN = ML_NN,
-#       method = init_method,
-#       custom_scale = custom_scale
-#     )
-#   }
-#   
-#   run_result <- DESONN_model$train(
-#     Rdata = X,
-#     labels = y,
-#     lr = lr,
-#     ensemble_number = 1,
-#     num_epochs = num_epochs,
-#     threshold = threshold,
-#     reg_type = reg_type,
-#     numeric_columns = numeric_columns,
-#     activation_functions_learn = activation_functions_learn,
-#     activation_functions = activation_functions,
-#     dropout_rates_learn = dropout_rates_learn,
-#     dropout_rates = dropout_rates,
-#     optimizer = optimizer,
-#     beta1 = beta1,
-#     beta2 = beta2,
-#     epsilon = epsilon,
-#     lookahead_step = lookahead_step,
-#     batch_normalize_data = batch_normalize_data,
-#     gamma_bn = gamma_bn,
-#     beta_bn = beta_bn,
-#     epsilon_bn = epsilon_bn,
-#     momentum_bn = momentum_bn,
-#     is_training_bn = is_training_bn,
-#     shuffle_bn = shuffle_bn,
-#     loss_type = loss_type,
-#     sample_weights = sample_weights,
-#     X_validation = X_validation,
-#     y_validation = y_validation,
-#     threshold_function = threshold_function,
-#     verbose = verbose
-#   )
-#   
-#   # Save manual run result
-#   results <- rbind(results, data.frame(
-#     lr = lr,
-#     lambda = lambda,
-#     accuracy = run_result$accuracy
-#   ))
-#   
-#   cat("Manual run -> Accuracy:", run_result$accuracy, "\n")
-# }
-# 
 
-
-# === Step 4: Save all results ===
-saveRDS(results, file = "results.rds")
-write.csv(results, file = "results.csv", row.names = FALSE)
-
-if(saveToDisk){
+if (saveToDisk) {
   
-  run_results_saved <- list(run_results_1_1)#, run_results_1_2, run_results_1_3, run_results_1_4, run_results_1_5)
+  # Save main ensemble and both temp ensembles used during the 2 iterations
+  ensemble_results <- list(
+    main_ensemble    = ensembles$main_ensemble,
+    temp_ensemble_1  = temp_ensemble_1,
+    temp_ensemble_2  = temp_ensemble_2
+  )
   
   # Define the base file name
-  base_file_name <- "run_results_saved"
+  base_file_name <- "ensemble_results"
   
   # Define a function to generate a new file name
   generate_new_file_name <- function(base_name) {
@@ -721,17 +1039,14 @@ if(saveToDisk){
     return(new_file_name)
   }
   
-  # Check if the file already exists
+  # Determine file name
   if (file.exists(paste0(base_file_name, ".rds"))) {
-    # Generate a new file name
     file_name <- generate_new_file_name(base_file_name)
   } else {
-    # Use the base file name
     file_name <- paste0(base_file_name, ".rds")
   }
   
-  # Save the data to an RDS file
-  saveRDS(run_results_saved, file_name)
-  
+  # Save the full ensemble results
+  saveRDS(ensemble_results, file_name)
   cat("Data saved to file:", file_name, "\n")
 }

@@ -1,6 +1,8 @@
 source("utils/utils.R")
-# install.packages("caret")
-# library(caret)
+# install.packages("pROC")
+# install.packages("ggplotify")
+library(pROC)
+library(ggplotify)
 EvaluatePredictionsReport <- function(X_validation, y_validation, probs, predicted_outputAndTime, threshold_function, best_val_probs, best_val_labels, verbose) {
 # ------------------------------------------------------------------------------
 # evaluate_predictions_report.R
@@ -67,8 +69,9 @@ df_sample_commentary <- data.frame(
 )
 
 # === View Combined Table ===
+if(viewTables){
 View(df_sample_commentary)
-
+}
 
 
 # Extract first-layer weights from weights_record (replace index as needed)
@@ -121,8 +124,9 @@ for (j in 1:max_len) {
 }
 
 # Show the result
+if(viewTables){
 View(df_inspect)
-
+}
 
 
 

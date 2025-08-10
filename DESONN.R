@@ -20,8 +20,6 @@ function(showlibraries){
   # install.packages("pracma")
   # install.packages("randomForest")
   # install.packages("openxlsx")
-  # install.packages("pROC")
-  # install.packages("ggplotify")
   library(R6)
   library(cluster)
   library(fpc)
@@ -2672,8 +2670,8 @@ SONN <- R6Class(
           eq <- paste("Optimal Epoch:", optimal_epoch, "\nLoss:", round(losses[optimal_epoch], 2))
           text(optimal_epoch + 1.65, losses[optimal_epoch] + offset, eq, pos = 4, col = "limegreen", adj = 0)
           
-          # Save the plot
-          saveRDS(plot_epochs, paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
+          # Save the plot # not good wil update later
+          # saveRDS(plot_epochs, paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
         } else {
           # Print a warning message and skip the plotting
           print(paste("Warning: Non-finite values detected in losses for DESONN", ensemble_number, "SONN", model_iter_num, ". Skipping plot."))
@@ -3904,60 +3902,46 @@ DESONN <- R6Class(
     },
     store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
-      # Print the dimensions of predicted_output
-      # print(paste("Dimensions of predicted_output:", paste(dim(predicted_output), collapse = " x ")))
-      # print(paste("Dimensions of actual_values:", paste(dim(actual_values), collapse = " x ")))
-      
+      # --- Conform predicted_output shape to match actual_values ---
       if (ncol(actual_values) != ncol(predicted_output)) {
+        total_elements_needed <- nrow(actual_values) * ncol(actual_values)
+        
         if (ncol(predicted_output) < ncol(actual_values)) {
-          # Calculate the required replication factor
-          total_elements_needed <- nrow(actual_values) * ncol(actual_values)
           rep_factor <- ceiling(total_elements_needed / length(predicted_output))
-          
-          # Create the replicated vector and check its length
-          replicated_predicted_output <- rep(predicted_output, rep_factor)
-          # Truncate the replicated vector to match the required length
-          replicated_predicted_output <- replicated_predicted_output[1:total_elements_needed]
-          # Create the matrix and check its dimensions
+          replicated_predicted_output <- rep(predicted_output, rep_factor)[1:total_elements_needed]
           predicted_output_matrix <- matrix(replicated_predicted_output, nrow = nrow(actual_values), ncol = ncol(actual_values), byrow = FALSE)
         } else {
-          # Truncate predicted_output to match the number of columns in actual_values
           truncated_predicted_output <- predicted_output[, 1:ncol(actual_values)]
-          # Create the matrix and check its dimensions
           predicted_output_matrix <- matrix(truncated_predicted_output, nrow = nrow(actual_values), ncol = ncol(actual_values), byrow = FALSE)
         }
       } else {
         predicted_output_matrix <- predicted_output
       }
       
-      # Calculate the error
+      # --- Calculate error and summary statistics ---
       error_prediction <- actual_values - predicted_output_matrix
-      
-      # print("Error prediction calculation complete")
-      
-      # Calculate differences
       differences <- error_prediction
-      
-      # Calculate summary statistics
       summary_stats <- summary(differences)
       boxplot_stats <- boxplot.stats(differences)
       
-      # Read the plot_epochs object from the RDS file
-      plot_epochs <- readRDS(paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
-      
-      # Create a list to store weights and biases records
+      # --- Load plot_epochs from file ---
+      # plot_epochs <- readRDS(paste0("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds"))
+      plot_epochs <- NULL #placeholder; will update later
+      # --- Prepare weight and bias records ---
       best_weights_records <- list()
-      best_biases_records <- list()
-
-      # Loop through each network to extract weights and biases from the passed-in lists
+      best_biases_records  <- list()
       for (i in 1:num_networks) {
         best_weights_records[[i]] <- all_weights[[i]]
         best_biases_records[[i]]  <- all_biases[[i]]
       }
       
+      # --- Generate model_serial_num ---
+      model_serial_num <- sprintf("%d.0.%d",
+                                  as.integer(ensemble_number),
+                                  as.integer(model_iter_num))
       
-      # Store results in a list
-      result <- list(
+      # --- Create metadata list ---
+      metadata <- list(
         input_size = input_size,
         output_size = output_size,
         N = N,
@@ -3976,6 +3960,7 @@ DESONN <- R6Class(
         run_id = run_id,
         ensemble_number = ensemble_number,
         model_iter_num = model_iter_num,
+        model_serial_num = model_serial_num,
         threshold = threshold,
         predicted_output = predicted_output,
         predicted_output_tail = tail(predicted_output),
@@ -3987,31 +3972,29 @@ DESONN <- R6Class(
         y = y,
         lossesatoptimalepoch = predicted_outputAndTime$lossesatoptimalepoch,
         loss_increase_flag = predicted_outputAndTime$loss_increase_flag,
-        performance_metric  = performance_metric,
+        performance_metric = performance_metric,
         relevance_metric = relevance_metric,
         plot_epochs = plot_epochs,
         best_weights_record = best_weights_records,
         best_biases_record = best_biases_records
       )
       
-      # This is for the initial finding the best model out of all the hyperparameters.
-      if ((hyperparameter_grid_setup && !learnOnlyTrainingRun && (never_ran_flag || !never_ran_flag)) || predict_models) {
-        print(model_iter_num)
-        # Append result to the results list
-        results_list[[model_iter_num]] <- result #<<-
-        
-        # Create dynamic variable name
-        variable_name <- paste0("Ensemble_", ensemble_number, "_model_", model_iter_num)
-        
-        # Assign the result to the dynamic variable
-        assign(variable_name, result, envir = .GlobalEnv)
-      } else { # Temp iteration
-        # Append result to the temporary ensemble (second list)
-        ensembles$temp_ensemble[[model_iter_num]] <- result #<<-
-      }
-    }
+      metadata_main_ensemble <- list()
+      metadata_temp_ensemble <- list()
+      
+      # --- Store metadata by ensemble type ---
+  # --- Store metadata by ensemble type ---
+  if (ensemble_number == 1) {
+    print(paste("Storing metadata for main ensemble model", model_iter_num, "as", model_serial_num))
+    assign(paste0("Ensemble_Main_", ensemble_number, "_model_", model_iter_num, "_metadata"),
+           metadata, envir = .GlobalEnv)
+  } else {
+    print(paste("Storing metadata for temp ensemble model", model_iter_num, "as", model_serial_num))
+    assign(paste0("Ensemble_Temp_", ensemble_number, "_model_", model_iter_num, "_metadata"),
+           metadata, envir = .GlobalEnv)
+  }
     
-    
+    } 
     
   )
 )
@@ -5233,545 +5216,7 @@ calculate_relevance_learn <- function(SONN, Rdata, labels, model_iter_num, predi
 }
 
 
-find_and_print_best_performing_models <- function(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best) {
-  
-  # Initialize an empty list to hold all metric names
-  all_metric_names <- union(unlist(performance_names), unlist(relevance_names))
-  
-  # Check if the target metric exists in the list of all metrics
-  if (!(target_metric_name_best %in% all_metric_names)) {
-    cat("Target metric", target_metric_name_best, "not found.\n")
-    return(NULL)
-  }
-  
-  # Determine if the target metric should be minimized or maximized
-  minimize_metric <- target_metric_name_best %in% c("speed_learn", "speed", "memory_usage", "quantization_error", "topographic_error", "clustering_quality_db", "MSE", "MAE", "RMSE", "serendipity", "diversity", "hit_rate")
-  maximize_metric <- target_metric_name_best %in% c("precision", "recall", "f1_score", "ndcg", "mean_precision", "robustness", "generalization_ability")
-  
-  # Initialize the best performance value appropriately
-  if (minimize_metric) {
-    best_performance_value <- Inf
-  } else if (maximize_metric) {
-    best_performance_value <- -Inf
-  } else {
-    best_performance_value <- -Inf  # Default to maximizing if not listed
-  }
-  
-  best_model_index <- NULL
-  
-  # Find the best-performing model for the target metric in performance_metrics
-  for (i in seq_along(performance_metrics)) {
-    if (target_metric_name_best %in% performance_names[[i]]) {
-      metric_index <- match(target_metric_name_best, performance_names[[i]])
-      cat("Checking performance model", i, "for metric", target_metric_name_best, "with metric index", metric_index, "\n")  # Debug print
-      
-      if (!is.na(metric_index) && metric_index <= length(performance_metrics[[i]])) {
-        metric_value <- performance_metrics[[i]][[metric_index]]
-        cat("Metric value for performance model", i, "is", toString(metric_value), "\n")  # Debug print
-        
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value < best_performance_value) ||
-              (maximize_metric && metric_value > best_performance_value)) {
-            best_performance_value <- metric_value
-            best_model_index <- i
-            cat("New best model index", best_model_index, "with value", best_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for performance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  
-  # Find the best-performing model for the target metric in relevance_metrics
-  for (i in seq_along(relevance_metrics)) {
-    if (target_metric_name_best %in% relevance_names[[i]]) {
-      metric_index <- match(target_metric_name_best, relevance_names[[i]])
-      cat("Checking relevance model", i, "for metric", target_metric_name_best, "with metric index", metric_index, "\n")  # Debug print
-      if (!is.na(metric_index) && metric_index <= length(relevance_metrics[[i]])) {
-        metric_value <- relevance_metrics[[i]][[metric_index]]
-        cat("Metric value for relevance model", i, "is", metric_value, "\n")  # Debug print
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value < best_performance_value) ||
-              (maximize_metric && metric_value > best_performance_value)) {
-            best_performance_value <- metric_value
-            best_model_index <- i + length(performance_metrics)  # Adjust index for relevance metrics
-            cat("New best model index", best_model_index, "with value", best_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for relevance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  # Print the result
-  if (!is.null(best_model_index)) {
-    cat("Best performing model for metric:", target_metric_name_best, "is SONN",
-        best_model_index, "with value:", best_performance_value, "\n")
-  } else {
-    cat("No model found for metric:", target_metric_name_best, "\n")
-  }
-  
-  return(list(best_model_index = best_model_index, target_metric_name_best = target_metric_name_best))
-}
-
-find_and_print_worst_performing_models <- function(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number) {
-  # Initialize an empty list to hold all metric names
-  all_metric_names <- union(unlist(performance_names), unlist(relevance_names))
-  
-  # Check if the target metric exists in the list of all metrics
-  if (!(target_metric_name_worst %in% all_metric_names)) {
-    cat("Target metric", target_metric_name_worst, "not found.\n")
-    return(NULL)
-  }
-  
-  # Determine if the target metric should be minimized or maximized
-  minimize_metric <- target_metric_name_worst %in% c("speed_learn", "speed", "memory_usage", "quantization_error", "topographic_error", "clustering_quality_db", "MSE", "MAE", "RMSE", "serendipity", "diversity", "hit_rate")
-  maximize_metric <- target_metric_name_worst %in% c("precision", "recall", "f1_score", "ndcg", "mean_precision", "robustness", "generalization_ability")
-  
-  # Initialize the worst performance value appropriately
-  if (minimize_metric) {
-    worst_performance_value <- -Inf
-  } else if (maximize_metric) {
-    worst_performance_value <- Inf
-  } else {
-    worst_performance_value <- Inf  # Default to minimizing if not listed
-  }
-  
-  worst_model_index <- NULL
-  
-  # Find the worst-performing model for the target metric in performance_metrics
-  for (i in seq_along(performance_metrics)) {
-    if (target_metric_name_worst %in% performance_names[[i]]) {
-      metric_index <- match(target_metric_name_worst, performance_names[[i]])
-      cat("Checking performance model", i, "for metric", target_metric_name_worst, "with metric index", metric_index, "\n")  # Debug print
-      
-      if (!is.na(metric_index) && metric_index <= length(performance_metrics[[i]])) {
-        metric_value <- performance_metrics[[i]][[metric_index]]
-        cat("Metric value for performance model", i, "is", toString(metric_value), "\n")  # Debug print
-        
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value > worst_performance_value) ||
-              (maximize_metric && metric_value < worst_performance_value)) {
-            worst_performance_value <- metric_value
-            worst_model_index <- i
-            cat("New worst model index", worst_model_index, "with value", worst_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for performance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  
-  # Find the worst-performing model for the target metric in relevance_metrics
-  for (i in seq_along(relevance_metrics)) {
-    if (target_metric_name_worst %in% relevance_names[[i]]) {
-      metric_index <- match(target_metric_name_worst, relevance_names[[i]])
-      cat("Checking relevance model", i, "for metric", target_metric_name_worst, "with metric index", metric_index, "\n")  # Debug print
-      if (!is.na(metric_index) && metric_index <= length(relevance_metrics[[i]])) {
-        metric_value <- relevance_metrics[[i]][[metric_index]]
-        cat("Metric value for relevance model", i, "is", metric_value, "\n")  # Debug print
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value > worst_performance_value) ||
-              (maximize_metric && metric_value < worst_performance_value)) {
-            worst_performance_value <- metric_value
-            worst_model_index <- i + length(performance_metrics)  # Adjust index for relevance metrics
-            cat("New worst model index", worst_model_index, "with value", worst_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for relevance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  # Print the result
-  if (!is.null(worst_model_index)) {
-    cat("Worst performing model for metric:", target_metric_name_worst, "is DESONN", ensemble_number, "SONN",
-        worst_model_index, "with value:", worst_performance_value, "\n")
-  } else {
-    cat("No model found for metric:", target_metric_name_worst, "\n")
-  }
-  
-  return(worst_model_index)
-}
-
-add_network_to_ensemble <- function(ensembles, target_metric_name_best, removed_network, ensemble_number, worst_model_index) {
-  
-  # Extract performance and relevance metrics
-  performance_metrics <- lapply(ensembles$temp_ensemble, function(x) x$performance_metric)
-  relevance_metrics <- lapply(ensembles$temp_ensemble, function(x) x$relevance_metric)
-  
-  performance_names <- lapply(performance_metrics, function(x) names(x))
-  relevance_names <- lapply(relevance_metrics, function(x) names(x))
-  
-  extract_and_combine_metrics <- function(metrics){
-    # Combine the data into a single list of lists
-    combined_data <- lapply(seq_along(metrics), function(i) {
-      data <- metrics[[i]]
-      # Flatten metrics with multiple values into named individual metrics
-      flattened_data <- purrr::map2(data, names(data), function(metric, name) {
-        if (length(metric) > 1) {
-          # If metric has multiple values, name each value
-          set_names(as.list(metric), paste0(name, "_", seq_along(metric)))
-        } else {
-          # If metric has a single value, keep it as is
-          set_names(list(metric), name)
-        }
-      }) %>%
-        flatten()
-      return(flattened_data)
-    })
-    return(combined_data)
-  }
-  
-  #fixed_relevance
-  relevance_metrics <- extract_and_combine_metrics(relevance_metrics)
-  
-  # # Convert to a data frame
-  # df <- bind_rows(combined_data)
-  #
-  # # Ensure all columns are of atomic types
-  # df[] <- lapply(df, function(x) if (is.list(x)) unlist(x) else x)
-  #
-  # # Reshape the data into long format
-  # df <- df %>%
-  #     pivot_longer(cols = -c(Model_Name), names_to = "Metric", values_to = "Value")
-  #
-  # # Switch column order
-  # df <- df[, c("Model_Name", "Metric", "Value")]
-  #
-  # # Convert "Value" column to numeric if possible
-  # df$Value <- as.numeric(as.character(df$Value))
-  #
-  # # Filter out NA values
-  # df <<- df[complete.cases(df), ]
-  
-  
-  # Extract optimal epochs from ensembles$temp_ensemble
-  extract_optimal_epoch <- lapply(ensembles$temp_ensemble, function(x) x$optimal_epoch)
-  
-  # # Step 3: Create a corresponding list for the optimal epochs
-  # optimal_epochs_performance_metrics <- unlist(lapply(seq_along(extract_optimal_epoch), function(i) {
-  #     rep(extract_optimal_epoch[[i]], length(performance_metrics[[i]]))
-  # }))
-  #
-  # optimal_epochs_relevance_metrics <- unlist(lapply(seq_along(extract_optimal_epoch), function(i) {
-  #     rep(extract_optimal_epoch[[i]], length(relevance_metrics[[i]]))
-  # }))
-  
-  # Get run_id and model_iter_num_id from each element in ensembles$temp_ensemble
-  runid <- unlist(lapply(ensembles$temp_ensemble, function(x) x$run_id))
-  model_iter_num_id <- unlist(lapply(ensembles$temp_ensemble, function(x) x$model_iter_num))
-  loss_increase_flag <- unlist(lapply(ensembles$temp_ensemble, function(x) x$loss_increase_flag))
-  
-  # Create a dataframe for performance metrics
-  df_performance_metrics <- do.call(rbind, lapply(performance_metrics, data.frame))
-  df_performance_metrics$runid <- runid
-  df_performance_metrics$model_index <- model_iter_num_id
-  df_performance_metrics$loss_increase_flag <- loss_increase_flag
-  df_performance_metrics$Optimal_Epochs <- extract_optimal_epoch
-  
-  # Reshape performance metrics
-  df_performance_metrics <- tidyr::gather(df_performance_metrics, key = "Metric", value = "Value", -runid, -model_index, -Optimal_Epochs, -loss_increase_flag)
-  
-  # Create a dataframe for relevance metrics
-  df_relevance_metrics <- do.call(rbind, lapply(relevance_metrics, data.frame))
-  df_relevance_metrics$runid <- runid
-  df_relevance_metrics$model_index <- model_iter_num_id
-  df_relevance_metrics$loss_increase_flag <- loss_increase_flag
-  df_relevance_metrics$Optimal_Epochs <- extract_optimal_epoch
-  
-  # Reshape relevance metrics
-  df_relevance_metrics <- tidyr::gather(df_relevance_metrics, key = "Metric", value = "Value", -runid, -model_index, -Optimal_Epochs, -loss_increase_flag)
-  
-  
-  # Combine the two dataframes
-  df_metrics <<- rbind(df_performance_metrics, df_relevance_metrics)
-  
-  
-  # Find the best performing model
-  best_performing_models <<- find_and_print_best_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best)
-  
-  metric_to_vlookup <- best_performing_models$target_metric_name_best
-  
-  best_model_index <<- best_performing_models$best_model_index
-  
-  
-  # Check if best_model_index is valid
-  if (is.numeric(best_model_index) && (!is.infinite(best_model_index) || !is.na(best_model_index) || !is.null(best_model_index))) {
-    # If best_model_index is valid, filter df_metrics and summarize
-    result <<- df_metrics %>%
-      filter(Metric == metric_to_vlookup, model_index == best_model_index, Optimal_Epochs > 1, loss_increase_flag == FALSE) %>%
-      summarise(best_model_index = first(model_index))
-    target_metric_name_best_value <<- df_metrics %>%
-      filter(Metric == metric_to_vlookup, model_index == best_model_index) %>%
-      summarise(Value = first(Value)) %>%
-      pull(Value)
-    optimal_epoch <<- df_metrics %>%
-      filter(Metric == "Optimal_Epochs", model_index == best_model_index) %>%
-      summarise(Value = first(Value)) %>%
-      pull(Value)
-    # Filter the data frame
-    filtered_df <- df_metrics %>%
-      filter(Metric == metric_to_vlookup, model_index == best_model_index)
-    
-    # Now you can access the loss_increase_flag value
-    loss_increase_flag_value <- filtered_df$loss_increase_flag
-    if((nrow(result) > 0 && !is.na(result)) || (nrow(result) > 0 && !is.null(result)) && (!is.null(optimal_epoch) || optimal_epoch > 1 || !is.na(optimal_epoch)) && loss_increase_flag_value == FALSE) {#if found best metric of interest out of the temp ... even if higher than the main ensemble ..we will account for this below
-      best_model_index_new <<-  result$best_model_index
-    }else{#if couldn't find best model in temp ensemble
-      best_model_index_new <- NULL
-      print("Optimal Epoch is <= 1 or does not exist and/or losses exceed initial loss.")
-    }
-    
-  } else {
-    best_model_index_new <- NULL
-    # If best_model_index is invalid, assign NA to result
-    result <<- NA
-    target_metric_name_best_value <<- NA
-  }
-  
-  
-  # optimal_epoch <<- df_metrics %>%
-  #     filter(Metric == "Optimal_Epochs", model_index == best_model_index) %>%
-  #     summarise(Value = first(Value)) %>%
-  #     pull(Value)
-  #
-  # loss_increase_flag_print <- df_metrics %>%
-  #     filter(loss_increase_flag == TRUE, model_index == best_model_index) %>%
-  #     summarise(Value = first(Value)) %>%
-  #     pull(Value)
-  #
-  # print(paste0(metric_to_vlookup, " Metric Value: ", target_metric_name_best_value, ", Optimal Epoch: ", optimal_epoch, " Losses Exceed Intital Epoch:", loss_increase_flag_print))
-  
-  
-  
-  best_model_metadata <- list()
-  
-  # If a best-performing model is found
-  if (!is.null(best_model_index_new)) {
-    # Retrieve the best model and its associated metrics
-    best_model <- ensembles$temp_ensemble[[best_model_index]]
-    best_model$ensemble_number <- best_model$ensemble_number + 1
-    
-    
-    best_model_metadata <- list(
-      ensemble_index = ensemble_number + 1, #we add plus 1 because when hyperparameter_grid_setup == FALSE we did this for initalization too.
-      model_index = best_model_index,
-      input_size = best_model$input_size,
-      output_size = best_model$output_size,
-      N = best_model$N,
-      never_ran_flag = best_model$never_ran_flag,
-      num_samples = best_model$num_samples,
-      num_test_samples = best_model$num_test_samples,
-      num_training_samples = best_model$num_training_samples,
-      num_validation_samples = best_model$num_validation_samples,
-      num_networks = best_model$num_networks,
-      update_weights = best_model$update_weights,
-      update_biases = best_model$update_biases,
-      lr = best_model$lr,
-      lambda = best_model$lambda,
-      num_epochs = best_model$num_epochs,
-      optimal_epoch = best_model$optimal_epoch,
-      run_id = best_model$run_id,
-      model_iter_num = best_model$model_iter_num,
-      ensemble_number = ensemble_number,
-      threshold = best_model$threshold,
-      predicted_output = best_model$predicted_output,
-      predicted_output_tail = best_model$predicted_output_tail,
-      actual_values_tail = best_model$actual_values_tail,
-      differences = best_model$differences,
-      summary_stats = best_model$summary_stats,
-      boxplot_stats = best_model$boxplot_stats,
-      X = best_model$X,
-      y = best_model$y,
-      best_weights_record = best_model$best_weights_record,
-      best_biases_record = best_model$best_biases_record,
-      weights_record2 = best_model$weights_record2, #will likely remove
-      biases_record2 = best_model$biases_record2, #will likely remove
-      lossesatoptimalepoch = best_model$lossesatoptimalepoch,
-      loss_increase_flag = best_model$loss_increase_flag,
-      performance_metric = best_model$performance_metric,
-      relevance_metric = best_model$relevance_metric
-    )
-    
-    cat("Adding model from temp ensemble to main ensemble based on metric:", target_metric_name_best, "\n")
-    
-    ensembles$main_ensemble[[worst_model_index]]$metadata <<- list()
-    
-    # Function to add a new layer of metadata dynamically
-    add_metadata_layer <- function(model, new_metadata) {
-      
-      # Check if the first metadata slot is taken
-      if (!is.null(model$metadata)) {
-        # Initialize metadata counter
-        iteration <- 2
-        print((paste0("metadata", iteration)))
-        # Loop to find the next available metadata slot
-        while (!is.null(model[[paste0("metadata", iteration)]])) {
-          iteration <- iteration + 1
-        }
-        
-        # Add the new metadata to the next available slot
-        model[[paste0("metadata", iteration)]] <- new_metadata
-      } else {
-        # If the first metadata slot is not taken, use it
-        model$metadata <- new_metadata
-      }
-      
-      return(model)
-    }
-    removed_network <<- removed_network
-    removed_network_performance_metric <<- list(removed_network$performance_metric)
-    removed_network_relevance_metric <<- extract_and_combine_metrics(list(removed_network$relevance_metric))
-    
-    # Create a dataframe for performance metrics
-    removed_network_df_performance_metrics <<- do.call(rbind, lapply(removed_network_performance_metric, data.frame))
-    
-    # Reshape performance metrics
-    removed_network_df_performance_metrics <<- tidyr::gather(removed_network_df_performance_metrics, key = "Metric", value = "Value")
-    
-    # Create a dataframe for relevance metrics
-    removed_network_df_relevance_metrics <<- do.call(rbind, lapply(removed_network_relevance_metric, data.frame))
-    
-    # Reshape performance metrics
-    removed_network_df_relevance_metrics <<- tidyr::gather(removed_network_df_relevance_metrics, key = "Metric", value = "Value")
-    
-    
-    df_removed_network_performance_metrics_relevance_metrics <<- rbind(removed_network_df_performance_metrics, removed_network_df_relevance_metrics)
-    
-    removed_network_metric <- df_removed_network_performance_metrics_relevance_metrics %>%
-      filter(Metric == metric_to_vlookup) %>%
-      summarise(Value = first(Value)) %>%
-      pull(Value)
-    
-    
-    # Replace the removed network with the best model from the temp ensemble
-    if (!is.null(removed_network) && target_metric_name_best_value < removed_network_metric && nrow(result) > 0 && !is.na(result)) { #if main is > temp, we want to remove the main and replace with temp
-      # Debug: Print the index of the removed network
-      print(paste("Index of the removed network:", worst_model_index))
-      
-      # Construct the variable name dynamically
-      run_result_var_name <- paste0("run_results_1_", worst_model_index)
-      
-      # Create a list that includes the best model and its metadata
-      best_model_with_removed_network_metadata <- list(best_model_metadata = best_model, metadata = removed_network) #incorporate the old metadata #had to add best_model_metadata = for accessing weights in intialization part of DESONN
-      
-      # Update the global variable run_results_1_<index> with the best model and the metadata of the model it's replacing
-      assign(run_result_var_name, best_model_with_removed_network_metadata, envir = .GlobalEnv)
-      
-      ensembles$main_ensemble[[worst_model_index]] <- best_model
-      # Add the removed network as a new layer of metadata in the replaced model / incorporate the old metadata
-      updated_model <- add_metadata_layer(ensembles$main_ensemble[[worst_model_index]], removed_network)
-      
-      # Update the global ensemble list with the modified model
-      ensembles$main_ensemble[[worst_model_index]] <<- updated_model #it was magically working without this line, but i was erroring out before maybe because of global <<- interferring with local <- so I added this line anyways, because logically this makes sense to me.
-      
-      # Debug: Print the metadata of the replaced model
-      print(paste("Metadata of the replaced model at index", worst_model_index, ":"))
-      
-      
-    } else if(!is.null(removed_network) && target_metric_name_best_value > removed_network_metric &&  (nrow(result) <= 0 || is.na(result))) { #if the temp ensemble's metric value is GREATER than the main ensemble's then put the removed network back in its place
-      # Add the removed network back to the ensemble at its original position
-      ensembles$main_ensemble <- append(ensembles$main_ensemble, list(removed_network), after = worst_model_index - 1)
-      cat("Temp Ensemble based on metric:", target_metric_name_best, "with a value of:", target_metric_name_best_value , "is worse than Main Ensemble's", target_metric_name_best, "with a value of:",  removed_network_metric, "\n")
-    }
-  } else {
-    # If no best model is found, print a message
-    cat("No best model found in the temp ensemble based on metric:", target_metric_name_best, "\n")
-  }
-  
-  # Ensure that temp_ensemble is ready for the next iteration (reuse or refresh as needed)
-  ensembles$temp_ensemble <<- ensembles$temp_ensemble
-  
-  # Return the copy of the original main ensemble for backup or logging purposes
-  return(ensembles$main_ensemble)
-}
-
-prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
-  
-  # Initialize lists to store performance and relevance metrics
-  performance_metrics <- list()
-  relevance_metrics <- list()
-  performance_names <- list()
-  relevance_names <- list()
-  
-  # Initialize lists to store performance and relevance metrics
-  performance_metrics <- list()
-  relevance_metrics <- list()
-  
-  # Loop over each ensemble
-  for (i in seq_along(ensembles$main_ensemble)) {
-    # Check if best_model_metadata exists in the i-th ensemble
-    if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-      # Extract performance metric from best_model_metadata
-      performance_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric
-      # Extract relevance metric from best_model_metadata
-      relevance_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$relevance_metric
-    } else {
-      # Extract performance metric from the i-th ensemble
-      performance_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric
-      # Extract relevance metric from the i-th ensemble
-      relevance_metrics[[i]] <- ensembles$main_ensemble[[i]]$relevance_metric
-    }
-  }
-  
-  performance_metrics_review <<- performance_metrics
-  relevance_metrics_review <<- relevance_metrics
-  
-  # Extract metric names
-  performance_names <- lapply(performance_metrics, names)
-  relevance_names <- lapply(relevance_metrics, names)
-  
-  # Find the worst performing model
-  worst_model_index <- find_and_print_worst_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number = j)
-  
-  # # Initialize lists to store run_ids and MSE performance metrics
-  # run_ids <- list()
-  # mse_metrics <- list()
-  
-  # # Loop over each ensemble
-  # for (i in seq_along(ensembles$main_ensemble)) {
-  #     # Check if best_model_metadata exists in the i-th ensemble
-  #     if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-  #         # Extract run_id and MSE performance metric from best_model_metadata
-  #         run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
-  #         mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
-  #     } else {
-  #         # Extract run_id and MSE performance metric from the i-th ensemble
-  #         run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
-  #         mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
-  #     }
-  # }
-  #
-  # # Print the run_ids and MSE performance metrics
-  # print("_____________run_ids________________________________")
-  # print(run_ids)
-  # print("_____________mse_metrics________________________________")
-  # print(mse_metrics)
-  
-  
-  
-  # If a worst-performing model is found
-  if (!is.null(worst_model_index)) {
-    # Remove the worst-performing model from the main ensemble
-    removed_network <- ensembles$main_ensemble[[worst_model_index]]
-    ensembles$main_ensemble <- ensembles$main_ensemble[-worst_model_index]
-    
-    # Print information about the removed network
-    cat("Removed network", worst_model_index, "from the main ensemble based on worst", target_metric_name_worst, "metric\n")
-    
-    return(list(removed_network = removed_network, updated_ensemble = ensembles, worst_model_index = worst_model_index))
-  } else {
-    cat("No worst-performing model found for metric:", target_metric_name_worst, "\n")
-    return(NULL)
-  }
-}
+###prune
 
 # Loss Function: Computes the loss based on the type specified and includes regularization term
 loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
@@ -6018,73 +5463,60 @@ is.adjacent <- function(map, neuron1, neuron2) {
 }
 
 # Clustering quality (Davies-Bouldin index)
-clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose) {
-  # Check if cluster_assignments is available
+clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose = FALSE) {
   if (is.null(cluster_assignments)) {
     stop("Cluster assignments not available. Perform kmeans clustering first.")
   }
   
-  # Convert the SONN weights to a matrix (if needed)
-  # mat_data <- as.matrix(SONN)
+  # Ensure Rdata is a numeric matrix
+  if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
+  Rdata <- apply(Rdata, 2, as.numeric)  # force numeric values
   
-  # Calculate the centroids
-  centroids <- aggregate(Rdata, by=list(cluster_assignments), FUN=mean)
-  centroids <- centroids[,-1]  # Remove the grouping column
+  # Compute centroids and ensure it's numeric matrix
+  centroids <- aggregate(Rdata, by = list(cluster_assignments), FUN = mean)[, -1]
+  centroids <- as.matrix(centroids)
+  centroids <- apply(centroids, 2, as.numeric)
   
-  # Initialize a matrix to store squared Euclidean distances between centroids
   n_clusters <- nrow(centroids)
-  dist_mat <- matrix(0, nrow = n_clusters, ncol = n_clusters)
   
-  # Calculate squared Euclidean distances between centroids
-  for (i in 1:n_clusters) {
-    for (j in 1:n_clusters) {
-      if (i != j) {
-        dist_mat[i, j] <- sum((centroids[i,] - centroids[j,])^2)
-      }
-    }
+  # Split indices by cluster
+  cluster_indices <- split(seq_len(nrow(Rdata)), cluster_assignments)
+  
+  # Precompute intra-cluster dispersion for each cluster (Si)
+  S <- numeric(n_clusters)
+  for (i in seq_len(n_clusters)) {
+    data_i <- Rdata[cluster_indices[[i]], , drop = FALSE]
+    centroid_i <- centroids[i, ]
+    centroid_matrix <- matrix(centroid_i, nrow(data_i), ncol(data_i), byrow = TRUE)
+    S[i] <- mean(rowSums((data_i - centroid_matrix)^2))
   }
   
-  # Initialize variable to store Davies-Bouldin index
+  # Precompute inter-cluster distances (squared Euclidean)
+  D <- as.matrix(dist(centroids))^2
+  
+  # Compute Davies-Bouldin index
   db_index <- 0
-  
-  # Loop through each cluster
-  for (i in 1:n_clusters) {
-    # Initialize variable to store maximum inter-cluster separation
-    max_inter_cluster_sep <- -Inf
-    
-    # Loop through other clusters
-    for (j in 1:n_clusters) {
+  for (i in seq_len(n_clusters)) {
+    max_ratio <- -Inf
+    for (j in seq_len(n_clusters)) {
       if (i != j) {
-        # Calculate intra-cluster dispersion
-        s_i <- mean(sapply(which(cluster_assignments == i), function(x) sum((Rdata[x,] - centroids[i,])^2)))
-        s_j <- mean(sapply(which(cluster_assignments == j), function(x) sum((Rdata[x,] - centroids[j,])^2)))
-        
-        # Calculate inter-cluster separation
-        inter_cluster_sep <- (s_i + s_j) / sqrt(dist_mat[i, j])
-        
-        # Update maximum inter-cluster separation if needed
-        if (inter_cluster_sep > max_inter_cluster_sep) {
-          max_inter_cluster_sep <- inter_cluster_sep
-        }
+        ratio <- (S[i] + S[j]) / sqrt(D[i, j])
+        if (ratio > max_ratio) max_ratio <- ratio
       }
     }
-    
-    # Update Davies-Bouldin index
-    db_index <- db_index + max_inter_cluster_sep
+    db_index <- db_index + max_ratio
   }
   
-  # Calculate final Davies-Bouldin index
   db_index <- db_index / n_clusters
   
   if (verbose) {
-    print("clustering_quality_db")
-    print(db_index)
+    cat("clustering_quality_db:", db_index, "\n")
   }
+  
   return(db_index)
-  if (verbose) {
-    print("clustering_quality_db complete")
-  }
 }
+
+
 
 # Classification accuracy placeholder
 MSE <- function(SONN, Rdata, labels, predicted_output, verbose) {
@@ -6647,30 +6079,3 @@ serendipity <- function(SONN, Rdata, predicted_output, verbose) {
     print("serendipity complete")
   }
 }
-
-# Helper function to adjust biases for the first layer of the predict function
-# Top-level helper
-adjust_biases_layer_1 <- function(biases, weights, Rdata) {
-  biases <- as.numeric(unlist(biases))
-  input_rows <- as.integer(nrow(Rdata))
-  output_cols <- as.integer(ncol(weights))
-  
-  if (length(biases) == 1) {
-    cat("Using single bias value:", biases, "\n")
-    matrix(biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(biases) < output_cols) {
-    cat("Bias length and neuron count mismatch. Adjusting (replicating)...\n")
-    matrix(rep(biases, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(biases) > output_cols) {
-    cat("Bias length exceeds neuron count. Truncating...\n")
-    matrix(biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else {
-    matrix(biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  }
-}
-
-
-
-
-
-
