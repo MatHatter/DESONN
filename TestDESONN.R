@@ -493,7 +493,7 @@ if (!do_ensemble) {
     epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
     shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
     X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
-    verbose=verbose
+    train=train, verbose=verbose
   ))
   
   # Optionally expose it the same way your ensemble code does:
@@ -815,7 +815,7 @@ if (do_ensemble) {
       epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
       shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
       X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
-      verbose=verbose
+      train=train, verbose=verbose
     ))
     ensembles$main_ensemble[[1]] <- main_model
     firstRun <- FALSE
@@ -868,7 +868,7 @@ if (do_ensemble) {
       epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
       shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
       X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
-      verbose=verbose
+      train=train, verbose=verbose
     ))
     
     t_sers <- get_temp_serials_meta(j)

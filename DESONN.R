@@ -1060,7 +1060,7 @@ SONN <- R6Class(
       
       return(list(predicted_output = output, prediction_time = prediction_time))
     },# Method for training the SONN with L2 regularization
-    train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation) {
+    train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train) {
       
       # Initialize learning rate scheduler
       # lr_scheduler <- function(epoch, initial_lr = lr) {
@@ -1136,8 +1136,8 @@ SONN <- R6Class(
             Rdata = Rdata,
             labels = labels,
             lr = lr,
-            activation_functions_learn = activation_functions_learn,
-            dropout_rates_learn = dropout_rates_learn,
+            activation_functions_learn = activation_functions,
+            dropout_rates_learn = dropout_rates,
             sample_weights = sample_weights
           )
           
@@ -1427,7 +1427,7 @@ SONN <- R6Class(
           
           # Record the loss for this epoch
           # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
-          predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$predicted_output
+          predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$learn_output
           
           # Ensure predictions match label dimensions before loss calculation
           if (!all(dim(predictions) == dim(labels))) {
@@ -1452,7 +1452,7 @@ SONN <- R6Class(
 
           
           
-          # Update weights
+          # Update weights and biases code removed for chatgpt to process
           if (update_weights) {
             if (self$ML_NN) {
               for (layer in 1:self$num_layers) {
@@ -1591,7 +1591,7 @@ SONN <- R6Class(
                       
                       self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
                       
-
+                      
                       
                       optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                       
@@ -1619,7 +1619,7 @@ SONN <- R6Class(
                       optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
                     else if (optimizer == "sgd") {
-
+                      
                       cat("DEBUG: Is optimizer_params_weights available? ", exists("optimizer_params_weights"), "\n")
                       cat("DEBUG: Type: ", typeof(optimizer_params_weights), "\n")
                       cat("DEBUG: Length: ", length(optimizer_params_weights), "\n")
@@ -2014,7 +2014,7 @@ SONN <- R6Class(
                   # Clip bias gradient
                   grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5)
                   
-
+                  
                   
                   # --- Align dimensions if needed ---
                   bias_shape <- dim(as.matrix(self$biases[[layer]]))
@@ -2091,7 +2091,7 @@ SONN <- R6Class(
                   cat("grads_matrix summary:\n")
                   print(summary(as.vector(grads_matrix)))
                   
-
+                  
                   # Apply optimizer update if optimizer is specified
                   if (!is.null(optimizer_params_biases[[layer]]) && !is.null(optimizer)) {
                     if (optimizer == "adam") {
@@ -2381,111 +2381,111 @@ SONN <- R6Class(
                     
                     
                   } }}}else {# ---------------- SINGLE-LAYER BIAS UPDATE ----------------
-cat("Single Layer Bias Update\n")
-
-# 1) Ensure biases matrix [1 x n_units]
-if (is.null(self$biases)) stop("Biases are NULL in single-layer mode.")
-if (!is.matrix(self$biases)) self$biases <- matrix(as.numeric(self$biases), nrow = 1)
-
-# 2) Ensure optimizer params list + init slot 1
-if (is.null(optimizer_params_biases)) optimizer_params_biases <- list()
-if (!is.null(optimizer) && is.null(optimizer_params_biases[[1]])) {
-  optimizer_params_biases[[1]] <- initialize_optimizer_params(
-    optimizer,
-    list(dim(self$biases)),
-    lookahead_step,
-    1L
-  )
-  cat(">>> SL initialize_optimizer_params (bias) done for layer 1\n")
-  print(str(optimizer_params_biases[[1]]))
-  print(names(optimizer_params_biases[[1]]))
-}
-
-# 3) Gradient from errors (per-unit mean)
-bias_grad <- colMeans(errors[[1]], na.rm = TRUE)
-
-# shape to [1 x n_units]
-bias_grad <- matrix(rep(bias_grad, length.out = ncol(self$biases)), nrow = 1)
-
-# optional clip (kept consistent with weights)
-bias_grad <- clip_gradient_norm(bias_grad, max_norm = 5.0)
-
-# Debug
-cat("SL bias_grad dim:", paste(dim(bias_grad), collapse = "x"), "\n")
-cat("SL bias_grad summary:\n"); print(summary(as.vector(bias_grad)))
-
-# 4) Optimizer dispatch (preferred path)
-if (!is.null(optimizer) && !is.null(optimizer_params_biases[[1]])) {
-  updated_optimizer <- apply_optimizer_update(
-    optimizer        = optimizer,
-    optimizer_params = optimizer_params_biases,
-    grads_matrix     = bias_grad,   # pass pure gradient (not lr*grad + reg)
-    lr               = lr,
-    beta1            = beta1,
-    beta2            = beta2,
-    epsilon          = epsilon,
-    epoch            = epoch,
-    self             = self,
-    layer            = 1L,          # <= important: integer index, avoids 'closure' clash
-    target           = "biases"
-  )
-
-  # Most optimizers return absolute updated params in your codebase:
-  self$biases <- updated_optimizer$updated_weights_or_biases
-  optimizer_params_biases[[1]] <- updated_optimizer$updated_optimizer_params
-
-  cat(">> SL updated biases summary: min =", min(self$biases),
-      ", mean =", mean(self$biases),
-      ", max =", max(self$biases), "\n")
-
-} else {
-  # 5) Manual / fallback update with regularization (mirrors weights SL fallback)
-
-  bias_update <- lr * bias_grad
-
-  if (!is.null(reg_type)) {
-    if (reg_type == "L2") {
-      reg_term <- self$lambda * self$biases
-      bias_update <- bias_update + reg_term
-
-    } else if (reg_type == "L1") {
-      reg_term <- self$lambda * sign(self$biases)
-      bias_update <- bias_update + reg_term
-
-    } else if (reg_type == "L1_L2") {
-      l1_ratio <- 0.5
-      l1_grad  <- l1_ratio * sign(self$biases)
-      l2_grad  <- (1 - l1_ratio) * self$biases
-      bias_update <- bias_update + self$lambda * (l1_grad + l2_grad)
-
-    } else if (reg_type == "Group_Lasso") {
-      norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE)) + 1e-8
-      reg_term  <- self$lambda * (self$biases / norm_bias)
-      bias_update <- bias_update + reg_term
-
-    } else if (reg_type == "Max_Norm") {
-      max_norm  <- 1.0
-      norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE))
-      clipped_bias <- if (norm_bias > max_norm) {
-        (self$biases / norm_bias) * max_norm
-      } else {
-        self$biases
-      }
-      reg_term <- self$lambda * (self$biases - clipped_bias)
-      bias_update <- bias_update + reg_term
-
-    } else {
-      cat("Warning: Unknown reg_type in SL bias update. No regularization applied.\n")
-      # keep bias_update as lr * grad
-    }
-  }
-
-  # Final manual apply
-  self$biases <- self$biases - bias_update
-}
-
-            
-          }
+                    cat("Single Layer Bias Update\n")
+                    
+                    # 1) Ensure biases matrix [1 x n_units]
+                    if (is.null(self$biases)) stop("Biases are NULL in single-layer mode.")
+                    if (!is.matrix(self$biases)) self$biases <- matrix(as.numeric(self$biases), nrow = 1)
+                    
+                    # 2) Ensure optimizer params list + init slot 1
+                    if (is.null(optimizer_params_biases)) optimizer_params_biases <- list()
+                    if (!is.null(optimizer) && is.null(optimizer_params_biases[[1]])) {
+                      optimizer_params_biases[[1]] <- initialize_optimizer_params(
+                        optimizer,
+                        list(dim(self$biases)),
+                        lookahead_step,
+                        1L
+                      )
+                      cat(">>> SL initialize_optimizer_params (bias) done for layer 1\n")
+                      print(str(optimizer_params_biases[[1]]))
+                      print(names(optimizer_params_biases[[1]]))
+                    }
+                    
+                    # 3) Gradient from errors (per-unit mean)
+                    bias_grad <- colMeans(errors[[1]], na.rm = TRUE)
+                    
+                    # shape to [1 x n_units]
+                    bias_grad <- matrix(rep(bias_grad, length.out = ncol(self$biases)), nrow = 1)
+                    
+                    # optional clip (kept consistent with weights)
+                    bias_grad <- clip_gradient_norm(bias_grad, max_norm = 5.0)
+                    
+                    # Debug
+                    cat("SL bias_grad dim:", paste(dim(bias_grad), collapse = "x"), "\n")
+                    cat("SL bias_grad summary:\n"); print(summary(as.vector(bias_grad)))
+                    
+                    # 4) Optimizer dispatch (preferred path)
+                    if (!is.null(optimizer) && !is.null(optimizer_params_biases[[1]])) {
+                      updated_optimizer <- apply_optimizer_update(
+                        optimizer        = optimizer,
+                        optimizer_params = optimizer_params_biases,
+                        grads_matrix     = bias_grad,   # pass pure gradient (not lr*grad + reg)
+                        lr               = lr,
+                        beta1            = beta1,
+                        beta2            = beta2,
+                        epsilon          = epsilon,
+                        epoch            = epoch,
+                        self             = self,
+                        layer            = 1L,          # <= important: integer index, avoids 'closure' clash
+                        target           = "biases"
+                      )
+                      
+                      # Most optimizers return absolute updated params in your codebase:
+                      self$biases <- updated_optimizer$updated_weights_or_biases
+                      optimizer_params_biases[[1]] <- updated_optimizer$updated_optimizer_params
+                      
+                      cat(">> SL updated biases summary: min =", min(self$biases),
+                          ", mean =", mean(self$biases),
+                          ", max =", max(self$biases), "\n")
+                      
+                    } else {
+                      # 5) Manual / fallback update with regularization (mirrors weights SL fallback)
+                      
+                      bias_update <- lr * bias_grad
+                      
+                      if (!is.null(reg_type)) {
+                        if (reg_type == "L2") {
+                          reg_term <- self$lambda * self$biases
+                          bias_update <- bias_update + reg_term
+                          
+                        } else if (reg_type == "L1") {
+                          reg_term <- self$lambda * sign(self$biases)
+                          bias_update <- bias_update + reg_term
+                          
+                        } else if (reg_type == "L1_L2") {
+                          l1_ratio <- 0.5
+                          l1_grad  <- l1_ratio * sign(self$biases)
+                          l2_grad  <- (1 - l1_ratio) * self$biases
+                          bias_update <- bias_update + self$lambda * (l1_grad + l2_grad)
+                          
+                        } else if (reg_type == "Group_Lasso") {
+                          norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE)) + 1e-8
+                          reg_term  <- self$lambda * (self$biases / norm_bias)
+                          bias_update <- bias_update + reg_term
+                          
+                        } else if (reg_type == "Max_Norm") {
+                          max_norm  <- 1.0
+                          norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE))
+                          clipped_bias <- if (norm_bias > max_norm) {
+                            (self$biases / norm_bias) * max_norm
+                          } else {
+                            self$biases
+                          }
+                          reg_term <- self$lambda * (self$biases - clipped_bias)
+                          bias_update <- bias_update + reg_term
+                          
+                        } else {
+                          cat("Warning: Unknown reg_type in SL bias update. No regularization applied.\n")
+                          # keep bias_update as lr * grad
+                        }
+                      }
+                      
+                      # Final manual apply
+                      self$biases <- self$biases - bias_update
+                    }
+                    
+                    
+                  }
           }
           
           if (self$ML_NN) {
@@ -2567,8 +2567,9 @@ if (!is.null(optimizer) && !is.null(optimizer_params_biases[[1]])) {
       weights_record <- NULL
       biases_record <- NULL
       dim_hidden_layers <- NULL}
+      
+      # WIP: may need to load best_weights/best_biases from saved model files or checkpoints here before predicting
       if (!train) {
-        
         predicted_output_train_reg <- self$predict(Rdata, weights = best_weights, biases = best_biases, activation_functions)
         
       }
@@ -2665,13 +2666,12 @@ if (!is.null(optimizer) && !is.null(optimizer_params_biases[[1]])) {
         })
       }
       
-      # print("print(weights_record)")
-      # print(weights_record)
-      # print("print(biases_record)")
-      # print(biases_record)
-      # assign("loss_status", 'ok', envir = .GlobalEnv)
-      # Assign a value to lossesatoptimalepoch
-      lossesatoptimalepoch <- losses[optimal_epoch]
+
+
+      # Record the loss at the optimal epoch, or fall back to the last epoch's loss if no optimal epoch was found
+      lossesatoptimalepoch <- if (is.na(optimal_epoch)) tail(losses, 1) else losses[optimal_epoch]
+      
+      
       
       # Check if all values are finite
       tryCatch({
@@ -3003,7 +3003,7 @@ DESONN <- R6Class(
     },
     
     
-    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, verbose) {
+    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3234,19 +3234,40 @@ DESONN <- R6Class(
           cat("Optimal epoch:", model_result$optimal_epoch, "\n")
           cat("Loss at optimal:", model_result$losses_at_optimal_epoch, "\n")
           
-          cat("Weights record dims (layer 1): ")
-          if (!is.null(model_result$weights_record[[1]])) {
-            print(dim(model_result$weights_record[[1]]))
+          # ---- Weights ----
+          if (is.list(model_result$weights_record)) {
+            cat("Weights record dims by layer:\n")
+            for (L in seq_along(model_result$weights_record)) {
+              W <- model_result$weights_record[[L]]
+              if (!is.null(W)) {
+                cat(sprintf("  Layer %d: ", L)); print(dim(W))
+              } else {
+                cat(sprintf("  Layer %d: NULL\n", L))
+              }
+            }
           } else {
-            cat("NULL\n")
+            cat("Weights record dims (SL): "); print(dim(model_result$weights_record))
           }
           
-          cat("Biases record dims (layer 1): ")
-          if (!is.null(model_result$biases_record[[1]])) {
-            print(length(model_result$biases_record[[1]]))
+          # ---- Biases ----
+          if (is.list(model_result$biases_record)) {
+            cat("Biases record length by layer:\n")
+            for (L in seq_along(model_result$biases_record)) {
+              b <- model_result$biases_record[[L]]
+              if (!is.null(b)) {
+                # bias could be vector or 1-col matrix
+                blen <- if (is.matrix(b)) nrow(b) * ncol(b) else length(b)
+                cat(sprintf("  Layer %d: %d\n", L, blen))
+              } else {
+                cat(sprintf("  Layer %d: NULL\n", L))
+              }
+            }
           } else {
-            cat("NULL\n")
+            cat("Biases record length (SL): ")
+            blen <- if (is.matrix(model_result$biases_record)) length(model_result$biases_record) else length(model_result$biases_record)
+            print(blen)
           }
+          
           
           Sys.sleep(0.25)  # pause slightly for readability
         }
