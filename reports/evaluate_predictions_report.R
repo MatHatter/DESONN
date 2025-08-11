@@ -74,11 +74,23 @@ View(df_sample_commentary)
 }
 
 
-# Extract first-layer weights from weights_record (replace index as needed)
-weights_mat <- predicted_outputAndTime$weights_record[[1]]
+# === Extract first-layer weights from weights_record ===
+# (replace index as needed for deeper analysis)
+if (ML_NN) {
+  # Multi-layer network: standard weight matrix, safe for rowMeans
+  weights_mat <- predicted_outputAndTime$weights_record[[1]]
+  weights_summary <- round(rowMeans(as.matrix(weights_mat)), 5)
+  cat(">> Multi-layer weights summary (first layer):\n")
+  print(weights_summary)
+} else {
+  # Single-layer network: handle vector or scalar gracefully
+  w_raw <- predicted_outputAndTime$weights_record[[1]]
+  w_mat <- matrix(as.numeric(w_raw), ncol = 1L)
+  weights_summary <- round(as.numeric(w_mat), 5)
+  cat(">> Single-layer weights summary:\n")
+  print(weights_summary)
+}
 
-# Convert weight matrix into vector of averages per sample dimension (e.g., row means)
-weights_summary <- round(rowMeans(weights_mat), 5)  # Or use colMeans if that's what you prefer
 
 # Make sure length aligns with number of features or pad/trim
 max_len <- min(length(pred_vec), length(err_vec), length(labels_vec), length(weights_summary), 15)

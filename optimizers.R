@@ -1,6 +1,47 @@
 apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr, beta1, beta2, epsilon, epoch, self, layer, target,
                                    alpha = NULL, lambda1 = NULL, lambda2 = NULL) {
   
+  # -------- SL shim (normalize shapes so ML-style code works) --------
+  is_sl <- !isTRUE(self$ML_NN)
+  
+  # In SL, weights/biases are matrices, but branches use [[layer]].
+  # Temporarily "box" them into 1-element lists and guarantee shapes.
+  if (is_sl) {
+    orig_weights <- self$weights
+    orig_biases  <- self$biases
+    on.exit({
+      # Unbox back to matrices when we return
+      if (!is.null(orig_weights)) self$weights <- orig_weights
+      if (!is.null(orig_biases))  self$biases  <- orig_biases
+    }, add = TRUE)
+    
+    if (target == "weights" && !is.list(self$weights)) self$weights <- list(as.matrix(self$weights))
+    if (target == "biases"  && !is.list(self$biases))  self$biases  <- list(as.matrix(self$biases))
+  }
+  
+  # Current param matrix and its dim (works in both ML and SL after boxing)
+  param_now <- if (identical(target, "weights")) as.matrix(self$weights[[layer]]) else as.matrix(self$biases[[layer]])
+  if (is.null(dim(param_now))) param_now <- matrix(as.numeric(param_now), 1, 1)
+  target_dim <- dim(param_now)
+  
+  # Make grads a matrix with same shape as the target param
+  gm <- grads_matrix
+  if (is.list(gm)) gm <- gm[[1]]
+  gm <- as.matrix(gm)
+  if (is.null(dim(gm))) gm <- matrix(as.numeric(gm), nrow = target_dim[1], ncol = target_dim[2])
+  if (nrow(gm) != target_dim[1] || ncol(gm) != target_dim[2]) {
+    if (length(gm) == prod(target_dim)) {
+      gm <- matrix(as.numeric(gm), nrow = target_dim[1], ncol = target_dim[2])
+    } else if (length(gm) == 1L) {
+      gm <- matrix(rep(as.numeric(gm), prod(target_dim)), nrow = target_dim[1], ncol = target_dim[2])
+    } else {
+      gm <- matrix(rep(as.numeric(gm)[1], prod(target_dim)), nrow = target_dim[1], ncol = target_dim[2])
+    }
+  }
+  grads_matrix <- gm
+  # -------------------------------------------------------------------
+  
+  
   if (optimizer == "adam") {
     cat(">> Optimizer = adam\n")
     cat("Layer:", layer, "\n")
