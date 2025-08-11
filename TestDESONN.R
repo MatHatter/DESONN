@@ -361,12 +361,8 @@ never_ran_flag <- TRUE
 plot_robustness <- FALSE
 predict_models <- FALSE
 use_loaded_weights <- FALSE
-saveToDisk <- TRUE
-Run1 <- TRUE
-Run2 <- FALSE
-Run3 <- FALSE
-Run1.1 <- FALSE
-Run1.2 <- FALSE
+saveToDisk <- FALSE
+
 # === Step 1: Hyperparameter setup ===
 hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
 ## ====== REQUIRED PACKAGES (only if not already loaded) ======
@@ -464,6 +460,12 @@ get_metric_by_serial <- function(serial, metric_name) {
     stringsAsFactors = FALSE
   )
 }
+## ====== Control panel flags ======
+accuracy     <- TRUE   # show training accuracy/loss
+saturation   <- FALSE   # show output saturation
+max_weight   <- TRUE   # show max weight magnitude
+viewAllPlots <- FALSE  # TRUE shows all plots regardless of individual flags
+verbose      <- FALSE  # TRUE enables additional plot/debug output
 
 ## ====== SINGLE RUN (no logs, no lineage, no temp/prune/add) ======
 if (!do_ensemble) {
@@ -482,6 +484,19 @@ if (!do_ensemble) {
     method          = init_method,
     custom_scale    = custom_scale
   )
+  
+  # Set per-SONN plotting flags before training (if SONNs already exist)
+  if (length(main_model$ensemble)) {
+    for (m in seq_along(main_model$ensemble)) {
+      main_model$ensemble[[m]]$SONNModelViewPlotsConfig <- list(
+        accuracy     = isTRUE(accuracy),
+        saturation   = isTRUE(saturation),
+        max_weight   = isTRUE(max_weight),
+        viewAllPlots = isTRUE(viewAllPlots),
+        verbose      = isTRUE(verbose)
+      )
+    }
+  }
   
   invisible(main_model$train(
     Rdata=X, labels=y, lr=lr, ensemble_number=1L, num_epochs=num_epochs,
@@ -506,10 +521,9 @@ if (!do_ensemble) {
   if (!is.null(main_model$relevance_metric)) {
     cat("\nSingle model relevance_metric:\n"); print(main_model$relevance_metric)
   }
-  
-  # Done. Return here if this is in a function/script.
-  # quit(save="no") # uncomment if you want the script to stop right here.
 }
+
+
 
 ## ====== ENSEMBLE MODE (everything below is unchanged but wrapped) ======
 if (do_ensemble) {
@@ -805,6 +819,20 @@ if (do_ensemble) {
       method          = init_method,
       custom_scale    = custom_scale
     )
+    
+    # Per‑SONN plotting flags
+    if (length(main_model$ensemble)) {
+      for (m in seq_along(main_model$ensemble)) {
+        main_model$ensemble[[m]]$SONNModelViewPlotsConfig <- list(
+          accuracy     = isTRUE(accuracy),
+          saturation   = isTRUE(saturation),
+          max_weight   = isTRUE(max_weight),
+          viewAllPlots = isTRUE(viewAllPlots),
+          verbose      = isTRUE(verbose)
+        )
+      }
+    }
+    
     invisible(main_model$train(
       Rdata=X, labels=y, lr=lr, ensemble_number=1, num_epochs=num_epochs,
       threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
@@ -858,6 +886,20 @@ if (do_ensemble) {
       custom_scale    = custom_scale
     )
     ensembles$temp_ensemble[[1]] <- temp_model
+    
+    # Per‑SONN plotting flags for TEMP
+    if (length(temp_model$ensemble)) {
+      for (m in seq_along(temp_model$ensemble)) {
+        temp_model$ensemble[[m]]$SONNModelViewPlotsConfig <- list(
+          accuracy     = isTRUE(accuracy),
+          saturation   = isTRUE(saturation),
+          max_weight   = isTRUE(max_weight),
+          viewAllPlots = isTRUE(viewAllPlots),
+          verbose      = isTRUE(verbose)
+        )
+      }
+    }
+    
     invisible(temp_model$train(
       Rdata=X, labels=y, lr=lr, ensemble_number=j+1, num_epochs=num_epochs,
       threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,

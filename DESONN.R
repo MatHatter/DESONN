@@ -172,6 +172,16 @@ SONN <- R6Class(
       
       self$map <- matrix(1:N, nrow = grid_rows, ncol = grid_cols)
       
+      # Configuration flags for enabling/disabling per-SONN model training plots
+      self$SONNModelViewPlotsConfig <- list(
+        accuracy   = accuracy,  # training accuracy/loss
+        saturation = saturation,  # output saturation
+        max_weight = max_weight,  # max weight magnitude
+        viewAllPlots = viewAllPlots,
+        verbose    = verbose    # >0 enables all plots regardless of flags
+      )
+      
+      
     },
     initialize_weights = function(input_size, hidden_sizes, output_size, method = init_method, custom_scale = NULL) {
       weights <- list()
@@ -235,10 +245,7 @@ SONN <- R6Class(
       self$biases <- biases
       
       return(list(weights = weights, biases = biases))
-    }
-    
-    
-    ,
+    },
     
     
     process_input_size = function(input_size) {
@@ -294,7 +301,8 @@ SONN <- R6Class(
       for (i in 1:length(biases_list)) {
         self$biases[[i]] <- unlist(biases_list[[i]])  # Assuming biases_list[[i]] is a list of vectors
       }
-    },# Dropout function with no default rate
+    },
+    # Dropout function with no default rate
     dropout = function(x, rate) {
       # If no rate is provided, return x as is
       if (is.null(rate)) {
@@ -309,6 +317,11 @@ SONN <- R6Class(
       
       return(x)
     },# Method to perform self-organization
+    viewSONNModelPlots = function(name) {
+      cfg <- self$SONNModelViewPlotsConfig
+      on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
+      isTRUE(cfg[[name]]) || on_all
+    },
     self_organize = function(Rdata, labels, lr) {
       print("------------------------self-organize-begin----------------------------------------")
       
@@ -1186,79 +1199,60 @@ SONN <- R6Class(
           }
           max_weight_log <- c(max_weight_log, max_weight)
           
-          
-          
-          # Plot training accuracy
+          # Build DF for optional plots
           df <- data.frame(
-            Epoch = 1:length(train_accuracy_log),
-            Accuracy = train_accuracy_log,
-            Loss = train_loss_log,
+            Epoch      = seq_along(train_accuracy_log),
+            Accuracy   = train_accuracy_log,
+            Loss       = train_loss_log,
             MeanOutput = mean_output_log,
-            StdOutput = sd_output_log,
-            MaxWeight = max_weight_log
+            StdOutput  = sd_output_log,
+            MaxWeight  = max_weight_log
           )
           
-          # Build dynamic title string
-          plot_title_prefix <- paste("DESONN", ensemble_number, "SONN", model_iter_num, "| lr:", lr, "| lambda:", lambda)
+          plot_title_prefix <- paste("DESONN", ensemble_number, "SONN", model_iter_num,
+                                     "| lr:", lr, "| lambda:", lambda)
           
           # === Plot 1: Training Accuracy and Loss ===
-          tryCatch({
-            accuracy_loss_plot <<- ggplot(df, aes(x = Epoch)) +
-              geom_line(aes(y = Accuracy), color = "blue", size = 1) +
-              geom_line(aes(y = Loss), color = "red", size = 1) +
-              labs(
-                title = "Training Accuracy (blue) & Loss (red)",
-                y = "Value"
-              ) +
-              theme_minimal() +
-              theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-            
-            ggsave("training_accuracy_loss.png", accuracy_loss_plot, width = 6, height = 4, dpi = 300)
-            
-            while (!is.null(dev.list())) dev.off()
-            print(accuracy_loss_plot)
-          }, error = function(e) {
-            message("❌ Failed to generate accuracy_loss_plot: ", e$message)
-          })
+          if (self$viewSONNModelPlots("accuracy")) {
+            tryCatch({
+              accuracy_loss_plot <<- ggplot(df, aes(x = Epoch)) +
+                geom_line(aes(y = Accuracy), size = 1) +
+                geom_line(aes(y = Loss),     size = 1) +
+                labs(title = "Training Accuracy (blue) & Loss (red)", y = "Value") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              ggsave("training_accuracy_loss.png", accuracy_loss_plot, width = 6, height = 4, dpi = 300)
+              print(accuracy_loss_plot)
+            }, error = function(e) message("❌ accuracy_loss_plot: ", e$message))
+          }
           
           # === Plot 2: Output Saturation ===
-          tryCatch({
-            output_saturation_plot <<- ggplot(df, aes(x = Epoch)) +
-              geom_line(aes(y = MeanOutput), color = "green", size = 1) +
-              geom_line(aes(y = StdOutput), color = "orange", size = 1) +
-              labs(
-                title = "Output Mean (green) & Std Dev (orange)",
-                y = "Output Value"
-              ) +
-              theme_minimal() +
-              theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-            
-            ggsave("output_saturation.png", output_saturation_plot, width = 6, height = 4, dpi = 300)
-            
-            while (!is.null(dev.list())) dev.off()
-            print(output_saturation_plot)
-          }, error = function(e) {
-            message("❌ Failed to generate output_saturation_plot: ", e$message)
-          })
+          if (self$viewSONNModelPlots("saturation")) {
+            tryCatch({
+              output_saturation_plot <<- ggplot(df, aes(x = Epoch)) +
+                geom_line(aes(y = MeanOutput),  size = 1) +
+                geom_line(aes(y = StdOutput),   size = 1) +
+                labs(title = "Output Mean & Std Dev", y = "Output Value") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              ggsave("output_saturation.png", output_saturation_plot, width = 6, height = 4, dpi = 300)
+              print(output_saturation_plot)
+            }, error = function(e) message("❌ output_saturation_plot: ", e$message))
+          }
           
           # === Plot 3: Max Weight Magnitude ===
-          tryCatch({
-            max_weight_plot <<- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
-              geom_line(color = "purple", size = 1) +
-              labs(
-                title = "Max Weight Magnitude Over Time",
-                y = "Max |Weight|"
-              ) +
-              theme_minimal() +
-              theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-            
-            ggsave("max_weight.png", max_weight_plot, width = 6, height = 4, dpi = 300)
-            
-            while (!is.null(dev.list())) dev.off()
-            print(max_weight_plot)
-          }, error = function(e) {
-            message("❌ Failed to generate max_weight_plot: ", e$message)
-          })
+          if (self$viewSONNModelPlots("max_weight")) {
+            tryCatch({
+              max_weight_plot <<- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
+                geom_line(size = 1) +
+                labs(title = "Max Weight Magnitude Over Time", y = "Max |Weight|") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              ggsave("max_weight.png", max_weight_plot, width = 6, height = 4, dpi = 300)
+              print(max_weight_plot)
+            }, error = function(e) message("❌ max_weight_plot: ", e$message))
+          }
+          
           
           
 
@@ -2906,6 +2900,7 @@ DESONN <- R6Class(
       # }
   
     },
+    
     # Function to normalize specific columns in the data
     normalize_data = function(Rdata, numeric_columns) {
       # Calculate mean and standard deviation for each numeric feature
@@ -3125,7 +3120,7 @@ DESONN <- R6Class(
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             predicted_outputAndTime <- suppressMessages(invisible(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train
               )))
             
             
@@ -3207,7 +3202,7 @@ DESONN <- R6Class(
                 threshold_function = threshold_function,
                 best_val_probs = all_best_val_probs[[i]],
                 best_val_labels = all_best_val_labels[[i]],
-                verbose
+                verbose = verbose
                 
               )
             }
@@ -3392,12 +3387,8 @@ DESONN <- R6Class(
             relevance_metric <- relevance_list[[i]]$metrics
             
             cat(">> METRICS FOR ENSEMBLE:", ensemble_number, "MODEL:", i, "\n")
-            cat("[quantization error]:", performance_metric$quant_error, "\n")
-            cat("[topographic error]:", performance_metric$topo_error, "\n")
-            cat("[clustering_quality_db]:", performance_metric$db, "\n")
-            cat("[MSE]:", performance_metric$mse, "\n")
-            cat("[speed]:", performance_metric$speed, "\n")
-            cat("[memory]:", performance_metric$memory, "bytes\n")
+            print(performance_metric)
+            print(relevance_metric)
             
           } else if(learnOnlyTrainingRun == TRUE){
             if(hyperparameter_grid_setup){
@@ -3554,7 +3545,7 @@ DESONN <- R6Class(
               set_names(list(metric), metric_name)
             }
           }) %>%
-            flatten()
+            purrr::list_flatten()
           
           # Add the Model_Name
           flattened_data$Model_Name <- model_name
@@ -5316,107 +5307,62 @@ loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
 
 quantization_error <- function(SONN, Rdata, run_id, verbose) {
   
-  if(ML_NN){
-    # Ensure both SONN$weights and Rdata are numeric matrices
-    if (!is.matrix(Rdata) || !is.matrix(SONN)) { #SONN matrix part might be wrong.
-      if(!is.matrix(Rdata)){
-        Rdata <- as.matrix(Rdata)
-      }else if(!is.matrix(SONN)){
-        SONN$weights <- as.matrix(SONN)
-      }else{
-        stop("Both SONN$weights and Rdata must be matrices.")
-      }
-      
-      # Ensure SONN weights are numeric matrices
-      if (!is.numeric(Rdata)) {
-        if(!is.numeric(Rdata)){
-          Rdata <- as.numeric(Rdata)
-          
-        }else{
-          stop("Both SONN$weights and Rdata must be numeric matrices.")
-        }
-      }
-    }
-    # Calculate the distance between each Rdata point and its closest neuron
-    distances <- apply(Rdata, 1, function(x) {
-      # Calculate Euclidean distance between the input point and each neuron's weight vector
-      neuron_distances <- apply(SONN, 1, function(w) {
-        dist <- sqrt(sum((x - w)^2))  # Euclidean distance calculation
-        dist  # Return the distance
-      })
-      
-      # Return the minimum distance for the current Rdata point
-      min_dist <- min(neuron_distances)
-      return(min_dist)  # Return the minimum distance for the current Rdata point
-    })
-    
-    
-  }else{
-    
-    if (!is.matrix(Rdata) || !is.matrix(SONN$weights)) {
-      if(!is.matrix(Rdata)){
-        Rdata <- as.matrix(Rdata)
-        
-      }else if(!is.matrix(SONN$weights)){
-        SONN$weights <- as.matrix(SONN$weights)
-        
-      }else{
-        stop("Both SONN$weights and Rdata must be matrices.")
-      }
-      
-      # Ensure SONN weights are numeric matrices
-      if (!is.numeric(Rdata)) {
-        if(!is.numeric(Rdata)){
-          Rdata <- as.numeric(Rdata)
-        }else if(!is.numeric(SONN)){
-          SONN <- as.numeric(SONN)
-        }else{
-          stop("Both SONN$weights and Rdata must be numeric matrices.")
-        }
-      }
+  # keep your structure; just coerce data once
+  if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
+  storage.mode(Rdata) <- "double"
+  
+  if (ML_NN) {
+    # --- ML path: get a matrix W from SONN$weights (first input-facing layer) ---
+    if (is.list(SONN$weights)) {
+      # pick the first layer that matches NCOL(Rdata); fallback to first layer
+      idx <- which(vapply(SONN$weights, function(w)
+        is.matrix(w) && (ncol(w) == NCOL(Rdata) || nrow(w) == NCOL(Rdata)), logical(1L)))[1]
+      if (is.na(idx)) idx <- 1L
+      W <- as.matrix(SONN$weights[[idx]])
+    } else if (is.matrix(SONN$weights)) {
+      W <- as.matrix(SONN$weights)
+    } else if (is.matrix(SONN)) {
+      # legacy: codebook passed directly as a matrix
+      W <- as.matrix(SONN)
+    } else {
+      if (isTRUE(verbose)) cat("[quantization error]: NA\n")
+      return(NA_real_)
     }
     
-    # Calculate the distance between each Rdata point and its closest neuron
-    distances <- apply(Rdata, 1, function(x) {
-      # Calculate Euclidean distance between the input point and each neuron's weight vector
-      neuron_distances <- apply(SONN$weights, 1, function(w) {
-        dist <- sqrt(sum((x - w)^2))  # Euclidean distance calculation
-        dist  # Return the distance
-      })
-      
-      # Return the minimum distance for the current Rdata point
-      min_dist <- min(neuron_distances)
-      
-      return(min_dist)  # Return the minimum distance for the current Rdata point
-    })
+  } else {
     
+    # --- SL path: expect SONN$weights to be a matrix ---
+    if (!is.matrix(SONN$weights)) SONN$weights <- as.matrix(SONN$weights)
+    W <- SONN$weights
   }
   
-  
-  # Debugging step: Print the distances vector
-  # print("Distances vector:")
-  # print(distances)
-  
-  # Handle empty or all NA distances
-  if (length(distances) == 0 || all(is.na(distances))) {
-    warning("Distances vector is empty or contains only NA values")
-    return(NA)
+  # orient W so columns = features in Rdata
+  storage.mode(W) <- "double"
+  if (ncol(W) != NCOL(Rdata) && nrow(W) == NCOL(Rdata)) W <- t(W)
+  if (ncol(W) != NCOL(Rdata)) {
+    if (isTRUE(verbose)) cat("[quantization error]: NA\n")
+    return(NA_real_)
   }
   
-  # Calculate the mean of distances, ignoring NA values
+  # === your original distance logic (but use W, not SONN) ===
+  distances <- apply(Rdata, 1L, function(x) {
+    neuron_distances <- apply(W, 1L, function(w) {
+      sqrt(sum((x - w)^2))
+    })
+    min(neuron_distances)
+  })
+  
+  if (!length(distances) || all(!is.finite(distances))) {
+    if (isTRUE(verbose)) cat("[quantization error]: NA\n")
+    return(NA_real_)
+  }
+  
   mean_distance <- mean(distances, na.rm = TRUE)
   
-  # Print the mean_distance to verify its value
-  # print("Mean of distances:")
-  if (verbose) {
-    print("quantization error")
-    print(mean_distance)
+  if (isTRUE(verbose)) {
+    cat("[quantization error]: ", format(mean_distance, digits = 7), "\n", sep = "")
   }
-  # Return the average distance, which measures how well the network represents the input data
   return(mean_distance)
-  if (verbose) {
-    print("quantization error complete")
-  }
 }
 
 # Model-only topo error: uses layer-1 weights + map inside SONN
