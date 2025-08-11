@@ -174,11 +174,11 @@ SONN <- R6Class(
       
       # Configuration flags for enabling/disabling per-SONN model training plots
       self$SONNModelViewPlotsConfig <- list(
-        accuracy   = accuracy,  # training accuracy/loss
-        saturation = saturation,  # output saturation
-        max_weight = max_weight,  # max weight magnitude
+        accuracy_plot = accuracy_plot,  # training accuracy/loss
+        saturation_plot = saturation_plot,  # output saturation
+        max_weight_plot = max_weight_plot,  # max weight magnitude
         viewAllPlots = viewAllPlots,
-        verbose    = verbose    # >0 enables all plots regardless of flags
+        verbose    = verbose
       )
       
       
@@ -1213,42 +1213,42 @@ SONN <- R6Class(
                                      "| lr:", lr, "| lambda:", lambda)
           
           # === Plot 1: Training Accuracy and Loss ===
-          if (self$viewSONNModelPlots("accuracy")) {
+          if (self$viewSONNModelPlots("accuracy_plot")) {
             tryCatch({
-              accuracy_loss_plot <<- ggplot(df, aes(x = Epoch)) +
+              accuracy_loss_plot <- ggplot(df, aes(x = Epoch)) +
                 geom_line(aes(y = Accuracy), size = 1) +
                 geom_line(aes(y = Loss),     size = 1) +
                 labs(title = "Training Accuracy (blue) & Loss (red)", y = "Value") +
                 theme_minimal() +
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              ggsave("training_accuracy_loss.png", accuracy_loss_plot, width = 6, height = 4, dpi = 300)
+              ggsave(file.path("plots", "training_accuracy_loss_plot.png"), accuracy_loss_plot, width = 6, height = 4, dpi = 300)
               print(accuracy_loss_plot)
             }, error = function(e) message("❌ accuracy_loss_plot: ", e$message))
           }
           
           # === Plot 2: Output Saturation ===
-          if (self$viewSONNModelPlots("saturation")) {
+          if (self$viewSONNModelPlots("saturation_plot")) {
             tryCatch({
-              output_saturation_plot <<- ggplot(df, aes(x = Epoch)) +
+              output_saturation_plot <- ggplot(df, aes(x = Epoch)) +
                 geom_line(aes(y = MeanOutput),  size = 1) +
                 geom_line(aes(y = StdOutput),   size = 1) +
                 labs(title = "Output Mean & Std Dev", y = "Output Value") +
                 theme_minimal() +
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              ggsave("output_saturation.png", output_saturation_plot, width = 6, height = 4, dpi = 300)
+              ggsave(file.path("plots", "output_saturation_plot.png"), output_saturation_plot, width = 6, height = 4, dpi = 300)
               print(output_saturation_plot)
             }, error = function(e) message("❌ output_saturation_plot: ", e$message))
           }
           
           # === Plot 3: Max Weight Magnitude ===
-          if (self$viewSONNModelPlots("max_weight")) {
+          if (self$viewSONNModelPlots("max_weight_plot")) {
             tryCatch({
-              max_weight_plot <<- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
+              max_weight_plot <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
                 geom_line(size = 1) +
                 labs(title = "Max Weight Magnitude Over Time", y = "Max |Weight|") +
                 theme_minimal() +
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              ggsave("max_weight.png", max_weight_plot, width = 6, height = 4, dpi = 300)
+              ggsave(file.path("plots", "max_weight_plot.png"), max_weight_plot, width = 6, height = 4, dpi = 300)
               print(max_weight_plot)
             }, error = function(e) message("❌ max_weight_plot: ", e$message))
           }
@@ -1858,7 +1858,6 @@ SONN <- R6Class(
                   }}
               }}
             else {
-              # ---------------- SINGLE-LAYER NN ----------------
               # ---------------- SINGLE-LAYER NN ----------------
               if (!is.null(self$weights) && !is.null(optimizer)) {
                 
@@ -2887,18 +2886,16 @@ DESONN <- R6Class(
       
       self$ensembles <- ensembles
       
+      # Configuration flags for enabling/disabling per-DESONN model performance/relevance plots
+      self$DESONNModelViewPlotsConfig <- list(
+        performance_high_mean_plots = performance_high_mean_plots,  # high mean performance plots
+        performance_low_mean_plots  = performance_low_mean_plots,   # low mean performance plots
+        relevance_high_mean_plots   = relevance_high_mean_plots,    # high mean relevance plots
+        relevance_low_mean_plots    = relevance_low_mean_plots,     # low mean relevance plots
+        viewAllPlots = viewAllPlots,
+        verbose      = verbose  
+      )
       
-      # if(!hyperparameter_grid_setup){
-        # ensembles$main_ensemble <- list(
-          # run_results_1_1
-          # run_results_1_2,
-          # run_results_1_3,
-          # run_results_1_4,
-          # run_results_1_5
-        # )
-        # ensembles$temp_ensemble <- vector("list", length(self$ensemble))
-      # }
-  
     },
     
     # Function to normalize specific columns in the data
@@ -2996,7 +2993,11 @@ DESONN <- R6Class(
       # Return the computed batch size
       return(batch_size)
     },
-    
+    viewDESONNModelPlots = function(name) {
+      cfg <- self$DESONNModelViewPlotsConfig
+      on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
+      isTRUE(cfg[[name]]) || on_all
+    },
     
     train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
       
@@ -3291,13 +3292,19 @@ DESONN <- R6Class(
         )
         
             
-
-            if (showMeanBoxPlots == TRUE) {
-              print(performance_relevance_plots$performance_high_mean_plots)
-              print(performance_relevance_plots$performance_low_mean_plots)
-              print(performance_relevance_plots$relevance_high_mean_plots)
-              print(performance_relevance_plots$relevance_low_mean_plots)
-            }
+        if (viewDESONNModelPlots("performance_high_mean_plots")) {
+          print(performance_relevance_plots$performance_high_mean_plots)
+        }
+        if (viewDESONNModelPlots("performance_low_mean_plots")) {
+          print(performance_relevance_plots$performance_low_mean_plots)
+        }
+        if (viewDESONNModelPlots("relevance_high_mean_plots")) {
+          print(performance_relevance_plots$relevance_high_mean_plots)
+        }
+        if (viewDESONNModelPlots("relevance_low_mean_plots")) {
+          print(performance_relevance_plots$relevance_low_mean_plots)
+        }
+        
 
             
             # At the end of the training process, call the predict function
@@ -3724,16 +3731,14 @@ DESONN <- R6Class(
       
       # Loop over each unique metric
       for (metric in unique(high_mean_df$Metric)) {
-        # Subset the data for the current metric
-        
         # Filter out rows where the Value is 0 for metrics containing "precision" or "mean_precision"
         filtered_high_mean_df <- high_mean_df[!(grepl("precision", high_mean_df$Metric, ignore.case = TRUE) & high_mean_df$Value == 0), ]
         
-        # Filter out rows where the Value is NA
+        # Filter out rows where the Value is NA or infinite
         filtered_high_mean_df <- filtered_high_mean_df[!is.na(filtered_high_mean_df$Value) & !is.infinite(filtered_high_mean_df$Value), ]
         
         # Subset the data for the current metric
-        plot_data_high <- filtered_high_mean_df[filtered_high_mean_df$Metric == metric, ] #<<-
+        plot_data_high <- filtered_high_mean_df[filtered_high_mean_df$Metric == metric, ]
         
         # Check if plot_data is not empty
         if (nrow(plot_data_high) > 0) {
@@ -3741,13 +3746,11 @@ DESONN <- R6Class(
           plot_data <- plot_data_high %>%
             mutate(Outlier = ifelse(Value %in% self$identify_outliers(Value), Value, NA))
           
-          #Add columns for outliers
+          # Add columns for outliers
           plot_data$Model_Name_Outlier <- plot_data$Model_Name
-          
           
           # Set the RowName to NA where there are no outliers
           plot_data$Model_Name_Outlier[is.na(plot_data$Outlier)] <- NA
-          
           
           # Create bin labels for "precisions" or "mean_precisions"
           if (grepl("precision", metric, ignore.case = TRUE)) {
@@ -3770,27 +3773,34 @@ DESONN <- R6Class(
           
           # Store the plot in the list
           high_mean_plots[[metric]] <- high_mean_plot
-        } else {
-          # Print a message if there is no data to plot
-          ##print(paste("No data to plot for metric:", metric))
+          
+          # Save the plot in the "plot" folder (cross-platform)
+          ggsave(
+            file.path("plots", paste0("high_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
+            high_mean_plot,
+            width = 6,
+            height = 4,
+            dpi = 300
+          )
         }
       }
       return(high_mean_plots)
-    },
+    }
+    ,
     
     update_performance_and_relevance_low = function(low_mean_df) {
       low_mean_plots <- list()
+      
       # Loop over each unique metric
       for (metric in unique(low_mean_df$Metric)) {
-        # Subset the data for the current metric
-        
         # Filter out rows where the Value is 0 for metrics containing "precision" or "mean_precision"
         filtered_low_mean_df <- low_mean_df[!(grepl("precision", low_mean_df$Metric, ignore.case = TRUE) & low_mean_df$Value == 0), ]
         
-        # Filter out rows where the Value is NA
+        # Filter out rows where the Value is NA or infinite
         filtered_low_mean_df <- filtered_low_mean_df[!is.na(filtered_low_mean_df$Value) & !is.infinite(filtered_low_mean_df$Value), ]
         
-        plot_data_low <- filtered_low_mean_df[filtered_low_mean_df$Metric == metric, ] #<<-
+        # Subset the data for the current metric
+        plot_data_low <- filtered_low_mean_df[filtered_low_mean_df$Metric == metric, ]
         
         # Check if plot_data is not empty
         if (nrow(plot_data_low) > 0) {
@@ -3798,19 +3808,17 @@ DESONN <- R6Class(
           plot_data <- plot_data_low %>%
             mutate(Outlier = ifelse(Value %in% self$identify_outliers(Value), Value, NA))
           
-          #Add columns for outliers
+          # Add columns for outliers
           plot_data$Model_Name_Outlier <- plot_data$Model_Name
-          
           
           # Set the RowName to NA where there are no outliers
           plot_data$Model_Name_Outlier[is.na(plot_data$Outlier)] <- NA
-          
           
           # Create bin labels for "precisions" or "mean_precisions"
           if (grepl("precision", metric, ignore.case = TRUE)) {
             plot_data$Title <- paste0("Boxplot for ", metric, " (", self$create_bin_labels(plot_data$Value), ")")
           } else {
-            plot_data$Title <- paste("Boxplot for", metric) #, " Ensemble Number: ", ensemble_name)
+            plot_data$Title <- paste("Boxplot for", metric)
           }
           
           # Create box plot
@@ -3827,36 +3835,21 @@ DESONN <- R6Class(
           
           # Store the plot in the list
           low_mean_plots[[metric]] <- low_mean_plot
-        } else {
-          # Print a message if there is no data to plot
-          ##print(paste("No data to plot for metric:", metric))
+          
+          # Save the plot in the "plot" folder (cross-platform)
+          ggsave(
+            file.path("plots", paste0("low_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
+            low_mean_plot,
+            width = 6,
+            height = 4,
+            dpi = 300
+          )
         }
       }
+      
       return(low_mean_plots)
-      #},
-      #         # Method for predicting output values
-      #         predict = function(Rdata) {
-      #             # Use the ensemble of SONNs to predict output values
-      #             predictions <- lapply(self$ensemble, function(SONN) {
-      #                 SONN$predict(Rdata)
-      #             })
-      #             # Combine the predictions from each SONN
-      #             # (Implementation details omitted for brevity)
-      #             return(combined_predictions)
-      #         },
-      #         # Method for predicting output values using weighted averaging
-      #         predict_weighted_average = function(Rdata) {
-      #             predictions <- lapply(self$ensemble, function(SONN) {
-      #                 SONN$predict(Rdata)
-      #             })
-      #
-      #             # Calculate the performance-weighted average of the predictions
-      #             weighted_average_predictions <- rowMeans(sapply(seq_along(predictions), function(i) {
-      #                 predictions[[i]] * self$performance[i]
-      #             }))
-      #
-      #             return(weighted_average_predictions)
-    },
+    }
+    ,
     #This is for NvrRan TRUE and LearnOnlyTraining TRUE
     store_metadata_precursor = function(run_id, model_iter_num, num_epochs, threshold, all_weights, all_biases, single_predicted_output_learn, single_learn_time, actual_values) {
       

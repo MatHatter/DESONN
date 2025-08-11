@@ -85,18 +85,18 @@ num_epochs <- 3
 custom_scale <- .05
 threshold <- .98
 # ML_NN <- TRUE
-ML_NN <- FALSE
+ML_NN <- TRUE
 train <- TRUE
 learnOnlyTrainingRun <- FALSE
 update_weights <- TRUE
 update_biases <- TRUE
 # hidden_sizes <- NULL
-hidden_sizes <- c(12)
+hidden_sizes <- c(32, 12)
 
-activation_functions <- list(relu, sigmoid) #hidden layers + output layer
+activation_functions <- list(relu, relu, sigmoid) #hidden layers + output layer
 
 
-activation_functions_learn <- list(relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
+activation_functions_learn <- list(relu, relu, sigmoid) #list(relu, bent_identity, sigmoid) #list("elu", bent_identity, "sigmoid") # list(NULL, NULL, NULL, NULL) #activation_functions #list("relu", "custom_activation", NULL, "relu")  #"custom_activation"
 epsilon <- 1e-6
 loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
@@ -330,7 +330,7 @@ binary_flag <- is_binary(y)
 #██      ██    ██ ██  ██ ██    ██    ██   ██ ██    ██ ██          ██      ██   ██ ██  ██ ██ ██      ██     $$$$$$$$$$$$$$
 #██████  ██████  ██   ████    ██    ██   ██  ██████  ███████     ██      ██   ██ ██   ████ ███████ ███████ $$$$$$$$$$$$$$
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-showMeanBoxPlots <- FALSE
+
 viewTables <- FALSE
 Losses_At_Optimal_Epoch_filenumber <- 3
 writeTofiles <- FALSE
@@ -381,8 +381,8 @@ results   <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric()
 `%||%` <- function(a,b) if (is.null(a) || length(a)==0) b else a
 
 # You can set these BEFORE sourcing the file. Defaults below are only fallbacks.
-num_networks  <- get0("num_networks", ifnotfound = 2)
-num_ensembles <- get0("num_ensembles", ifnotfound = 2)
+num_networks  <- get0("num_networks", ifnotfound = 1)
+num_ensembles <- get0("num_ensembles", ifnotfound = 1)
 
 # ---- decide mode (single vs ensemble) ----
 do_ensemble <- !(is.null(num_ensembles) || is.na(num_ensembles) || num_ensembles <= 0 || (num_networks %||% 1) <= 1)
@@ -461,11 +461,20 @@ get_metric_by_serial <- function(serial, metric_name) {
   )
 }
 ## ====== Control panel flags ======
-accuracy     <- TRUE   # show training accuracy/loss
-saturation   <- FALSE   # show output saturation
-max_weight   <- TRUE   # show max weight magnitude
 viewAllPlots <- FALSE  # TRUE shows all plots regardless of individual flags
 verbose      <- FALSE  # TRUE enables additional plot/debug output
+
+#SONN plots
+accuracy_plot     <- TRUE   # show training accuracy/loss
+saturation_plot   <- FALSE   # show output saturation
+max_weight_plot   <- TRUE   # Yes max weight magnitude
+
+#DESONN plots
+performance_high_mean_plots <- TRUE
+performance_low_mean_plots <- TRUE
+relevance_high_mean_plots <- TRUE
+relevance_low_mean_plots <- TRUE
+
 
 ## ====== SINGLE RUN (no logs, no lineage, no temp/prune/add) ======
 if (!do_ensemble) {
@@ -489,11 +498,11 @@ if (!do_ensemble) {
   if (length(main_model$ensemble)) {
     for (m in seq_along(main_model$ensemble)) {
       main_model$ensemble[[m]]$SONNModelViewPlotsConfig <- list(
-        accuracy     = isTRUE(accuracy),
-        saturation   = isTRUE(saturation),
-        max_weight   = isTRUE(max_weight),
-        viewAllPlots = isTRUE(viewAllPlots),
-        verbose      = isTRUE(verbose)
+        accuracy_plot   = isTRUE(accuracy_plot),
+        saturation_plot = isTRUE(saturation_plot),
+        max_weight_plot = isTRUE(max_weight_plot),
+        viewAllPlots    = isTRUE(viewAllPlots),
+        verbose         = isTRUE(verbose)
       )
     }
   }
@@ -824,11 +833,25 @@ if (do_ensemble) {
     if (length(main_model$ensemble)) {
       for (m in seq_along(main_model$ensemble)) {
         main_model$ensemble[[m]]$SONNModelViewPlotsConfig <- list(
-          accuracy     = isTRUE(accuracy),
-          saturation   = isTRUE(saturation),
-          max_weight   = isTRUE(max_weight),
-          viewAllPlots = isTRUE(viewAllPlots),
-          verbose      = isTRUE(verbose)
+          accuracy_plot   = isTRUE(accuracy_plot),
+          saturation_plot = isTRUE(saturation_plot),
+          max_weight_plot = isTRUE(max_weight_plot),
+          viewAllPlots    = isTRUE(viewAllPlots),
+          verbose         = isTRUE(verbose)
+        )
+      }
+    }
+    
+    # Per‑DESONN plotting flags (MAIN)
+    if (length(main_model$ensemble)) {
+      for (m in seq_along(main_model$ensemble)) {
+        main_model$ensemble[[m]]$DESONNModelViewPlotsConfig <- list(
+          performance_high_mean_plots = isTRUE(performance_high_mean_plots),
+          performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
+          relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
+          relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
+          viewAllPlots                = isTRUE(viewAllPlots),
+          verbose                     = isTRUE(verbose)
         )
       }
     }
@@ -891,11 +914,25 @@ if (do_ensemble) {
     if (length(temp_model$ensemble)) {
       for (m in seq_along(temp_model$ensemble)) {
         temp_model$ensemble[[m]]$SONNModelViewPlotsConfig <- list(
-          accuracy     = isTRUE(accuracy),
-          saturation   = isTRUE(saturation),
-          max_weight   = isTRUE(max_weight),
-          viewAllPlots = isTRUE(viewAllPlots),
-          verbose      = isTRUE(verbose)
+          accuracy_plot   = isTRUE(accuracy_plot),
+          saturation_plot = isTRUE(saturation_plot),
+          max_weight_plot = isTRUE(max_weight_plot),
+          viewAllPlots    = isTRUE(viewAllPlots),
+          verbose         = isTRUE(verbose)
+        )
+      }
+    }
+    
+    # Per-DESONN plotting flags for TEMP
+    if (length(temp_model$ensemble)) {
+      for (m in seq_along(temp_model$ensemble)) {
+        temp_model$ensemble[[m]]$DESONNModelViewPlotsConfig <- list(
+          performance_high_mean_plots = isTRUE(performance_high_mean_plots),
+          performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
+          relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
+          relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
+          viewAllPlots                = isTRUE(viewAllPlots),
+          verbose                     = isTRUE(verbose)
         )
       }
     }
@@ -998,99 +1035,6 @@ if (do_ensemble) {
 
 
 
-
-
-
-# if (hyperparameter_grid_setup) {
-#   # Define grid of learning rates and regularization values
-#   lr_vals <- c(0.3)
-#   lambda_vals <- c(0.000028, 0.000011)
-#   hyper_grid <- expand.grid(lr = lr_vals, lambda = lambda_vals)
-#   
-#   # Loop through all combinations
-#   for (j in 1:nrow(hyper_grid)) {
-#     lr <- hyper_grid$lr[j]
-#     lambda <- hyper_grid$lambda[j]
-#     
-#     # === Initialize DESONN model ===
-#     if (ML_NN) {
-#       DESONN_model <- DESONN$new(
-#         num_networks = num_networks,
-#         input_size = input_size,
-#         hidden_sizes = hidden_sizes,
-#         output_size = output_size,
-#         N = N,
-#         lambda = lambda,
-#         ensemble_number = j,
-#         ensembles = ensembles,
-#         ML_NN = ML_NN,
-#         method = init_method,
-#         custom_scale = custom_scale
-#       )
-#     } else {
-#       DESONN_model <- DESONN$new(
-#         num_networks = num_networks,
-#         input_size = input_size,
-#         output_size = output_size,
-#         N = N,
-#         lambda = lambda,
-#         ensemble_number = j,
-#         ensembles = ensembles,
-#         ML_NN = ML_NN,
-#         method = init_method,
-#         custom_scale = custom_scale
-#       )
-#     }
-#     
-#     # === Train the model ===
-#     run_result <- DESONN_model$train(
-#       Rdata = X,
-#       labels = y,
-#       lr = lr,
-#       ensemble_number = j,
-#       num_epochs = num_epochs,
-#       threshold = threshold,
-#       reg_type = reg_type,
-#       numeric_columns = numeric_columns,
-#       activation_functions_learn = activation_functions_learn,
-#       activation_functions = activation_functions,
-#       dropout_rates_learn = dropout_rates_learn,
-#       dropout_rates = dropout_rates,
-#       optimizer = optimizer,
-#       beta1 = beta1,
-#       beta2 = beta2,
-#       epsilon = epsilon,
-#       lookahead_step = lookahead_step,
-#       batch_normalize_data = batch_normalize_data,
-#       gamma_bn = gamma_bn,
-#       beta_bn = beta_bn,
-#       epsilon_bn = epsilon_bn,
-#       momentum_bn = momentum_bn,
-#       is_training_bn = is_training_bn,
-#       shuffle_bn = shuffle_bn,
-#       loss_type = loss_type,
-#       sample_weights = sample_weights,
-#       X_validation = X_validation,
-#       y_validation = y_validation,
-#       threshold_function = threshold_function,
-#       verbose = verbose
-#     )
-#     
-#     # === Save result to results table ===
-#     results <- rbind(results, data.frame(
-#       lr = lr,
-#       lambda = lambda,
-#       accuracy = run_result$accuracy
-#     ))
-#     
-#     cat("Finished grid run", j, "of", nrow(hyper_grid), "-> Accuracy:", run_result$accuracy, "\n")
-#   }
-#   
-# } else {
-#   # === Manual run with provided lr1 and lambda1 ===
-#   lr <- lr
-#   lambda <- lambda
-#   
 
 if (saveToDisk) {
   
