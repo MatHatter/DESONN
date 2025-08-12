@@ -173,7 +173,7 @@ SONN <- R6Class(
       self$map <- matrix(1:N, nrow = grid_rows, ncol = grid_cols)
       
       # Configuration flags for enabling/disabling per-SONN model training plots
-      self$SONNModelViewPlotsConfig <- list(
+      self$PerEpochlViewPlotsConfig <- list(
         accuracy_plot = accuracy_plot,  # training accuracy/loss
         saturation_plot = saturation_plot,  # output saturation
         max_weight_plot = max_weight_plot,  # max weight magnitude
@@ -317,8 +317,8 @@ SONN <- R6Class(
       
       return(x)
     },# Method to perform self-organization
-    viewSONNModelPlots = function(name) {
-      cfg <- self$SONNModelViewPlotsConfig
+    viewPerEpochPlots = function(name) {
+      cfg <- self$PerEpochlViewPlotsConfig
       on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
       isTRUE(cfg[[name]]) || on_all
     },
@@ -1213,7 +1213,7 @@ SONN <- R6Class(
                                      "| lr:", lr, "| lambda:", lambda)
           
           # === Plot 1: Training Accuracy and Loss ===
-          if (self$viewSONNModelPlots("accuracy_plot")) {
+          if (self$viewPerEpochPlots("accuracy_plot")) {
             tryCatch({
               accuracy_loss_plot <- ggplot(df, aes(x = Epoch)) +
                 geom_line(aes(y = Accuracy), size = 1) +
@@ -1227,7 +1227,7 @@ SONN <- R6Class(
           }
           
           # === Plot 2: Output Saturation ===
-          if (self$viewSONNModelPlots("saturation_plot")) {
+          if (self$viewPerEpochPlots("saturation_plot")) {
             tryCatch({
               output_saturation_plot <- ggplot(df, aes(x = Epoch)) +
                 geom_line(aes(y = MeanOutput),  size = 1) +
@@ -1241,7 +1241,7 @@ SONN <- R6Class(
           }
           
           # === Plot 3: Max Weight Magnitude ===
-          if (self$viewSONNModelPlots("max_weight_plot")) {
+          if (self$viewPerEpochPlots("max_weight_plot")) {
             tryCatch({
               max_weight_plot <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
                 geom_line(size = 1) +
@@ -2887,7 +2887,7 @@ DESONN <- R6Class(
       self$ensembles <- ensembles
       
       # Configuration flags for enabling/disabling per-DESONN model performance/relevance plots
-      self$DESONNModelViewPlotsConfig <- list(
+      self$FinalUpdatePerformanceandRelevanceViewPlotsConfig  <- list(
         performance_high_mean_plots = performance_high_mean_plots,  # high mean performance plots
         performance_low_mean_plots  = performance_low_mean_plots,   # low mean performance plots
         relevance_high_mean_plots   = relevance_high_mean_plots,    # high mean relevance plots
@@ -2992,9 +2992,9 @@ DESONN <- R6Class(
       
       # Return the computed batch size
       return(batch_size)
-    },
-    viewDESONNModelPlots = function(name) {
-      cfg <- self$DESONNModelViewPlotsConfig
+    }, 
+    viewFinalUpdatePerformanceandRelevancePlots = function(name) {
+      cfg <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
       on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
       isTRUE(cfg[[name]]) || on_all
     },
@@ -3347,16 +3347,16 @@ DESONN <- R6Class(
           invisible(list(printed = character(0), skipped = lab))
         }
         
-        if (self$viewDESONNModelPlots("performance_high_mean_plots")) {
+        if (self$viewFinalUpdatePerformanceandRelevancePlots("performance_high_mean_plots")) {
           print_plotlist_verbose(performance_relevance_plots$performance_high_mean_plots, "Performance High Mean Plots")
         }
-        if (self$viewDESONNModelPlots("performance_low_mean_plots")) {
+        if (self$viewFinalUpdatePerformanceandRelevancePlots("performance_low_mean_plots")) {
           print_plotlist_verbose(performance_relevance_plots$performance_low_mean_plots,  "Performance Low Mean Plots")
         }
-        if (self$viewDESONNModelPlots("relevance_high_mean_plots")) {
+        if (self$viewFinalUpdatePerformanceandRelevancePlots("relevance_high_mean_plots")) {
           print_plotlist_verbose(performance_relevance_plots$relevance_high_mean_plots,   "Relevance High Mean Plots")
         }
-        if (self$viewDESONNModelPlots("relevance_low_mean_plots")) {
+        if (self$viewFinalUpdatePerformanceandRelevancePlots("relevance_low_mean_plots")) {
           print_plotlist_verbose(performance_relevance_plots$relevance_low_mean_plots,    "Relevance Low Mean Plots")
         }
         
