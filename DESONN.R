@@ -408,8 +408,8 @@ SONN <- R6Class(
         }
       }
       
-      print("print(str(outputs))")
-      print(str(outputs))
+      print("str(outputs)")
+      str(outputs)
       
       
       
@@ -454,13 +454,13 @@ SONN <- R6Class(
       # Store output error
       errors <- vector("list", self$num_layers)
       errors[[self$num_layers]] <- as.matrix(error_1000x10)
-      print(str(errors[[self$num_layers]]))
+      str(errors[[self$num_layers]])
       
       
       # Store output error
       errors <- vector("list", self$num_layers)
       errors[[self$num_layers]] <- as.matrix(error_1000x10)
-      print(str(errors[[self$num_layers]]))
+      str(errors[[self$num_layers]])
       
       
       
@@ -589,8 +589,8 @@ SONN <- R6Class(
       
       
       
-      print("end")
-      print(str(errors))
+      print("str(errors)")
+      str(errors)
       
       
       if (self$ML_NN) {
@@ -1462,7 +1462,7 @@ SONN <- R6Class(
                     
                     # $$$$$$$$$$$$$$$ DEBUGGING OUTPUT $$$$$$$$$$$$$$$
                     cat(">>> After initialize_optimizer_params() for layer", layer, "\n")
-                    print(str(optimizer_params_weights[[layer]]))  # structure of this specific layer’s params
+                    str(optimizer_params_weights[[layer]])  # structure of this specific layer’s params
                     print(names(optimizer_params_weights[[layer]]))  # list element names
                   }
                   
@@ -1870,7 +1870,7 @@ SONN <- R6Class(
                     1L
                   )
                   cat(">>> SL initialize_optimizer_params done for layer 1\n")
-                  print(str(optimizer_params_weights[[1]]))
+                  str(optimizer_params_weights[[1]])
                   print(names(optimizer_params_weights[[1]]))
                 }
                 
@@ -2390,7 +2390,7 @@ SONN <- R6Class(
                         1L
                       )
                       cat(">>> SL initialize_optimizer_params (bias) done for layer 1\n")
-                      print(str(optimizer_params_biases[[1]]))
+                      str(optimizer_params_biases[[1]])
                       print(names(optimizer_params_biases[[1]]))
                     }
                     
@@ -3119,10 +3119,10 @@ DESONN <- R6Class(
           self$ensemble[[i]]$self_organize(Rdata, labels, lr)
           if (learnOnlyTrainingRun == FALSE) {
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
-            predicted_outputAndTime <- suppressMessages(invisible(
+            predicted_outputAndTime <- suppressMessages(
               self$ensemble[[i]]$train_with_l2_regularization(
                 Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train
-              )))
+              ))
             
             
             
@@ -3177,8 +3177,8 @@ DESONN <- R6Class(
               cat("Best Validation Labels (first 5):\n"); print(head(all_best_val_labels[[i]], 5))
               
               # Debug weights and biases
-              cat("Weights Record (layer 1 preview):\n"); print(str(all_weights[[i]][[1]]))
-              cat("Biases Record (layer 1 preview):\n"); print(str(all_biases[[i]][[1]]))
+              cat("Weights Record (layer 1 preview):\n"); str(all_weights[[i]][[1]])
+              cat("Biases Record (layer 1 preview):\n"); str(all_biases[[i]][[1]])
               
               # Debug activation functions
               cat("Activation Functions Used:\n"); print(all_activation_functions[[i]])
@@ -3291,18 +3291,73 @@ DESONN <- R6Class(
           verbose = verbose
         )
         
+        `%||%` <- function(a,b) if (is.null(a) || !length(a)) b else a
+        
+        print_plotlist_verbose <- function(x, label = NULL) {
+          lab <- label %||% "Plot"
+          
+          # Case 1: a single ggplot
+          if (inherits(x, "ggplot")) {
+            print(x)
+            message(lab, ": printed 1 plot")
+            return(invisible(list(printed = "<single>", skipped = character(0))))
+          }
+          
+          # Case 2: a list (possibly mixed)
+          if (is.list(x)) {
+            nms <- names(x)
+            if (is.null(nms)) nms <- as.character(seq_along(x))
             
-        if (viewDESONNModelPlots("performance_high_mean_plots")) {
-          print(performance_relevance_plots$performance_high_mean_plots)
+            printed <- character(0)
+            skipped <- character(0)
+            
+            for (k in seq_along(x)) {
+              p <- x[[k]]
+              nm <- nms[[k]]
+              
+              if (is.null(p)) {
+                skipped <- c(skipped, sprintf("%s (NULL)", nm))
+                next
+              }
+              if (inherits(p, "ggplot")) {
+                print(p)
+                printed <- c(printed, nm)
+                next
+              }
+              if (is.list(p) && !length(p)) {
+                skipped <- c(skipped, sprintf("%s (empty list)", nm))
+                next
+              }
+              skipped <- c(skipped, sprintf("%s (type=%s)", nm, paste(class(p), collapse="+")))
+            }
+            
+            # Summary lines
+            if (length(printed))   message(lab, ": printed [", paste(printed, collapse=", "), "]")
+            if (length(skipped))   message(lab, ": skipped [", paste(skipped, collapse=", "), "] — metrics didn’t fit criteria or not ggplot")
+            
+            # If nothing at all printed and nothing to skip (empty list)
+            if (!length(printed) && !length(skipped))
+              message(lab, ": empty (no metrics)")
+            
+            return(invisible(list(printed = printed, skipped = skipped)))
+          }
+          
+          # Case 3: anything else (logical, numeric, etc.)
+          message(lab, ": skipped (not ggplot/list, type=", paste(class(x), collapse="+"), ")")
+          invisible(list(printed = character(0), skipped = lab))
         }
-        if (viewDESONNModelPlots("performance_low_mean_plots")) {
-          print(performance_relevance_plots$performance_low_mean_plots)
+        
+        if (self$viewDESONNModelPlots("performance_high_mean_plots")) {
+          print_plotlist_verbose(performance_relevance_plots$performance_high_mean_plots, "Performance High Mean Plots")
         }
-        if (viewDESONNModelPlots("relevance_high_mean_plots")) {
-          print(performance_relevance_plots$relevance_high_mean_plots)
+        if (self$viewDESONNModelPlots("performance_low_mean_plots")) {
+          print_plotlist_verbose(performance_relevance_plots$performance_low_mean_plots,  "Performance Low Mean Plots")
         }
-        if (viewDESONNModelPlots("relevance_low_mean_plots")) {
-          print(performance_relevance_plots$relevance_low_mean_plots)
+        if (self$viewDESONNModelPlots("relevance_high_mean_plots")) {
+          print_plotlist_verbose(performance_relevance_plots$relevance_high_mean_plots,   "Relevance High Mean Plots")
+        }
+        if (self$viewDESONNModelPlots("relevance_low_mean_plots")) {
+          print_plotlist_verbose(performance_relevance_plots$relevance_low_mean_plots,    "Relevance Low Mean Plots")
         }
         
 
@@ -3455,7 +3510,7 @@ DESONN <- R6Class(
           cat("Run ID: ", single_ensemble_name_model_name, "\n")
           cat("Predicted output shape:\n"); print(dim(single_predicted_output))
           cat("Checking self$ensemble[[", i, "]]\n")
-          print(str(self$ensemble[[i]]))
+          str(self$ensemble[[i]])
           cat("====================================\n\n")
           
           
@@ -3626,7 +3681,7 @@ DESONN <- R6Class(
       performance_low_mean_is_null <- check_and_print_null(performance_low_mean_df, "performance_low_mean_df")
       relevance_high_mean_is_null <- check_and_print_null(relevance_high_mean_df, "relevance_high_mean_df")
       relevance_low_mean_is_null <- check_and_print_null(relevance_low_mean_df, "relevance_low_mean_df")
-      
+ 
       # Call the functions and get the plots only if the dataframes are not NULL
       # print("Calling Performance update_performance_and_relevance_high")
       performance_high_mean_plots <- if (!performance_high_mean_is_null) {
@@ -3634,8 +3689,6 @@ DESONN <- R6Class(
       } else {
         NULL
       }
-      # print("Finished Performance update_performance_and_relevance_high")
-      # print("Finished Performance update_performance_and_relevance_low")
       performance_low_mean_plots <- if (!performance_low_mean_is_null) {
         self$update_performance_and_relevance_low(performance_low_mean_df)
       } else {
@@ -3655,8 +3708,9 @@ DESONN <- R6Class(
       } else {
         NULL
       }
+
       # print("Finished Relevance update_performance_and_relevance_low")
-      
+
       if(hyperparameter_grid_setup){
         if(never_ran_flag == TRUE){
           if (learnOnlyTrainingRun == FALSE) {
@@ -4088,7 +4142,7 @@ initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer, v
   
   if (verbose) {
     cat("Layer", current_layer, "optimizer tracking params initialized:\n")
-    print(str(entry))
+    str(entry)
   }
   
   return(entry)

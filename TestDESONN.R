@@ -5,7 +5,7 @@ source("DESONN.R")
 # self$activation_functions_learn <- vector("list", self$num_layers)
 
 ###############################################################################
-function(test1){
+function(test1){ #fake function/ just for toggling
   # test1
   # Define input_size, output_size, and num_networks
   # Generate synthetic Rdata for training
