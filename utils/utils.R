@@ -1,3 +1,40 @@
+## ===== Shared plot filename helper =====
+# Builds a filename prefixer for a specific context
+# utils_plots.R
+
+make_fname_prefix <- function(do_ensemble,
+                              num_networks = NULL,
+                              total_models = NULL,
+                              ensemble_number,
+                              model_index) {
+  if (is.null(total_models)) total_models <- if (!is.null(num_networks)) num_networks else get0("num_networks", ifnotfound = 1L)
+  ens <- as.integer(ensemble_number)
+  mod <- as.integer(model_index)
+  tot <- as.integer(if (length(total_models)) total_models else 1L)
+  if (isTRUE(do_ensemble)) {
+    return(function(base_name) sprintf("DESONN_%d_SONN_%d_%s", ens, mod, base_name))   # C/D
+  }
+  if (!is.na(tot) && tot > 1L) {
+    return(function(base_name) sprintf("SONN_%d-%d_%s", mod, tot, base_name))          # B
+    # if you prefer "SONN_<mod>_-_<tot>_<base>": sprintf("SONN_%d_-_%d_%s", mod, tot, base_name)
+  }
+  function(base_name) sprintf("SONN_%d_%s", mod, base_name)                            # A
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 tune_threshold <- function(predicted_output, labels) {
   thresholds <- seq(0.05, 0.95, by = 0.01)
   

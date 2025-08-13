@@ -1,8 +1,9 @@
 source("optimizers.R")
 source("reports/evaluate_predictions_report.R")
+source("utils/utils.R")
 function(showlibraries){
   # Fake function for collapse feature.
-  # Run these once to install required packages
+  ## ====== REQUIRED PACKAGES (only if not already loaded) ======
   # install.packages("R6")
   # install.packages("cluster")
   # install.packages("fpc", type = "source")  # Still needed as source for some systems
@@ -146,10 +147,7 @@ SONN <- R6Class(
       #         cat("Weight matrix", weight_name, "is NULL or not initialized.\n")
       #     }}
       
-      
-      
-      
-      
+   
       # Function to find factors of N that are as close as possible to each other
       find_grid_dimensions <- function(N) {
         factors <- unlist(sapply(1:floor(sqrt(N)), function(x) {
@@ -1199,7 +1197,56 @@ SONN <- R6Class(
           }
           max_weight_log <- c(max_weight_log, max_weight)
           
-          # Build DF for optional plots
+          ## =========================
+          ## SONN — Top 3 Per-epoch Plots
+          ## =========================
+          ## Requires:
+          ##  - make_fname_prefix(do_ensemble, ensemble_number, model_index, who="SONN") sourced from utils
+          ##  - do_ensemble, ensemble_number, model_iter_num, lr, lambda in scope (or in self$*)
+          ##  - logs: train_accuracy_log, train_loss_log, mean_output_log, sd_output_log, max_weight_log
+          ##  - self$viewPerEpochPlots(name) returning TRUE/FALSE
+          
+          
+          # --- SONN per-epoch gate: debug + sanitize (drop-in) ---
+          # 1) ensure the config list exists
+          if (is.null(self$PerEpochlViewPlotsConfig)) self$PerEpochlViewPlotsConfig <- list()
+          
+          # 2) coerce to strict booleans with safe defaults (TRUE for the 3 plots; FALSE for viewAll/verbose)
+          .fix_flag <- function(v, default) { if (isTRUE(v)) TRUE else if (isFALSE(v)) FALSE else default }
+          defaults <- list(accuracy_plot = TRUE, saturation_plot = TRUE, max_weight_plot = TRUE, viewAllPlots = FALSE, verbose = FALSE)
+          for (nm in names(defaults)) {
+            self$PerEpochlViewPlotsConfig[[nm]] <- .fix_flag(self$PerEpochlViewPlotsConfig[[nm]], defaults[[nm]])
+          }
+          
+          # 3) quick debug snapshot so you can see what the gate will read
+          pe <- self$PerEpochlViewPlotsConfig
+          message(sprintf("SONN per-epoch flags → acc=%s, sat=%s, max=%s, all=%s, verbose=%s",
+                          pe$accuracy_plot, pe$saturation_plot, pe$max_weight_plot, pe$viewAllPlots, pe$verbose))
+          message(sprintf("SONN gate eval → acc=%s, sat=%s, max=%s",
+                          self$viewPerEpochPlots("accuracy_plot"),
+                          self$viewPerEpochPlots("saturation_plot"),
+                          self$viewPerEpochPlots("max_weight_plot")))
+          
+          
+          
+          if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+          
+          # Resolve IDs once
+          ens <- as.integer(if (!is.null(self$ensemble_number)) self$ensemble_number else get0("ensemble_number", 1L))
+          mod <- as.integer(if (exists("model_iter_num", inherits = TRUE)) model_iter_num else get0("model_iter_num", 1L))
+          
+          # Filename builder
+          fname <- make_fname_prefix(
+            do_ensemble     = do_ensemble,
+            num_networks    = num_networks,
+            total_models    = if (!is.null(self$ensemble)) length(self$ensemble) else num_networks,
+            ensemble_number = ens,
+            model_index     = mod
+          )
+          
+          plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) sprintf("DESONN %d SONN %d | lr: %s | lambda: %s", ens, mod, lr, lambda) else sprintf("SONN %d | lr: %s | lambda: %s", mod, lr, lambda)
+          
+          # Per-epoch DF
           df <- data.frame(
             Epoch      = seq_along(train_accuracy_log),
             Accuracy   = train_accuracy_log,
@@ -1209,50 +1256,55 @@ SONN <- R6Class(
             MaxWeight  = max_weight_log
           )
           
-          plot_title_prefix <- paste("DESONN", ensemble_number, "SONN", model_iter_num,
-                                     "| lr:", lr, "| lambda:", lambda)
-          
-          # === Plot 1: Training Accuracy and Loss ===
+          # 1) Accuracy & Loss
           if (self$viewPerEpochPlots("accuracy_plot")) {
             tryCatch({
-              accuracy_loss_plot <- ggplot(df, aes(x = Epoch)) +
+              p <- ggplot(df, aes(x = Epoch)) +
                 geom_line(aes(y = Accuracy), size = 1) +
                 geom_line(aes(y = Loss),     size = 1) +
-                labs(title = "Training Accuracy (blue) & Loss (red)", y = "Value") +
+                labs(title = paste(plot_title_prefix, "— Training Accuracy (blue) & Loss (red)"),
+                     y = "Value") +
                 theme_minimal() +
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              ggsave(file.path("plots", "training_accuracy_loss_plot.png"), accuracy_loss_plot, width = 6, height = 4, dpi = 300)
-              print(accuracy_loss_plot)
+              out <- file.path("plots", fname("training_accuracy_loss_plot.png"))
+              message("📸 save: ", out)
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+              print(p)
             }, error = function(e) message("❌ accuracy_loss_plot: ", e$message))
           }
           
-          # === Plot 2: Output Saturation ===
+          # 2) Output Saturation
           if (self$viewPerEpochPlots("saturation_plot")) {
             tryCatch({
-              output_saturation_plot <- ggplot(df, aes(x = Epoch)) +
-                geom_line(aes(y = MeanOutput),  size = 1) +
-                geom_line(aes(y = StdOutput),   size = 1) +
-                labs(title = "Output Mean & Std Dev", y = "Output Value") +
+              p <- ggplot(df, aes(x = Epoch)) +
+                geom_line(aes(y = MeanOutput), size = 1) +
+                geom_line(aes(y = StdOutput),  size = 1) +
+                labs(title = paste(plot_title_prefix, "— Output Mean & Std Dev"),
+                     y = "Output Value") +
                 theme_minimal() +
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              ggsave(file.path("plots", "output_saturation_plot.png"), output_saturation_plot, width = 6, height = 4, dpi = 300)
-              print(output_saturation_plot)
+              out <- file.path("plots", fname("output_saturation_plot.png"))
+              message("📸 save: ", out)
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+              print(p)
             }, error = function(e) message("❌ output_saturation_plot: ", e$message))
           }
           
-          # === Plot 3: Max Weight Magnitude ===
+          # 3) Max Weight Magnitude
           if (self$viewPerEpochPlots("max_weight_plot")) {
             tryCatch({
-              max_weight_plot <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
+              p <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
                 geom_line(size = 1) +
-                labs(title = "Max Weight Magnitude Over Time", y = "Max |Weight|") +
+                labs(title = paste(plot_title_prefix, "— Max Weight Magnitude Over Time"),
+                     y = "Max |Weight|") +
                 theme_minimal() +
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              ggsave(file.path("plots", "max_weight_plot.png"), max_weight_plot, width = 6, height = 4, dpi = 300)
-              print(max_weight_plot)
+              out <- file.path("plots", fname("max_weight_plot.png"))
+              message("📸 save: ", out)
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+              print(p)
             }, error = function(e) message("❌ max_weight_plot: ", e$message))
           }
-          
           
           
 
@@ -2996,8 +3048,11 @@ DESONN <- R6Class(
     viewFinalUpdatePerformanceandRelevancePlots = function(name) {
       cfg <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
       on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
-      isTRUE(cfg[[name]]) || on_all
-    },
+      val <- cfg[[name]]
+      flag <- isTRUE(val) || (is.logical(val) && length(val) == 1 && !is.na(val) && val)
+      on_all || flag
+    }
+    ,
     
     train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
       
@@ -3265,7 +3320,7 @@ DESONN <- R6Class(
           }
           
           
-          Sys.sleep(0.25)  # pause slightly for readability
+          # Sys.sleep(0.25)  # pause slightly for readability
         }
         
         # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
@@ -3293,72 +3348,135 @@ DESONN <- R6Class(
         
         `%||%` <- function(a,b) if (is.null(a) || !length(a)) b else a
         
-        print_plotlist_verbose <- function(x, label = NULL) {
+        # Prints to RStudio Plots pane ONLY. Never saves. Handles ggplot, list, and nested list.
+        print_plotlist_verbose <- function(x, label = NULL, print_plots = TRUE) {
           lab <- label %||% "Plot"
-          
-          # Case 1: a single ggplot
-          if (inherits(x, "ggplot")) {
-            print(x)
-            message(lab, ": printed 1 plot")
-            return(invisible(list(printed = "<single>", skipped = character(0))))
+          if (inherits(x, c("gg","ggplot"))) {
+            if (print_plots) print(x)
+            message(lab, ": 1 ggplot", if (!print_plots) " (suppressed)")
+            return(invisible(list(printed = if (print_plots) "<single>" else character(0), skipped = character(0))))
           }
-          
-          # Case 2: a list (possibly mixed)
           if (is.list(x)) {
-            nms <- names(x)
-            if (is.null(nms)) nms <- as.character(seq_along(x))
-            
-            printed <- character(0)
-            skipped <- character(0)
-            
-            for (k in seq_along(x)) {
-              p <- x[[k]]
-              nm <- nms[[k]]
-              
-              if (is.null(p)) {
-                skipped <- c(skipped, sprintf("%s (NULL)", nm))
+            nms <- names(x); if (is.null(nms)) nms <- as.character(seq_along(x))
+            printed <- character(0); skipped <- character(0)
+            for (i in seq_along(x)) {
+              item <- x[[i]]; nm <- nms[[i]]
+              if (is.null(item)) { skipped <- c(skipped, sprintf("%s (NULL)", nm)); next }
+              if (inherits(item, c("gg","ggplot"))) {
+                if (print_plots) print(item)
+                printed <- c(printed, nm); next
+              }
+              if (is.list(item)) {
+                # nested list: print each ggplot inside
+                has_any <- FALSE
+                for (j in seq_along(item)) {
+                  p <- item[[j]]
+                  if (inherits(p, c("gg","ggplot"))) { has_any <- TRUE; if (print_plots) print(p) }
+                }
+                if (has_any) printed <- c(printed, paste0(nm, "[nested]")) else skipped <- c(skipped, sprintf("%s (nested non-gg)", nm))
                 next
               }
-              if (inherits(p, "ggplot")) {
-                print(p)
-                printed <- c(printed, nm)
-                next
-              }
-              if (is.list(p) && !length(p)) {
-                skipped <- c(skipped, sprintf("%s (empty list)", nm))
-                next
-              }
-              skipped <- c(skipped, sprintf("%s (type=%s)", nm, paste(class(p), collapse="+")))
+              skipped <- c(skipped, sprintf("%s (type=%s)", nm, paste(class(item), collapse = "+")))
             }
-            
-            # Summary lines
-            if (length(printed))   message(lab, ": printed [", paste(printed, collapse=", "), "]")
-            if (length(skipped))   message(lab, ": skipped [", paste(skipped, collapse=", "), "] — metrics didn’t fit criteria or not ggplot")
-            
-            # If nothing at all printed and nothing to skip (empty list)
-            if (!length(printed) && !length(skipped))
-              message(lab, ": empty (no metrics)")
-            
+            if (length(printed)) message(lab, ": printed [", paste(printed, collapse=", "), "]")
+            if (length(skipped)) message(lab, ": skipped [", paste(skipped, collapse=", "), "]")
+            if (!length(printed) && !length(skipped)) message(lab, ": empty")
             return(invisible(list(printed = printed, skipped = skipped)))
           }
-          
-          # Case 3: anything else (logical, numeric, etc.)
           message(lab, ": skipped (not ggplot/list, type=", paste(class(x), collapse="+"), ")")
           invisible(list(printed = character(0), skipped = lab))
         }
         
-        if (self$viewFinalUpdatePerformanceandRelevancePlots("performance_high_mean_plots")) {
-          print_plotlist_verbose(performance_relevance_plots$performance_high_mean_plots, "Performance High Mean Plots")
+        
+        # =========================
+        # DESONN — Final perf/relevance lists (bottom 4) with SAFE, LOCAL gates
+        # =========================
+
+        if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+        
+        ens <- as.integer(ensemble_number)
+        tot <- if (!is.null(self$ensemble)) length(self$ensemble) else as.integer(get0("num_networks", ifnotfound = 1L))
+        mod <- if (exists("model_iter_num", inherits = TRUE) && length(model_iter_num)) as.integer(model_iter_num) else 1L
+        
+        # local gates (no mutation)
+        klist <- c("performance_high_mean_plots","performance_low_mean_plots","relevance_high_mean_plots","relevance_low_mean_plots")
+        cfg   <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
+        as_flag <- function(x) if (isTRUE(x)) TRUE else if (isFALSE(x)) FALSE else FALSE
+        on_all <- as_flag(cfg$viewAllPlots) || as_flag(cfg$verbose)
+        gates  <- setNames(vapply(klist, function(nm) as_flag(cfg[[nm]]) || on_all, logical(1)), klist)
+        force_save_final <- !any(gates)
+        
+        # ---- helpers (drop-in) ----
+        .slug <- function(s) {
+          s <- trimws(as.character(s)); s <- gsub("\\s+", "_", s); s <- gsub("[^A-Za-z0-9_]+", "_", s)
+          tolower(gsub("_+", "_", s))
         }
-        if (self$viewFinalUpdatePerformanceandRelevancePlots("performance_low_mean_plots")) {
-          print_plotlist_verbose(performance_relevance_plots$performance_low_mean_plots,  "Performance Low Mean Plots")
+        .plot_label_slug <- function(p) {
+          t <- tryCatch(p$labels$title, error = function(e) NULL)
+          if (!is.null(t) && nzchar(t)) return(.slug(t))
+          y <- tryCatch(p$labels$y,     error = function(e) NULL)
+          if (!is.null(y) && nzchar(y)) return(.slug(y))
+          NULL
         }
-        if (self$viewFinalUpdatePerformanceandRelevancePlots("relevance_high_mean_plots")) {
-          print_plotlist_verbose(performance_relevance_plots$relevance_high_mean_plots,   "Relevance High Mean Plots")
+        
+        # Save a list of ggplots using the item's own name (or plot title) as the base;
+        # falls back to `group_default_k` if nothing useful is found
+        save_plotlist <- function(pls, group_default, fname_fn) {
+          if (is.null(pls) || !length(pls)) return(invisible(NULL))
+          nms <- names(pls)
+          for (k in seq_along(pls)) {
+            p <- pls[[k]]
+            if (!inherits(p, c("gg","ggplot"))) next
+            nm <- if (!is.null(nms) && length(nms) >= k && nzchar(nms[[k]])) .slug(nms[[k]]) else .plot_label_slug(p)
+            base <- if (!is.null(nm) && nzchar(nm)) nm else sprintf("%s_%02d", .slug(group_default), k)
+            out  <- file.path("plots", fname_fn(sprintf("%s.png", base)))
+            ggsave(out, p, width = 6, height = 4, dpi = 300); message("💾 saved: ", out)
+          }
+          invisible(NULL)
         }
-        if (self$viewFinalUpdatePerformanceandRelevancePlots("relevance_low_mean_plots")) {
-          print_plotlist_verbose(performance_relevance_plots$relevance_low_mean_plots,    "Relevance Low Mean Plots")
+        
+        
+        # helper: run printing once to the Plots pane (no saving)
+        show_once <- function(pls, label) print_plotlist_verbose(pls, label, print_plots = TRUE)
+        
+        # -------- scenario-aware saving --------
+        save_group <- function(flag, pls, base, label) {
+          if (!(flag || force_save_final)) return(invisible(NULL))
+          
+          if (do_ensemble) {
+            # C/D: save once per model → DESONN_<ens>_SONN_<m>_<base>_<k>.png
+            for (m in seq_len(tot)) {
+              fname_m <- make_fname_prefix(TRUE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = m)
+              save_plotlist(pls, base, fname_m)
+            }
+          } else if (tot > 1L) {
+            # B: always SONN_1-<tot>_<base>_<k>.png (use model_index=1)
+            fname_b <- make_fname_prefix(FALSE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = 1L)
+            save_plotlist(pls, base, fname_b)
+          } else {
+            # A: SONN_<mod>_<base>_<k>.png
+            fname_a <- make_fname_prefix(FALSE, num_networks = 1L, total_models = 1L, ensemble_number = ens, model_index = mod)
+            save_plotlist(pls, base, fname_a)
+          }
+          
+          show_once(pls, label)
         }
+        
+        # 1) Performance High Mean
+        save_group(gates[["performance_high_mean_plots"]], performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", "Performance High Mean Plots")
+        
+        # 2) Performance Low Mean
+        save_group(gates[["performance_low_mean_plots"]],  performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",  "Performance Low Mean Plots")
+        
+        # 3) Relevance High Mean
+        save_group(gates[["relevance_high_mean_plots"]],   performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",   "Relevance High Mean Plots")
+        
+        # 4) Relevance Low Mean
+        save_group(gates[["relevance_low_mean_plots"]],    performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",    "Relevance Low Mean Plots")
+        
+        
+        
+        
         
 
             
@@ -3829,13 +3947,13 @@ DESONN <- R6Class(
           high_mean_plots[[metric]] <- high_mean_plot
           
           # Save the plot in the "plot" folder (cross-platform)
-          ggsave(
-            file.path("plots", paste0("high_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
-            high_mean_plot,
-            width = 6,
-            height = 4,
-            dpi = 300
-          )
+          # ggsave(
+          #   file.path("plots", paste0("high_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
+          #   high_mean_plot,
+          #   width = 6,
+          #   height = 4,
+          #   dpi = 300
+          # )
         }
       }
       return(high_mean_plots)
@@ -3891,13 +4009,13 @@ DESONN <- R6Class(
           low_mean_plots[[metric]] <- low_mean_plot
           
           # Save the plot in the "plot" folder (cross-platform)
-          ggsave(
-            file.path("plots", paste0("low_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
-            low_mean_plot,
-            width = 6,
-            height = 4,
-            dpi = 300
-          )
+          # ggsave(
+          #   file.path("plots", paste0("low_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
+          #   low_mean_plot,
+          #   width = 6,
+          #   height = 4,
+          #   dpi = 300
+          # )
         }
       }
       

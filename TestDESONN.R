@@ -365,33 +365,31 @@ saveToDisk <- FALSE
 
 # === Step 1: Hyperparameter setup ===
 hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
-## ====== REQUIRED PACKAGES (only if not already loaded) ======
-suppressWarnings({
-  if (!requireNamespace("dplyr", quietly = TRUE))   stop("Please install.packages('dplyr')")
-  if (!requireNamespace("tidyr", quietly = TRUE))   stop("Please install.packages('tidyr')")
-  if (!requireNamespace("purrr", quietly = TRUE))   stop("Please install.packages('purrr')")
-})
-library(dplyr)
-library(tidyr)
-library(purrr)
+
 
 ## =========================
 ## DESONN Runner – Modes
 ## =========================
-## SCENARIO A: Single-run only (no ensemble)
-  do_ensemble <- FALSE
-  num_temp_iterations <- 0   # ignored when do_ensemble = FALSE
+## SCENARIO A: Single-run only (no ensemble, ONE model)
+#   do_ensemble         <- FALSE
+#   num_networks        <- 1L
+#   num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
-## SCENARIO B: Main ensemble only (no TEMP/prune-add)
-##   do_ensemble <- TRUE
-##   num_networks <- 5          # example main size
-##   num_temp_iterations <- 0
-##
-## SCENARIO C: Main + TEMP iterations (prune/add enabled)
-##   do_ensemble <- TRUE
-##   num_networks <- 5          # example main size
-##   num_temp_iterations <- 2   # MAIN + 2 TEMP passes
-##
+## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
+  # do_ensemble         <- FALSE
+  # num_networks        <- 5L          # e.g., run 5 models in one DESONN instance
+  # num_temp_iterations <- 0L
+#
+## SCENARIO C: Main ensemble only (no TEMP/prune-add)
+#   do_ensemble         <- TRUE
+#   num_networks        <- 5L          # example main size
+#   num_temp_iterations <- 0L
+#
+## SCENARIO D: Main + TEMP iterations (prune/add enabled)
+#   do_ensemble         <- TRUE
+#   num_networks        <- 3L          # example main size
+#   num_temp_iterations <- 1L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
+#
 ## You can set the above variables BEFORE sourcing this file. The defaults below are fallbacks.
 
 ## ====== GLOBALS ======
@@ -401,8 +399,8 @@ results   <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric()
 
 # You can set these BEFORE sourcing the file. Defaults below are only fallbacks.
 num_networks        <- get0("num_networks", ifnotfound = 1L)
-num_temp_iterations <- get0("num_temp_iterations", ifnotfound = 0L)   # 0 = MAIN only
-do_ensemble         <- get0("do_ensemble", ifnotfound = TRUE)         # TRUE ⇒ run MAIN (+ TEMP if >0)
+num_temp_iterations <- get0("num_temp_iterations", ifnotfound = 0L)   # 0 = MAIN only (no TEMP)
+do_ensemble         <- get0("do_ensemble", ifnotfound = FALSE)         # TRUE ⇒ run MAIN (+ TEMP if >0)
 
 # firstRun is only used to build the MAIN holder in ensemble mode
 firstRun <- TRUE
@@ -488,50 +486,53 @@ saturation_plot   <- FALSE   # show output saturation
 max_weight_plot   <- TRUE    # show max weight magnitude
 
 # DESONN plots
-performance_high_mean_plots <- TRUE
-performance_low_mean_plots  <- TRUE
-relevance_high_mean_plots   <- TRUE
-relevance_low_mean_plots    <- TRUE
+performance_high_mean_plots <- FALSE
+performance_low_mean_plots  <- FALSE
+relevance_high_mean_plots   <- FALSE
+relevance_low_mean_plots    <- FALSE
 
-
-## ====== SINGLE RUN (no logs, no lineage, no temp/prune/add) ======
+## =========================================================================================
+## SINGLE-RUN MODE (no logs, no lineage, no temp/prune/add) — covers Scenario A & Scenario B
+## =========================================================================================
 if (!isTRUE(do_ensemble)) {
-  cat("Single-run mode → training one model, skipping all ensemble/logging.\n")
+  cat(sprintf("Single-run mode → training %d model%s inside one DESONN instance, skipping all ensemble/logging.\n",
+              as.integer(num_networks), if (num_networks == 1L) "" else "s"))
   
+  # IMPORTANT: respect num_networks here so Scenario B works (multi-model, no ensembles)
   main_model <- DESONN$new(
-    num_networks    = 1L,
+    num_networks    = max(1L, as.integer(num_networks)),
     input_size      = input_size,
     hidden_sizes    = hidden_sizes,
     output_size     = output_size,
     N               = N,
     lambda          = lambda,
     ensemble_number = 1L,
-    ensembles       = NULL,      # single run: no ensembles
+    ensembles       = NULL,      # single run: no ensembles tracking
     ML_NN           = ML_NN,
     method          = init_method,
     custom_scale    = custom_scale
   )
   
-  # Set plotting flags directly on the model (avoid looping an empty list)
-  main_model$PerEpochlViewPlotsConfig <- list(
-    accuracy_plot   = isTRUE(accuracy_plot),
-    saturation_plot = isTRUE(saturation_plot),
-    max_weight_plot = isTRUE(max_weight_plot),
-    viewAllPlots    = isTRUE(viewAllPlots),
-    verbose         = isTRUE(verbose)
-  )
-  
-  # Per‑DESONN plotting flags (MAIN)
-  main_model$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
-    performance_high_mean_plots = isTRUE(performance_high_mean_plots),
-    performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
-    relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
-    relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
-    viewAllPlots                = isTRUE(viewAllPlots),
-    verbose                     = isTRUE(verbose)
-  )
-
-  
+  # Apply per‑SONN plotting flags to all internal models
+  if (length(main_model$ensemble)) {
+    for (m in seq_along(main_model$ensemble)) {
+      main_model$ensemble[[m]]$PerEpochlViewPlotsConfig <- list(
+        accuracy_plot   = isTRUE(accuracy_plot),
+        saturation_plot = isTRUE(saturation_plot),
+        max_weight_plot = isTRUE(max_weight_plot),
+        viewAllPlots    = isTRUE(viewAllPlots),
+        verbose         = isTRUE(verbose)
+      )
+      main_model$ensemble[[m]]$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
+        performance_high_mean_plots = isTRUE(performance_high_mean_plots),
+        performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
+        relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
+        relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
+        viewAllPlots                = isTRUE(viewAllPlots),
+        verbose                     = isTRUE(verbose)
+      )
+    }
+  }
   
   invisible(main_model$train(
     Rdata=X, labels=y, lr=lr, ensemble_number=1L, num_epochs=num_epochs,
@@ -546,23 +547,25 @@ if (!isTRUE(do_ensemble)) {
     train=train, verbose=verbose
   ))
   
-  # Optional: expose under ensembles$main_ensemble[[1]]
+  # Optional: expose under ensembles$main_ensemble[[1]] for downstream convenience
   if (exists("ensembles", inherits = TRUE) && is.list(ensembles)) {
     if (is.null(ensembles$main_ensemble)) ensembles$main_ensemble <- list()
     ensembles$main_ensemble[[1]] <- main_model
   }
   
-  # Optional summary
+  # Optional summaries
   if (!is.null(main_model$performance_metric)) {
-    cat("\nSingle model performance_metric:\n"); print(main_model$performance_metric)
+    cat("\nSingle run performance_metric (DESONN-level):\n"); print(main_model$performance_metric)
   }
   if (!is.null(main_model$relevance_metric)) {
-    cat("\nSingle model relevance_metric:\n"); print(main_model$relevance_metric)
+    cat("\nSingle run relevance_metric (DESONN-level):\n"); print(main_model$relevance_metric)
   }
+  # If you want per-model metrics, iterate main_model$ensemble here as needed.
   
 } else {
-  
-  ## ====== ENSEMBLE MODE (MAIN + optional TEMP/prune/add) ======
+  ## ==========================================================
+  ## ENSEMBLE MODE (MAIN + optional TEMP/prune/add) — C & D
+  ## ==========================================================
   
   # -------- logs + lineage tables only needed in ensemble mode --------
   snapshot_main_serials_meta <- function() {
@@ -923,7 +926,7 @@ if (!isTRUE(do_ensemble)) {
       
       ensembles$temp_ensemble <- vector("list", 1L)
       temp_model <- DESONN$new(
-        num_networks    = num_networks,
+        num_networks    = max(1L, as.integer(num_networks)),
         input_size      = input_size,
         hidden_sizes    = hidden_sizes,
         output_size     = output_size,
@@ -950,7 +953,7 @@ if (!isTRUE(do_ensemble)) {
         }
       }
       
-      # Per-DESONN plotting flags for TEMP
+      # Per‑DESONN plotting flags for TEMP
       if (length(temp_model$ensemble)) {
         for (m in seq_along(temp_model$ensemble)) {
           temp_model$ensemble[[m]]$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
@@ -1060,6 +1063,7 @@ if (!isTRUE(do_ensemble)) {
     }
   }
 }
+
 
 
 
