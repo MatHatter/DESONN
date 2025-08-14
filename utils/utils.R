@@ -7,45 +7,33 @@ make_fname_prefix <- function(do_ensemble,
                               total_models = NULL,
                               ensemble_number,
                               model_index,
-                              who) {   # << REQUIRED: must be "SONN" or "DESONN"
+                              who) {  # "SONN" or "DESONN"
+  if (missing(who) || !nzchar(who)) stop("'who' must be 'SONN' or 'DESONN'")
+  who <- toupper(who)
   
-  if (missing(who) || !nzchar(who)) {
-    stop("make_fname_prefix(): 'who' must be provided as 'SONN' or 'DESONN'")
-  }
-  
-  if (is.null(total_models)) {
+  if (is.null(total_models))
     total_models <- if (!is.null(num_networks)) num_networks else get0("num_networks", ifnotfound = 1L)
-  }
   
   ens <- as.integer(ensemble_number)
   mod <- as.integer(model_index)
   tot <- as.integer(if (length(total_models)) total_models else 1L)
   
   if (isTRUE(do_ensemble)) {
-    # C/D
-    return(function(base_name) sprintf("DESONN_%d_SONN_%d_%s", ens, mod, base_name))
+    return(function(base_name) sprintf("DESONN_%d_SONN_%d_%s", ens, mod, base_name))  # C/D
   }
   
-  if (!is.na(tot) && tot > 1L) {
-    # B → choose "of" or "to" based on who
-    if (toupper(who) == "SONN") {
+  if (!is.na(tot) && tot > 1L) {  # B
+    if (who == "SONN") {
       return(function(base_name) sprintf("SONN_%dof%d_%s", mod, tot, base_name))
-    } else if (toupper(who) == "DESONN") {
-      return(function(base_name) sprintf("SONN_%d-%d_%s", mod, tot, base_name))
+    } else if (who == "DESONN") {
+      return(function(base_name) sprintf("SONN_%d-%d_%s", 1L, tot, base_name))  # fixed first index
     } else {
-      stop("make_fname_prefix(): invalid 'who' value — must be 'SONN' or 'DESONN'")
+      stop("invalid 'who'")
     }
   }
   
-  # A
-  function(base_name) sprintf("SONN_%d_%s", mod, base_name)
+  function(base_name) sprintf("SONN_%d_%s", mod, base_name)  # A
 }
-
-
-
-
-
-
 
 
 

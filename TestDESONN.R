@@ -488,7 +488,7 @@ max_weight_plot   <- FALSE    # show max weight magnitude
 # DESONN plots
 performance_high_mean_plots <- FALSE
 performance_low_mean_plots  <- FALSE
-relevance_high_mean_plots   <- TRUE
+relevance_high_mean_plots   <- FALSE
 relevance_low_mean_plots    <- FALSE
 
 ## =========================================================================================
