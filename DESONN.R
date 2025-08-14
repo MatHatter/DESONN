@@ -1218,6 +1218,7 @@ SONN <- R6Class(
             self$PerEpochlViewPlotsConfig[[nm]] <- .fix_flag(self$PerEpochlViewPlotsConfig[[nm]], defaults[[nm]])
           }
           
+          
           # 3) quick debug snapshot so you can see what the gate will read
           pe <- self$PerEpochlViewPlotsConfig
           message(sprintf("SONN per-epoch flags → acc=%s, sat=%s, max=%s, all=%s, verbose=%s",
@@ -1226,8 +1227,6 @@ SONN <- R6Class(
                           self$viewPerEpochPlots("accuracy_plot"),
                           self$viewPerEpochPlots("saturation_plot"),
                           self$viewPerEpochPlots("max_weight_plot")))
-          
-          
           
           if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
           
@@ -1241,7 +1240,8 @@ SONN <- R6Class(
             num_networks    = num_networks,
             total_models    = if (!is.null(self$ensemble)) length(self$ensemble) else num_networks,
             ensemble_number = ens,
-            model_index     = mod
+            model_index     = mod,
+            who             = "SONN"
           )
           
           plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) sprintf("DESONN %d SONN %d | lr: %s | lambda: %s", ens, mod, lr, lambda) else sprintf("SONN %d | lr: %s | lambda: %s", mod, lr, lambda)
@@ -1305,6 +1305,7 @@ SONN <- R6Class(
               print(p)
             }, error = function(e) message("❌ max_weight_plot: ", e$message))
           }
+          
           
           
 
@@ -3392,21 +3393,74 @@ DESONN <- R6Class(
         # DESONN — Final perf/relevance lists (bottom 4) with SAFE, LOCAL gates
         # =========================
 
+        # --- Toggle resolution using %||% (allows multiple TRUEs; viewAllPlots/verbose => all) ---
+        # ---------- basics ----------
+        # ---------- basics ----------
+        ## =========================
+        ## Final Update – Bottom-4 Plots (match per-epoch pattern)
+        ## =========================
+        ## =========================
+        ## Final Update – Bottom-4 Plots
+        ## Pattern matches your per-epoch flow (defaults -> debug -> gate -> save/print)
+        ## Robustly handles ggplot, patchwork, grob/gtable, functions returning plots, and shallow nested lists.
+        ## =========================
+        
+        # ---------- 0) basics ----------
+        ## =========================
+        ## Final Update – Bottom-4 (recursive list/df aware)
+        ## =========================
+        
+        `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
         if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
         
-        ens <- as.integer(ensemble_number)
+        # --- ensure config + strict booleans (defaults all FALSE) ---
+        if (is.null(self$FinalUpdatePerformanceandRelevanceViewPlotsConfig)) {
+          self$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list()
+        }
+        .fix_flag <- function(v, default) if (isTRUE(v)) TRUE else if (isFALSE(v)) FALSE else default
+        final_defaults <- list(
+          performance_high_mean_plots = FALSE,
+          performance_low_mean_plots  = FALSE,
+          relevance_high_mean_plots   = FALSE,
+          relevance_low_mean_plots    = FALSE,
+          viewAllPlots                = FALSE,
+          verbose                     = FALSE
+        )
+        for (nm in names(final_defaults)) {
+          self$FinalUpdatePerformanceandRelevanceViewPlotsConfig[[nm]] <-
+            .fix_flag(self$FinalUpdatePerformanceandRelevanceViewPlotsConfig[[nm]], final_defaults[[nm]])
+        }
+        
+        # --- debug snapshot (like per-epoch) ---
+        fe <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
+        message(sprintf(
+          "FINAL flags → perf_hi=%s, perf_lo=%s, rel_hi=%s, rel_lo=%s, all=%s, verbose=%s",
+          fe$performance_high_mean_plots, fe$performance_low_mean_plots,
+          fe$relevance_high_mean_plots,    fe$relevance_low_mean_plots,
+          fe$viewAllPlots,                 fe$verbose
+        ))
+        message(sprintf(
+          "FINAL gate eval → perf_hi=%s, perf_lo=%s, rel_hi=%s, rel_lo=%s",
+          self$viewFinalUpdatePerformanceandRelevancePlots("performance_high_mean_plots"),
+          self$viewFinalUpdatePerformanceandRelevancePlots("performance_low_mean_plots"),
+          self$viewFinalUpdatePerformanceandRelevancePlots("relevance_high_mean_plots"),
+          self$viewFinalUpdatePerformanceandRelevancePlots("relevance_low_mean_plots")
+        ))
+        
+        # --- IDs + filename builder ---
+        ens <- as.integer(if (!is.null(self$ensemble_number)) self$ensemble_number else get0("ensemble_number", 1L))
         tot <- if (!is.null(self$ensemble)) length(self$ensemble) else as.integer(get0("num_networks", ifnotfound = 1L))
-        mod <- if (exists("model_iter_num", inherits = TRUE) && length(model_iter_num)) as.integer(model_iter_num) else 1L
+        mod <- as.integer(if (exists("model_iter_num", inherits = TRUE) && length(model_iter_num)) model_iter_num else get0("model_iter_num", 1L))
+        fname <- make_fname_prefix(
+          do_ensemble     = isTRUE(get0("do_ensemble", ifnotfound = FALSE)),
+          num_networks    = tot,
+          total_models    = tot,
+          ensemble_number = ens,
+          model_index     = mod,
+          who             = "DESONN"
+        )
         
-        # local gates (no mutation)
-        klist <- c("performance_high_mean_plots","performance_low_mean_plots","relevance_high_mean_plots","relevance_low_mean_plots")
-        cfg   <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
-        as_flag <- function(x) if (isTRUE(x)) TRUE else if (isFALSE(x)) FALSE else FALSE
-        on_all <- as_flag(cfg$viewAllPlots) || as_flag(cfg$verbose)
-        gates  <- setNames(vapply(klist, function(nm) as_flag(cfg[[nm]]) || on_all, logical(1)), klist)
-        force_save_final <- !any(gates)
-        
-        # ---- helpers (drop-in) ----
+        # --- label helpers ---
         .slug <- function(s) {
           s <- trimws(as.character(s)); s <- gsub("\\s+", "_", s); s <- gsub("[^A-Za-z0-9_]+", "_", s)
           tolower(gsub("_+", "_", s))
@@ -3419,60 +3473,150 @@ DESONN <- R6Class(
           NULL
         }
         
-        # Save a list of ggplots using the item's own name (or plot title) as the base;
-        # falls back to `group_default_k` if nothing useful is found
+        # --- what we can save/print and how ---
+        .is_saveable_plot <- function(x) inherits(x, c("gg","ggplot","patchwork","grob","gTree","gtable","recordedplot"))
+        
+        .print_any <- function(x) {
+          if (inherits(x, c("grob","gTree","gtable"))) {
+            if (!requireNamespace("grid", quietly = TRUE)) stop("grid package required")
+            grid::grid.newpage(); grid::grid.draw(x); return(invisible(NULL))
+          }
+          if (inherits(x, "recordedplot")) { replayPlot(x); return(invisible(NULL)) }
+          print(x)
+        }
+        
+        .save_any <- function(path, x) {
+          # ggplot/patchwork/grob/gtable via ggsave
+          if (inherits(x, c("gg","ggplot","patchwork","grob","gTree","gtable"))) {
+            ggsave(path, x, width = 6, height = 4, dpi = 300); return(invisible(NULL))
+          }
+          # recordedplot via base device + replay
+          if (inherits(x, "recordedplot")) {
+            grDevices::png(filename = path, width = 6, height = 4, units = "in", res = 300)
+            on.exit(grDevices::dev.off(), add = TRUE)
+            replayPlot(x); return(invisible(NULL))
+          }
+          stop(sprintf("Unsupported plot class for saving: %s", paste(class(x), collapse = "/")))
+        }
+        
+        # --- resolver: recursively traverse lists/frames to collect saveable objects ---
+        .flatten_saveables <- function(x, nm_prefix = character()) {
+          out <- list()
+          push <- function(obj, nm) out[[length(out) + 1L]] <<- structure(obj, .nm = nm)
+          
+          if (.is_saveable_plot(x)) { push(x, paste(nm_prefix, collapse = "_")); return(out) }
+          
+          # function that returns a plot
+          if (is.function(x)) {
+            y <- tryCatch(x(), error = function(e) NULL)
+            if (.is_saveable_plot(y)) push(y, paste(c(nm_prefix, "fn"), collapse = "_"))
+            return(out)
+          }
+          
+          # data.frame/tibble: search columns for saveables
+          if (is.data.frame(x)) {
+            rn <- rownames(x); if (is.null(rn)) rn <- as.character(seq_len(nrow(x)))
+            for (j in seq_along(x)) {
+              cn <- names(x)[j] %||% paste0("col", j)
+              col <- x[[j]]
+              if (is.list(col)) {
+                for (i in seq_along(col)) {
+                  obj <- col[[i]]
+                  nm <- paste(c(nm_prefix, cn, rn[[i]] %||% paste0("row", i)), collapse = "_")
+                  out <- c(out, .flatten_saveables(obj, nm))
+                }
+              } else {
+                for (i in seq_len(NROW(col))) {
+                  obj <- col[i]
+                  nm <- paste(c(nm_prefix, cn, rn[[i]] %||% paste0("row", i)), collapse = "_")
+                  out <- c(out, .flatten_saveables(obj, nm))
+                }
+              }
+            }
+            return(out)
+          }
+          
+          # generic list: walk all elements
+          if (is.list(x)) {
+            nms <- names(x); nms <- if (is.null(nms)) rep.int("", length(x)) else nms
+            for (i in seq_along(x)) {
+              nm_i <- nms[[i]]; if (!nzchar(nm_i)) nm_i <- paste0("item", i)
+              out <- c(out, .flatten_saveables(x[[i]], c(nm_prefix, nm_i)))
+            }
+            return(out)
+          }
+          
+          # common containers: try popular fields
+          try_fields <- c("plots","plot","p","figure","fig","gg","grob")
+          if (is.environment(x) || ("R6" %in% class(x))) {
+            for (f in try_fields) {
+              val <- tryCatch(x[[f]], error = function(e) NULL)
+              if (!is.null(val)) out <- c(out, .flatten_saveables(val, c(nm_prefix, f)))
+            }
+          }
+          
+          out
+        }
+        
+        # --- save a group (list-friendly) ---
         save_plotlist <- function(pls, group_default, fname_fn) {
-          if (is.null(pls) || !length(pls)) return(invisible(NULL))
-          nms <- names(pls)
-          for (k in seq_along(pls)) {
-            p <- pls[[k]]
-            if (!inherits(p, c("gg","ggplot"))) next
-            nm <- if (!is.null(nms) && length(nms) >= k && nzchar(nms[[k]])) .slug(nms[[k]]) else .plot_label_slug(p)
-            base <- if (!is.null(nm) && nzchar(nm)) nm else sprintf("%s_%02d", .slug(group_default), k)
+          lst <- .flatten_saveables(pls, nm_prefix = group_default)
+          
+          if (!length(lst)) {
+            # better diagnostics for lists/frames
+            cl <- paste(class(pls), collapse = "/")
+            tl_names <- if (is.list(pls)) paste(names(pls), collapse = ", ") else ""
+            message("ℹ ", group_default, ": empty (no saveable objects). Class=", cl,
+                    if (nzchar(tl_names)) paste0(" | top-level names: [", tl_names, "]") else "")
+            return(invisible(NULL))
+          }
+          
+          for (k in seq_along(lst)) {
+            obj <- lst[[k]]
+            nm_hint <- attr(obj, ".nm"); if (is.null(nm_hint) || !nzchar(nm_hint)) nm_hint <- sprintf("%s_%02d", group_default, k)
+            base <- .plot_label_slug(obj) %||% .slug(nm_hint)
             out  <- file.path("plots", fname_fn(sprintf("%s.png", base)))
-            ggsave(out, p, width = 6, height = 4, dpi = 300); message("💾 saved: ", out)
+            message("📸 save: ", out)
+            tryCatch({
+              .save_any(out, obj)
+              .print_any(obj)
+            }, error = function(e) message("❌ save/print (", group_default, "): ", e$message))
           }
           invisible(NULL)
         }
         
-        
-        # helper: run printing once to the Plots pane (no saving)
-        show_once <- function(pls, label) print_plotlist_verbose(pls, label, print_plots = TRUE)
-        
-        # -------- scenario-aware saving --------
-        save_group <- function(flag, pls, base, label) {
-          if (!(flag || force_save_final)) return(invisible(NULL))
-          
-          if (do_ensemble) {
-            # C/D: save once per model → DESONN_<ens>_SONN_<m>_<base>_<k>.png
+        # --- scenario-aware saving wrapper (A/B/C-D) ---
+        save_group <- function(should_save, pls, base_label) {
+          if (!isTRUE(should_save)) return(invisible(NULL))
+          if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) {
             for (m in seq_len(tot)) {
-              fname_m <- make_fname_prefix(TRUE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = m)
-              save_plotlist(pls, base, fname_m)
+              fname_m <- make_fname_prefix(TRUE, num_networks = tot, total_models = tot,
+                                           ensemble_number = ens, model_index = m, who = "DESONN")
+              save_plotlist(pls, base_label, fname_m)
             }
           } else if (tot > 1L) {
-            # B: always SONN_1-<tot>_<base>_<k>.png (use model_index=1)
-            fname_b <- make_fname_prefix(FALSE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = 1L)
-            save_plotlist(pls, base, fname_b)
+            fname_b <- make_fname_prefix(FALSE, num_networks = tot, total_models = tot,
+                                         ensemble_number = ens, model_index = 1L, who = "DESONN")
+            save_plotlist(pls, base_label, fname_b)
           } else {
-            # A: SONN_<mod>_<base>_<k>.png
-            fname_a <- make_fname_prefix(FALSE, num_networks = 1L, total_models = 1L, ensemble_number = ens, model_index = mod)
-            save_plotlist(pls, base, fname_a)
+            fname_a <- make_fname_prefix(FALSE, num_networks = 1L, total_models = 1L,
+                                         ensemble_number = ens, model_index = mod, who = "DESONN")
+            save_plotlist(pls, base_label, fname_a)
           }
-          
-          show_once(pls, label)
+          invisible(NULL)
         }
         
-        # 1) Performance High Mean
-        save_group(gates[["performance_high_mean_plots"]], performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", "Performance High Mean Plots")
+        # --- strict toggles via your METHOD (no force-save) ---
+        flag_perf_hi <- self$viewFinalUpdatePerformanceandRelevancePlots("performance_high_mean_plots")
+        flag_perf_lo <- self$viewFinalUpdatePerformanceandRelevancePlots("performance_low_mean_plots")
+        flag_rel_hi  <- self$viewFinalUpdatePerformanceandRelevancePlots("relevance_high_mean_plots")
+        flag_rel_lo  <- self$viewFinalUpdatePerformanceandRelevancePlots("relevance_low_mean_plots")
         
-        # 2) Performance Low Mean
-        save_group(gates[["performance_low_mean_plots"]],  performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",  "Performance Low Mean Plots")
-        
-        # 3) Relevance High Mean
-        save_group(gates[["relevance_high_mean_plots"]],   performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",   "Relevance High Mean Plots")
-        
-        # 4) Relevance Low Mean
-        save_group(gates[["relevance_low_mean_plots"]],    performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",    "Relevance Low Mean Plots")
+        # --- final saves (only when toggled) ---
+        if (flag_perf_hi) save_group(TRUE, performance_relevance_plots$performance_high_mean_plots, "performance_high_mean")
+        if (flag_perf_lo) save_group(TRUE, performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean")
+        if (flag_rel_hi)  save_group(TRUE, performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean")
+        if (flag_rel_lo)  save_group(TRUE, performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean")
         
         
         

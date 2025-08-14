@@ -371,24 +371,24 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-#   do_ensemble         <- FALSE
-#   num_networks        <- 1L
-#   num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+  # do_ensemble         <- FALSE
+  # num_networks        <- 1L
+  # num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
-  # do_ensemble         <- FALSE
-  # num_networks        <- 5L          # e.g., run 5 models in one DESONN instance
-  # num_temp_iterations <- 0L
+  do_ensemble         <- FALSE
+  num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
+  num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
-#   do_ensemble         <- TRUE
-#   num_networks        <- 5L          # example main size
-#   num_temp_iterations <- 0L
+  # do_ensemble         <- TRUE
+  # num_networks        <- 2L          # example main size
+  # num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
-#   do_ensemble         <- TRUE
-#   num_networks        <- 3L          # example main size
-#   num_temp_iterations <- 1L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
+  # do_ensemble         <- TRUE
+  # num_networks        <- 2L          # example main size
+  # num_temp_iterations <- 1L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
 #
 ## You can set the above variables BEFORE sourcing this file. The defaults below are fallbacks.
 
@@ -481,14 +481,14 @@ viewAllPlots <- FALSE  # TRUE shows all plots regardless of individual flags
 verbose      <- FALSE  # TRUE enables additional plot/debug output
 
 # SONN plots
-accuracy_plot     <- TRUE    # show training accuracy/loss
+accuracy_plot     <- FALSE    # show training accuracy/loss
 saturation_plot   <- FALSE   # show output saturation
-max_weight_plot   <- TRUE    # show max weight magnitude
+max_weight_plot   <- FALSE    # show max weight magnitude
 
 # DESONN plots
 performance_high_mean_plots <- FALSE
 performance_low_mean_plots  <- FALSE
-relevance_high_mean_plots   <- FALSE
+relevance_high_mean_plots   <- TRUE
 relevance_low_mean_plots    <- FALSE
 
 ## =========================================================================================

@@ -6,20 +6,41 @@ make_fname_prefix <- function(do_ensemble,
                               num_networks = NULL,
                               total_models = NULL,
                               ensemble_number,
-                              model_index) {
-  if (is.null(total_models)) total_models <- if (!is.null(num_networks)) num_networks else get0("num_networks", ifnotfound = 1L)
+                              model_index,
+                              who) {   # << REQUIRED: must be "SONN" or "DESONN"
+  
+  if (missing(who) || !nzchar(who)) {
+    stop("make_fname_prefix(): 'who' must be provided as 'SONN' or 'DESONN'")
+  }
+  
+  if (is.null(total_models)) {
+    total_models <- if (!is.null(num_networks)) num_networks else get0("num_networks", ifnotfound = 1L)
+  }
+  
   ens <- as.integer(ensemble_number)
   mod <- as.integer(model_index)
   tot <- as.integer(if (length(total_models)) total_models else 1L)
+  
   if (isTRUE(do_ensemble)) {
-    return(function(base_name) sprintf("DESONN_%d_SONN_%d_%s", ens, mod, base_name))   # C/D
+    # C/D
+    return(function(base_name) sprintf("DESONN_%d_SONN_%d_%s", ens, mod, base_name))
   }
+  
   if (!is.na(tot) && tot > 1L) {
-    return(function(base_name) sprintf("SONN_%d-%d_%s", mod, tot, base_name))          # B
-    # if you prefer "SONN_<mod>_-_<tot>_<base>": sprintf("SONN_%d_-_%d_%s", mod, tot, base_name)
+    # B → choose "of" or "to" based on who
+    if (toupper(who) == "SONN") {
+      return(function(base_name) sprintf("SONN_%dof%d_%s", mod, tot, base_name))
+    } else if (toupper(who) == "DESONN") {
+      return(function(base_name) sprintf("SONN_%d-%d_%s", mod, tot, base_name))
+    } else {
+      stop("make_fname_prefix(): invalid 'who' value — must be 'SONN' or 'DESONN'")
+    }
   }
-  function(base_name) sprintf("SONN_%d_%s", mod, base_name)                            # A
+  
+  # A
+  function(base_name) sprintf("SONN_%d_%s", mod, base_name)
 }
+
 
 
 
