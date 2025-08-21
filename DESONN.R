@@ -1,8 +1,9 @@
 source("optimizers.R")
 source("reports/evaluate_predictions_report.R")
+source("utils/utils.R")
 function(showlibraries){
   # Fake function for collapse feature.
-  # Run these once to install required packages
+  ## ====== REQUIRED PACKAGES (only if not already loaded) ======
   # install.packages("R6")
   # install.packages("cluster")
   # install.packages("fpc", type = "source")  # Still needed as source for some systems
@@ -20,8 +21,6 @@ function(showlibraries){
   # install.packages("pracma")
   # install.packages("randomForest")
   # install.packages("openxlsx")
-  # install.packages("pROC")
-  # install.packages("ggplotify")
   library(R6)
   library(cluster)
   library(fpc)
@@ -149,9 +148,6 @@ SONN <- R6Class(
       #     }}
       
       
-      
-      
-      
       # Function to find factors of N that are as close as possible to each other
       find_grid_dimensions <- function(N) {
         factors <- unlist(sapply(1:floor(sqrt(N)), function(x) {
@@ -173,6 +169,16 @@ SONN <- R6Class(
       grid_cols <- grid_dimensions[2]
       
       self$map <- matrix(1:N, nrow = grid_rows, ncol = grid_cols)
+      
+      # Configuration flags for enabling/disabling per-SONN model training plots
+      self$PerEpochlViewPlotsConfig <- list(
+        accuracy_plot = accuracy_plot,  # training accuracy/loss
+        saturation_plot = saturation_plot,  # output saturation
+        max_weight_plot = max_weight_plot,  # max weight magnitude
+        viewAllPlots = viewAllPlots,
+        verbose    = verbose
+      )
+      
       
     },
     initialize_weights = function(input_size, hidden_sizes, output_size, method = init_method, custom_scale = NULL) {
@@ -237,10 +243,7 @@ SONN <- R6Class(
       self$biases <- biases
       
       return(list(weights = weights, biases = biases))
-    }
-    
-    
-    ,
+    },
     
     
     process_input_size = function(input_size) {
@@ -296,7 +299,8 @@ SONN <- R6Class(
       for (i in 1:length(biases_list)) {
         self$biases[[i]] <- unlist(biases_list[[i]])  # Assuming biases_list[[i]] is a list of vectors
       }
-    },# Dropout function with no default rate
+    },
+    # Dropout function with no default rate
     dropout = function(x, rate) {
       # If no rate is provided, return x as is
       if (is.null(rate)) {
@@ -311,6 +315,11 @@ SONN <- R6Class(
       
       return(x)
     },# Method to perform self-organization
+    viewPerEpochPlots = function(name) {
+      cfg <- self$PerEpochlViewPlotsConfig
+      on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
+      isTRUE(cfg[[name]]) || on_all
+    },
     self_organize = function(Rdata, labels, lr) {
       print("------------------------self-organize-begin----------------------------------------")
       
@@ -397,8 +406,8 @@ SONN <- R6Class(
         }
       }
       
-      print("print(str(outputs))")
-      print(str(outputs))
+      print("str(outputs)")
+      str(outputs)
       
       
       
@@ -443,13 +452,13 @@ SONN <- R6Class(
       # Store output error
       errors <- vector("list", self$num_layers)
       errors[[self$num_layers]] <- as.matrix(error_1000x10)
-      print(str(errors[[self$num_layers]]))
+      str(errors[[self$num_layers]])
       
       
       # Store output error
       errors <- vector("list", self$num_layers)
       errors[[self$num_layers]] <- as.matrix(error_1000x10)
-      print(str(errors[[self$num_layers]]))
+      str(errors[[self$num_layers]])
       
       
       
@@ -499,7 +508,7 @@ SONN <- R6Class(
             }
           }
           
-
+          
           # Propagate error
           cat("Backpropagating errors for layer", layer, "\n")
           errors[[layer]] <- errors_next %*% t(weights_next)
@@ -578,8 +587,8 @@ SONN <- R6Class(
       
       
       
-      print("end")
-      print(str(errors))
+      print("str(errors)")
+      str(errors)
       
       
       if (self$ML_NN) {
@@ -730,8 +739,8 @@ SONN <- R6Class(
         }
       }
       
-
-
+      
+      
       if (is.null(self$map)) {
         cat("[Debug] SOM not yet trained. Training now...\n")
         self$train_map(Rdata)
@@ -763,7 +772,7 @@ SONN <- R6Class(
       
       
       
-
+      
       
       print("------------------------self-organize-end------------------------------------------")
       
@@ -1062,8 +1071,7 @@ SONN <- R6Class(
       
       return(list(predicted_output = output, prediction_time = prediction_time))
     },# Method for training the SONN with L2 regularization
-    train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN,
-                                            train, verbose) {
+    train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train) {
       
       # Initialize learning rate scheduler
       # lr_scheduler <- function(epoch, initial_lr = lr) {
@@ -1122,7 +1130,7 @@ SONN <- R6Class(
         for (epoch in 1:epoch_in_list) {
           
           
-
+          
           
           lr <- lr_scheduler(epoch)
           
@@ -1139,8 +1147,8 @@ SONN <- R6Class(
             Rdata = Rdata,
             labels = labels,
             lr = lr,
-            activation_functions_learn = activation_functions_learn,
-            dropout_rates_learn = dropout_rates_learn,
+            activation_functions_learn = activation_functions,
+            dropout_rates_learn = dropout_rates,
             sample_weights = sample_weights
           )
           
@@ -1189,82 +1197,118 @@ SONN <- R6Class(
           }
           max_weight_log <- c(max_weight_log, max_weight)
           
+          ## =========================
+          ## SONN — Top 3 Per-epoch Plots
+          ## =========================
+          ## Requires:
+          ##  - make_fname_prefix(do_ensemble, ensemble_number, model_index, who="SONN") sourced from utils
+          ##  - do_ensemble, ensemble_number, model_iter_num, lr, lambda in scope (or in self$*)
+          ##  - logs: train_accuracy_log, train_loss_log, mean_output_log, sd_output_log, max_weight_log
+          ##  - self$viewPerEpochPlots(name) returning TRUE/FALSE
           
           
-          # Plot training accuracy
-          df <- data.frame(
-            Epoch = 1:length(train_accuracy_log),
-            Accuracy = train_accuracy_log,
-            Loss = train_loss_log,
-            MeanOutput = mean_output_log,
-            StdOutput = sd_output_log,
-            MaxWeight = max_weight_log
+          # --- SONN per-epoch gate: debug + sanitize (drop-in) ---
+          # 1) ensure the config list exists
+          if (is.null(self$PerEpochlViewPlotsConfig)) self$PerEpochlViewPlotsConfig <- list()
+          
+          # 2) coerce to strict booleans with safe defaults (TRUE for the 3 plots; FALSE for viewAll/verbose)
+          .fix_flag <- function(v, default) { if (isTRUE(v)) TRUE else if (isFALSE(v)) FALSE else default }
+          defaults <- list(accuracy_plot = TRUE, saturation_plot = TRUE, max_weight_plot = TRUE, viewAllPlots = FALSE, verbose = FALSE)
+          for (nm in names(defaults)) {
+            self$PerEpochlViewPlotsConfig[[nm]] <- .fix_flag(self$PerEpochlViewPlotsConfig[[nm]], defaults[[nm]])
+          }
+          
+          # 3) quick debug snapshot so you can see what the gate will read
+          pe <- self$PerEpochlViewPlotsConfig
+          message(sprintf("SONN per-epoch flags → acc=%s, sat=%s, max=%s, all=%s, verbose=%s",
+                          pe$accuracy_plot, pe$saturation_plot, pe$max_weight_plot, pe$viewAllPlots, pe$verbose))
+          message(sprintf("SONN gate eval → acc=%s, sat=%s, max=%s",
+                          self$viewPerEpochPlots("accuracy_plot"),
+                          self$viewPerEpochPlots("saturation_plot"),
+                          self$viewPerEpochPlots("max_weight_plot")))
+          
+          
+          
+          if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+          
+          # Resolve IDs once
+          ens <- as.integer(if (!is.null(self$ensemble_number)) self$ensemble_number else get0("ensemble_number", 1L))
+          mod <- as.integer(if (exists("model_iter_num", inherits = TRUE)) model_iter_num else get0("model_iter_num", 1L))
+          
+          # Filename builder
+          fname <- make_fname_prefix(
+            do_ensemble     = do_ensemble,
+            num_networks    = num_networks,
+            total_models    = if (!is.null(self$ensemble)) length(self$ensemble) else num_networks,
+            ensemble_number = ens,
+            model_index     = mod,
+            who             = "SONN"
           )
           
-          # Build dynamic title string
-          plot_title_prefix <- paste("DESONN", ensemble_number, "SONN", model_iter_num, "| lr:", lr, "| lambda:", lambda)
+          plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) sprintf("DESONN %d SONN %d | lr: %s | lambda: %s", ens, mod, lr, lambda) else sprintf("SONN %d | lr: %s | lambda: %s", mod, lr, lambda)
           
-          # === Plot 1: Training Accuracy and Loss ===
-          tryCatch({
-            accuracy_loss_plot <<- ggplot(df, aes(x = Epoch)) +
-              geom_line(aes(y = Accuracy), color = "blue", size = 1) +
-              geom_line(aes(y = Loss), color = "red", size = 1) +
-              labs(
-                title = "Training Accuracy (blue) & Loss (red)",
-                y = "Value"
-              ) +
-              theme_minimal() +
-              theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-            
-            ggsave("training_accuracy_loss.png", accuracy_loss_plot, width = 6, height = 4, dpi = 300)
-            
-            while (!is.null(dev.list())) dev.off()
-            print(accuracy_loss_plot)
-          }, error = function(e) {
-            message("❌ Failed to generate accuracy_loss_plot: ", e$message)
-          })
+          # Per-epoch DF
+          df <- data.frame(
+            Epoch      = seq_along(train_accuracy_log),
+            Accuracy   = train_accuracy_log,
+            Loss       = train_loss_log,
+            MeanOutput = mean_output_log,
+            StdOutput  = sd_output_log,
+            MaxWeight  = max_weight_log
+          )
           
-          # === Plot 2: Output Saturation ===
-          tryCatch({
-            output_saturation_plot <<- ggplot(df, aes(x = Epoch)) +
-              geom_line(aes(y = MeanOutput), color = "green", size = 1) +
-              geom_line(aes(y = StdOutput), color = "orange", size = 1) +
-              labs(
-                title = "Output Mean (green) & Std Dev (orange)",
-                y = "Output Value"
-              ) +
-              theme_minimal() +
-              theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-            
-            ggsave("output_saturation.png", output_saturation_plot, width = 6, height = 4, dpi = 300)
-            
-            while (!is.null(dev.list())) dev.off()
-            print(output_saturation_plot)
-          }, error = function(e) {
-            message("❌ Failed to generate output_saturation_plot: ", e$message)
-          })
+          # 1) Accuracy & Loss
+          if (self$viewPerEpochPlots("accuracy_plot")) {
+            tryCatch({
+              p <- ggplot(df, aes(x = Epoch)) +
+                geom_line(aes(y = Accuracy), size = 1) +
+                geom_line(aes(y = Loss),     size = 1) +
+                labs(title = paste(plot_title_prefix, "— Training Accuracy (blue) & Loss (red)"),
+                     y = "Value") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              out <- file.path("plots", fname("training_accuracy_loss_plot.png"))
+              message("📸 save: ", out)
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+              print(p)
+            }, error = function(e) message("❌ accuracy_loss_plot: ", e$message))
+          }
           
-          # === Plot 3: Max Weight Magnitude ===
-          tryCatch({
-            max_weight_plot <<- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
-              geom_line(color = "purple", size = 1) +
-              labs(
-                title = "Max Weight Magnitude Over Time",
-                y = "Max |Weight|"
-              ) +
-              theme_minimal() +
-              theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-            
-            ggsave("max_weight.png", max_weight_plot, width = 6, height = 4, dpi = 300)
-            
-            while (!is.null(dev.list())) dev.off()
-            print(max_weight_plot)
-          }, error = function(e) {
-            message("❌ Failed to generate max_weight_plot: ", e$message)
-          })
+          # 2) Output Saturation
+          if (self$viewPerEpochPlots("saturation_plot")) {
+            tryCatch({
+              p <- ggplot(df, aes(x = Epoch)) +
+                geom_line(aes(y = MeanOutput), size = 1) +
+                geom_line(aes(y = StdOutput),  size = 1) +
+                labs(title = paste(plot_title_prefix, "— Output Mean & Std Dev"),
+                     y = "Output Value") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              out <- file.path("plots", fname("output_saturation_plot.png"))
+              message("📸 save: ", out)
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+              print(p)
+            }, error = function(e) message("❌ output_saturation_plot: ", e$message))
+          }
+          
+          # 3) Max Weight Magnitude
+          if (self$viewPerEpochPlots("max_weight_plot")) {
+            tryCatch({
+              p <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
+                geom_line(size = 1) +
+                labs(title = paste(plot_title_prefix, "— Max Weight Magnitude Over Time"),
+                     y = "Max |Weight|") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              out <- file.path("plots", fname("max_weight_plot.png"))
+              message("📸 save: ", out)
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+              print(p)
+            }, error = function(e) message("❌ max_weight_plot: ", e$message))
+          }
           
           
-
+          
           predicted_output_train_reg <- learn_result
           predicted_output_train_reg_prediction_time <- learn_result$learn_time
           
@@ -1430,7 +1474,7 @@ SONN <- R6Class(
           
           # Record the loss for this epoch
           # losses[[epoch]] <- mean(error_last_layer^2) + reg_loss_total
-          predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$predicted_output
+          predictions <- if (self$ML_NN) hidden_outputs[[self$num_layers]] else predicted_output_train_reg$learn_output
           
           # Ensure predictions match label dimensions before loss calculation
           if (!all(dim(predictions) == dim(labels))) {
@@ -1452,10 +1496,10 @@ SONN <- R6Class(
             biases_record <- vector("list", self$num_layers)
           }
           
-
           
           
-          # Update weights
+          
+          # Update weights and biases code removed for chatgpt to process
           if (update_weights) {
             if (self$ML_NN) {
               for (layer in 1:self$num_layers) {
@@ -1471,7 +1515,7 @@ SONN <- R6Class(
                     
                     # $$$$$$$$$$$$$$$ DEBUGGING OUTPUT $$$$$$$$$$$$$$$
                     cat(">>> After initialize_optimizer_params() for layer", layer, "\n")
-                    print(str(optimizer_params_weights[[layer]]))  # structure of this specific layer’s params
+                    str(optimizer_params_weights[[layer]])  # structure of this specific layer’s params
                     print(names(optimizer_params_weights[[layer]]))  # list element names
                   }
                   
@@ -1594,7 +1638,7 @@ SONN <- R6Class(
                       
                       self$weights[[layer]] <- updated_optimizer$updated_weights_or_biases
                       
-
+                      
                       
                       optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                       
@@ -1622,7 +1666,7 @@ SONN <- R6Class(
                       optimizer_params_weights[[layer]] <- updated_optimizer$updated_optimizer_params
                     }
                     else if (optimizer == "sgd") {
-
+                      
                       cat("DEBUG: Is optimizer_params_weights available? ", exists("optimizer_params_weights"), "\n")
                       cat("DEBUG: Type: ", typeof(optimizer_params_weights), "\n")
                       cat("DEBUG: Length: ", length(optimizer_params_weights), "\n")
@@ -1876,13 +1920,20 @@ SONN <- R6Class(
                     optimizer,
                     list(dim(self$weights)),
                     lookahead_step,
-                    1
+                    1L
                   )
+                  cat(">>> SL initialize_optimizer_params done for layer 1\n")
+                  str(optimizer_params_weights[[1]])
+                  print(names(optimizer_params_weights[[1]]))
                 }
                 
+                # Get weight gradients from learn()
                 grads_matrix <- weight_gradients[[1]]
                 
-                # ------------------- REGULARIZATION -------------------
+                # Clip gradient
+                grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5.0)
+                
+                # --------- Regularization ---------
                 if (!is.null(reg_type)) {
                   if (reg_type == "L2") {
                     reg_term <- self$lambda * self$weights
@@ -1917,40 +1968,55 @@ SONN <- R6Class(
                     cat("Warning: Unknown reg_type in SL. No regularization applied.\n")
                     weight_update <- lr * grads_matrix
                   }
-                  
                 } else {
-                  # Default case: no regularization
                   weight_update <- lr * grads_matrix
                 }
                 
-                
                 # ------------------- DEBUG -------------------
-                cat(">> SL grads_matrix dim:\n")
-                print(dim(grads_matrix))
-                cat("SL grads_matrix summary:\n")
-                print(summary(as.vector(grads_matrix)))
+                cat(">> SL grads_matrix dim:\n"); print(dim(grads_matrix))
+                cat("SL grads_matrix summary:\n"); print(summary(as.vector(grads_matrix)))
                 
-                # ------------------- OPTIMIZER -------------------
-                if (!is.null(optimizer_params_weights[[1]]) && optimizer == "adam") {
-                  updated_optimizer <- apply_optimizer_update(
-                    optimizer = optimizer,
-                    optimizer_params = optimizer_params_weights,
-                    grads_matrix = grads_matrix,
-                    lr = lr,
-                    beta1 = beta1,
-                    beta2 = beta2,
-                    epsilon = epsilon,
-                    epoch = epoch,
-                    self = self,
-                    layer = 1,
-                    target = "weights"
-                  )
+                # ------------------- OPTIMIZER DISPATCH (SL) -------------------
+                if (!is.null(optimizer_params_weights[[1]])) {
                   
-                  self$weights <- updated_optimizer$updated_weights_or_biases
-                  optimizer_params_weights[[1]] <- updated_optimizer$updated_optimizer_params
+                  if (optimizer %in% c("adam","rmsprop","sgd","sgd_momentum","nag","ftrl","lamb","lookahead","adagrad","adadelta")) {
+                    updated_optimizer <- apply_optimizer_update(
+                      optimizer        = optimizer,
+                      optimizer_params = optimizer_params_weights,
+                      grads_matrix     = grads_matrix,
+                      lr               = lr,
+                      beta1            = beta1,
+                      beta2            = beta2,
+                      epsilon          = epsilon,
+                      epoch            = epoch,
+                      self             = self,
+                      layer            = 1L,          # <-- IMPORTANT: integer scalar, avoids closure clash
+                      target           = "weights"
+                    )
+                    
+                    # For consistency with your ML path:
+                    # - Most branches set absolute weights: assign directly
+                    # - Branches that return a delta (e.g., your LAMB/lookahead code) should be handled inside apply_optimizer_update
+                    self$weights <- updated_optimizer$updated_weights_or_biases
+                    optimizer_params_weights[[1]] <- updated_optimizer$updated_optimizer_params
+                    
+                    cat(">> SL updated weights summary: min =", min(self$weights),
+                        ", mean =", mean(self$weights),
+                        ", max =", max(self$weights), "\n")
+                    
+                  } else {
+                    # Unknown optimizer → fall back to manual update
+                    if (all(dim(grads_matrix) == dim(self$weights))) {
+                      self$weights <- self$weights - weight_update
+                    } else if (prod(dim(self$weights)) == 1) {
+                      self$weights <- self$weights - sum(weight_update)
+                    } else {
+                      self$weights <- self$weights - apply(weight_update, 2, mean)
+                    }
+                  }
                   
                 } else {
-                  # ------------- FALLBACK: SGD or others -------------
+                  # Params not initialized (shouldn’t happen) → safe fallback
                   if (all(dim(grads_matrix) == dim(self$weights))) {
                     self$weights <- self$weights - weight_update
                   } else if (prod(dim(self$weights)) == 1) {
@@ -1960,6 +2026,7 @@ SONN <- R6Class(
                   }
                 }
               }
+              
             }
           }
           # Record the updated weight matrix
@@ -1993,7 +2060,7 @@ SONN <- R6Class(
                   # Clip bias gradient
                   grads_matrix <- clip_gradient_norm(grads_matrix, max_norm = 5)
                   
-
+                  
                   
                   # --- Align dimensions if needed ---
                   bias_shape <- dim(as.matrix(self$biases[[layer]]))
@@ -2070,7 +2137,7 @@ SONN <- R6Class(
                   cat("grads_matrix summary:\n")
                   print(summary(as.vector(grads_matrix)))
                   
-
+                  
                   # Apply optimizer update if optimizer is specified
                   if (!is.null(optimizer_params_biases[[layer]]) && !is.null(optimizer)) {
                     if (optimizer == "adam") {
@@ -2359,87 +2426,91 @@ SONN <- R6Class(
                     }
                     
                     
-                  } }}}else {
+                  } }}}else {# ---------------- SINGLE-LAYER BIAS UPDATE ----------------
                     cat("Single Layer Bias Update\n")
                     
-                    # Check that self$biases is valid
-                    if (is.null(self$biases)) {
-                      stop("Biases are NULL in single-layer mode.")
-                    }
+                    # 1) Ensure biases matrix [1 x n_units]
+                    if (is.null(self$biases)) stop("Biases are NULL in single-layer mode.")
+                    if (!is.matrix(self$biases)) self$biases <- matrix(as.numeric(self$biases), nrow = 1)
                     
-                    # Convert to matrix if not already
-                    if (!is.matrix(self$biases)) {
-                      self$biases <- matrix(self$biases, nrow = 1)
-                    }
-                    
-                    # Initialize optimizer parameters if needed
-                    if (!is.null(optimizer) && is.null(optimizer_params_biases)) {
-                      optimizer_params_biases <- initialize_optimizer_params(
+                    # 2) Ensure optimizer params list + init slot 1
+                    if (is.null(optimizer_params_biases)) optimizer_params_biases <- list()
+                    if (!is.null(optimizer) && is.null(optimizer_params_biases[[1]])) {
+                      optimizer_params_biases[[1]] <- initialize_optimizer_params(
                         optimizer,
                         list(dim(self$biases)),
                         lookahead_step,
-                        layer
+                        1L
                       )
+                      cat(">>> SL initialize_optimizer_params (bias) done for layer 1\n")
+                      str(optimizer_params_biases[[1]])
+                      print(names(optimizer_params_biases[[1]]))
                     }
                     
-                    # Compute mean error across rows (for each neuron)
-                    bias_update <- colMeans(errors[[1]], na.rm = TRUE)
+                    # 3) Gradient from errors (per-unit mean)
+                    bias_grad <- colMeans(errors[[1]], na.rm = TRUE)
                     
-                    # Reshape bias update to match self$biases dimensions
-                    if (length(bias_update) != ncol(self$biases)) {
-                      bias_update <- matrix(rep(bias_update, length.out = ncol(self$biases)), nrow = 1)
-                    } else {
-                      bias_update <- matrix(bias_update, nrow = 1)
-                    }
+                    # shape to [1 x n_units]
+                    bias_grad <- matrix(rep(bias_grad, length.out = ncol(self$biases)), nrow = 1)
                     
-                    # Debug prints
-                    cat("Bias update dimensions:", dim(bias_update), "\n")
-                    cat("Biases dimensions before update:", dim(self$biases), "\n")
+                    # optional clip (kept consistent with weights)
+                    bias_grad <- clip_gradient_norm(bias_grad, max_norm = 5.0)
                     
-                    # Use optimizer if specified
-                    if (!is.null(optimizer)) {
+                    # Debug
+                    cat("SL bias_grad dim:", paste(dim(bias_grad), collapse = "x"), "\n")
+                    cat("SL bias_grad summary:\n"); print(summary(as.vector(bias_grad)))
+                    
+                    # 4) Optimizer dispatch (preferred path)
+                    if (!is.null(optimizer) && !is.null(optimizer_params_biases[[1]])) {
                       updated_optimizer <- apply_optimizer_update(
-                        optimizer = optimizer,
+                        optimizer        = optimizer,
                         optimizer_params = optimizer_params_biases,
-                        grads_matrix = bias_update,
-                        lr = lr,
-                        beta1 = beta1,
-                        beta2 = beta2,
-                        epsilon = epsilon,
-                        epoch = epoch,
-                        self = self,
-                        layer = layer,
-                        target = "biases"
+                        grads_matrix     = bias_grad,   # pass pure gradient (not lr*grad + reg)
+                        lr               = lr,
+                        beta1            = beta1,
+                        beta2            = beta2,
+                        epsilon          = epsilon,
+                        epoch            = epoch,
+                        self             = self,
+                        layer            = 1L,          # <= important: integer index, avoids 'closure' clash
+                        target           = "biases"
                       )
                       
+                      # Most optimizers return absolute updated params in your codebase:
                       self$biases <- updated_optimizer$updated_weights_or_biases
-                      optimizer_params_biases <- updated_optimizer$updated_optimizer_params
+                      optimizer_params_biases[[1]] <- updated_optimizer$updated_optimizer_params
+                      
+                      cat(">> SL updated biases summary: min =", min(self$biases),
+                          ", mean =", mean(self$biases),
+                          ", max =", max(self$biases), "\n")
                       
                     } else {
-                      # --------- Apply Regularization to Bias Gradient (SL) ---------
+                      # 5) Manual / fallback update with regularization (mirrors weights SL fallback)
+                      
+                      bias_update <- lr * bias_grad
+                      
                       if (!is.null(reg_type)) {
                         if (reg_type == "L2") {
                           reg_term <- self$lambda * self$biases
-                          bias_update <- lr * bias_update + reg_term
+                          bias_update <- bias_update + reg_term
                           
                         } else if (reg_type == "L1") {
                           reg_term <- self$lambda * sign(self$biases)
-                          bias_update <- lr * bias_update + reg_term
+                          bias_update <- bias_update + reg_term
                           
                         } else if (reg_type == "L1_L2") {
                           l1_ratio <- 0.5
-                          l1_grad <- l1_ratio * sign(self$biases)
-                          l2_grad <- (1 - l1_ratio) * self$biases
-                          reg_term <- self$lambda * (l1_grad + l2_grad)
-                          bias_update <- lr * bias_update + reg_term
+                          l1_grad  <- l1_ratio * sign(self$biases)
+                          l2_grad  <- (1 - l1_ratio) * self$biases
+                          bias_update <- bias_update + self$lambda * (l1_grad + l2_grad)
                           
                         } else if (reg_type == "Group_Lasso") {
                           norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE)) + 1e-8
-                          reg_term <- self$lambda * (self$biases / norm_bias)
-                          bias_update <- lr * bias_update + reg_term
+                          reg_term  <- self$lambda * (self$biases / norm_bias)
+                          bias_update <- bias_update + reg_term
                           
                         } else if (reg_type == "Max_Norm") {
-                          max_norm <- 1.0
+                          max_norm  <- 1.0
                           norm_bias <- sqrt(sum(self$biases^2, na.rm = TRUE))
                           clipped_bias <- if (norm_bias > max_norm) {
                             (self$biases / norm_bias) * max_norm
@@ -2447,29 +2518,21 @@ SONN <- R6Class(
                             self$biases
                           }
                           reg_term <- self$lambda * (self$biases - clipped_bias)
-                          bias_update <- lr * bias_update + reg_term
+                          bias_update <- bias_update + reg_term
                           
                         } else {
                           cat("Warning: Unknown reg_type in SL bias update. No regularization applied.\n")
-                          bias_update <- lr * bias_update
+                          # keep bias_update as lr * grad
                         }
-                        
-                      } else {
-                        # Default: No regularization
-                        bias_update <- lr * bias_update
                       }
                       
-                      # --------- Apply Final Bias Update ---------
+                      # Final manual apply
                       self$biases <- self$biases - bias_update
-                      
-                      
-                      
-                      
                     }
+                    
+                    
                   }
-            
           }
-          
           
           if (self$ML_NN) {
             for (layer in 1:self$num_layers) {
@@ -2550,8 +2613,9 @@ SONN <- R6Class(
       weights_record <- NULL
       biases_record <- NULL
       dim_hidden_layers <- NULL}
+      
+      # WIP: may need to load best_weights/best_biases from saved model files or checkpoints here before predicting
       if (!train) {
-        
         predicted_output_train_reg <- self$predict(Rdata, weights = best_weights, biases = best_biases, activation_functions)
         
       }
@@ -2648,13 +2712,12 @@ SONN <- R6Class(
         })
       }
       
-      # print("print(weights_record)")
-      # print(weights_record)
-      # print("print(biases_record)")
-      # print(biases_record)
-      # assign("loss_status", 'ok', envir = .GlobalEnv)
-      # Assign a value to lossesatoptimalepoch
-      lossesatoptimalepoch <- losses[optimal_epoch]
+      
+      
+      # Record the loss at the optimal epoch, or fall back to the last epoch's loss if no optimal epoch was found
+      lossesatoptimalepoch <- if (is.na(optimal_epoch)) tail(losses, 1) else losses[optimal_epoch]
+      
+      
       
       # Check if all values are finite
       tryCatch({
@@ -2673,8 +2736,8 @@ SONN <- R6Class(
           eq <- paste("Optimal Epoch:", optimal_epoch, "\nLoss:", round(losses[optimal_epoch], 2))
           text(optimal_epoch + 1.65, losses[optimal_epoch] + offset, eq, pos = 4, col = "limegreen", adj = 0)
           
-          # Save the plot
-          saveRDS(plot_epochs, paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
+          # Save the plot # not good wil update later
+          # saveRDS(plot_epochs, paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
         } else {
           # Print a warning message and skip the plotting
           print(paste("Warning: Non-finite values detected in losses for DESONN", ensemble_number, "SONN", model_iter_num, ". Skipping plot."))
@@ -2876,19 +2939,18 @@ DESONN <- R6Class(
       
       self$ensembles <- ensembles
       
+      # Configuration flags for enabling/disabling per-DESONN model performance/relevance plots
+      self$FinalUpdatePerformanceandRelevanceViewPlotsConfig  <- list(
+        performance_high_mean_plots = performance_high_mean_plots,  # high mean performance plots
+        performance_low_mean_plots  = performance_low_mean_plots,   # low mean performance plots
+        relevance_high_mean_plots   = relevance_high_mean_plots,    # high mean relevance plots
+        relevance_low_mean_plots    = relevance_low_mean_plots,     # low mean relevance plots
+        viewAllPlots = viewAllPlots,
+        verbose      = verbose  
+      )
       
-      # if(!hyperparameter_grid_setup){
-        # ensembles$main_ensemble <- list(
-          # run_results_1_1
-          # run_results_1_2,
-          # run_results_1_3,
-          # run_results_1_4,
-          # run_results_1_5
-        # )
-        # ensembles$temp_ensemble <- vector("list", length(self$ensemble))
-      # }
-  
     },
+    
     # Function to normalize specific columns in the data
     normalize_data = function(Rdata, numeric_columns) {
       # Calculate mean and standard deviation for each numeric feature
@@ -2983,8 +3045,15 @@ DESONN <- R6Class(
       
       # Return the computed batch size
       return(batch_size)
-    },
-    
+    }, 
+    viewFinalUpdatePerformanceandRelevancePlots = function(name) {
+      cfg <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
+      on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
+      val <- cfg[[name]]
+      flag <- isTRUE(val) || (is.logical(val) && length(val) == 1 && !is.na(val) && val)
+      on_all || flag
+    }
+    ,
     
     train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
       
@@ -3097,27 +3166,27 @@ DESONN <- R6Class(
           model_name <- attr(self$ensemble[[i]], "model_name")
           
           ensemble_name_model_name <- paste("Ensemble:", ensemble_name, "Model:", model_name)
-
-          model_iter_num <- i
-
           
-
+          model_iter_num <- i
+          
+          
+          
           
           self$ensemble[[i]]$self_organize(Rdata, labels, lr)
           if (learnOnlyTrainingRun == FALSE) {
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
-            predicted_outputAndTime <- suppressMessages(invisible(
+            predicted_outputAndTime <- suppressMessages(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train = TRUE
-              )))
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train
+              ))
             
             
             
-
+            
             
             # -- Start: Store core model info --
             all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
-
+            
             all_model_iter_num[[i]] <- model_iter_num
             
             all_predicted_outputAndTime[[i]] <- list(
@@ -3129,7 +3198,7 @@ DESONN <- R6Class(
               biases_record = predicted_outputAndTime$best_biases_record,
               losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch
             )
-
+            
             
             # Optional storage
             # my_optimal_epoch_out_vector[[i]] <<- predicted_outputAndTime$optimal_epoch
@@ -3156,28 +3225,33 @@ DESONN <- R6Class(
               cat("Shape of Predicted Output:\n"); print(dim(all_predicted_outputs[[i]]))
               
               cat("Error Preview (first 5):\n"); print(head(all_errors[[i]], 5))
-              cat("Hidden Output Layer Count:\n"); print(length(all_hidden_outputs[[i]]))
-              cat("Hidden Layer Dims:\n"); print(all_layer_dims[[i]])
-              
+              if(ML_NN){
+                cat("Hidden Output Layer Count:\n"); print(length(all_hidden_outputs[[i]]))
+                cat("Hidden Layer Dims:\n"); print(all_layer_dims[[i]])
+              }
               cat("Best Validation Probabilities (first 5):\n"); print(head(all_best_val_probs[[i]], 5))
               cat("Best Validation Labels (first 5):\n"); print(head(all_best_val_labels[[i]], 5))
               
               # Debug weights and biases
-              cat("Weights Record (layer 1 preview):\n"); print(str(all_weights[[i]][[1]]))
-              cat("Biases Record (layer 1 preview):\n"); print(str(all_biases[[i]][[1]]))
+              cat("Weights Record (layer 1 preview):\n"); str(all_weights[[i]][[1]])
+              cat("Biases Record (layer 1 preview):\n"); str(all_biases[[i]][[1]])
               
               # Debug activation functions
               cat("Activation Functions Used:\n"); print(all_activation_functions[[i]])
               cat("--------------------------------------------------------\n")
               
-          
+              
             } else {
               cat("WARNING: predicted_output_l2$learn_output is NULL at ensemble index", i, "\n")
               str(predicted_outputAndTime)
             }
-
-            eval_result <- tryCatch(
-              EvaluatePredictionsReport(
+            
+            
+            
+            
+            # === Evaluate Prediction Diagnostics ===
+            if (!is.null(X_validation) && !is.null(y_validation)) {
+              eval_result <- EvaluatePredictionsReport(
                 X_validation = X_validation,
                 y_validation = y_validation,
                 probs = all_predicted_outputs[[i]],
@@ -3186,21 +3260,16 @@ DESONN <- R6Class(
                 best_val_probs = all_best_val_probs[[i]],
                 best_val_labels = all_best_val_labels[[i]],
                 verbose = verbose
-              ),
-              error = function(e) {
-                message("❌ EvaluatePredictionsReport failed: ", e$message)
-                NULL
-              }
-            )
-            
-
+                
+              )
+            }
             
           }
         }
-            
-            ###########code from old code###########
-            print(all_ensemble_name_model_name)
-               
+        
+        ###########code from old code###########
+        print(all_ensemble_name_model_name)
+        
         
         for (i in seq_along(all_predicted_outputAndTime)) {
           cat("\n── Model", i, "──\n")
@@ -3217,21 +3286,42 @@ DESONN <- R6Class(
           cat("Optimal epoch:", model_result$optimal_epoch, "\n")
           cat("Loss at optimal:", model_result$losses_at_optimal_epoch, "\n")
           
-          cat("Weights record dims (layer 1): ")
-          if (!is.null(model_result$weights_record[[1]])) {
-            print(dim(model_result$weights_record[[1]]))
+          # ---- Weights ----
+          if (is.list(model_result$weights_record)) {
+            cat("Weights record dims by layer:\n")
+            for (L in seq_along(model_result$weights_record)) {
+              W <- model_result$weights_record[[L]]
+              if (!is.null(W)) {
+                cat(sprintf("  Layer %d: ", L)); print(dim(W))
+              } else {
+                cat(sprintf("  Layer %d: NULL\n", L))
+              }
+            }
           } else {
-            cat("NULL\n")
+            cat("Weights record dims (SL): "); print(dim(model_result$weights_record))
           }
           
-          cat("Biases record dims (layer 1): ")
-          if (!is.null(model_result$biases_record[[1]])) {
-            print(length(model_result$biases_record[[1]]))
+          # ---- Biases ----
+          if (is.list(model_result$biases_record)) {
+            cat("Biases record length by layer:\n")
+            for (L in seq_along(model_result$biases_record)) {
+              b <- model_result$biases_record[[L]]
+              if (!is.null(b)) {
+                # bias could be vector or 1-col matrix
+                blen <- if (is.matrix(b)) nrow(b) * ncol(b) else length(b)
+                cat(sprintf("  Layer %d: %d\n", L, blen))
+              } else {
+                cat(sprintf("  Layer %d: NULL\n", L))
+              }
+            }
           } else {
-            cat("NULL\n")
+            cat("Biases record length (SL): ")
+            blen <- if (is.matrix(model_result$biases_record)) length(model_result$biases_record) else length(model_result$biases_record)
+            print(blen)
           }
           
-          Sys.sleep(0.25)  # pause slightly for readability
+          
+          # Sys.sleep(0.25)  # pause slightly for readability
         }
         
         # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
@@ -3252,36 +3342,162 @@ DESONN <- R6Class(
           all_predicted_outputAndTime  = all_predicted_outputAndTime,
           all_weights                  = all_weights,
           all_biases                   = all_biases,
-          all_activation_functions     = all_activation_functions
+          all_activation_functions     = all_activation_functions,
+          ML_NN = ML_NN,
+          verbose = verbose
         )
         
-            
-
-            if (showMeanBoxPlots == TRUE) {
-              print(performance_relevance_plots$performance_high_mean_plots)
-              print(performance_relevance_plots$performance_low_mean_plots)
-              print(performance_relevance_plots$relevance_high_mean_plots)
-              print(performance_relevance_plots$relevance_low_mean_plots)
+        `%||%` <- function(a,b) if (is.null(a) || !length(a)) b else a
+        
+        # Prints to RStudio Plots pane ONLY. Never saves. Handles ggplot, list, and nested list.
+        print_plotlist_verbose <- function(x, label = NULL, print_plots = TRUE) {
+          lab <- label %||% "Plot"
+          if (inherits(x, c("gg","ggplot"))) {
+            if (print_plots) print(x)
+            message(lab, ": 1 ggplot", if (!print_plots) " (suppressed)")
+            return(invisible(list(printed = if (print_plots) "<single>" else character(0), skipped = character(0))))
+          }
+          if (is.list(x)) {
+            nms <- names(x); if (is.null(nms)) nms <- as.character(seq_along(x))
+            printed <- character(0); skipped <- character(0)
+            for (i in seq_along(x)) {
+              item <- x[[i]]; nm <- nms[[i]]
+              if (is.null(item)) { skipped <- c(skipped, sprintf("%s (NULL)", nm)); next }
+              if (inherits(item, c("gg","ggplot"))) {
+                if (print_plots) print(item)
+                printed <- c(printed, nm); next
+              }
+              if (is.list(item)) {
+                # nested list: print each ggplot inside
+                has_any <- FALSE
+                for (j in seq_along(item)) {
+                  p <- item[[j]]
+                  if (inherits(p, c("gg","ggplot"))) { has_any <- TRUE; if (print_plots) print(p) }
+                }
+                if (has_any) printed <- c(printed, paste0(nm, "[nested]")) else skipped <- c(skipped, sprintf("%s (nested non-gg)", nm))
+                next
+              }
+              skipped <- c(skipped, sprintf("%s (type=%s)", nm, paste(class(item), collapse = "+")))
             }
-
-            
-            # At the end of the training process, call the predict function
-            # trained_predictions <<- self$predict(Rdata, labels, activation_functions)
-            # print(dim(labels))
-            predicted_outputAndTime$loss_status <- 'exceeds_10000'
-            
-            
-      
-            
-      
-
+            if (length(printed)) message(lab, ": printed [", paste(printed, collapse=", "), "]")
+            if (length(skipped)) message(lab, ": skipped [", paste(skipped, collapse=", "), "]")
+            if (!length(printed) && !length(skipped)) message(lab, ": empty")
+            return(invisible(list(printed = printed, skipped = skipped)))
+          }
+          message(lab, ": skipped (not ggplot/list, type=", paste(class(x), collapse="+"), ")")
+          invisible(list(printed = character(0), skipped = lab))
+        }
+        
+        
+        # =========================
+        # DESONN — Final perf/relevance lists (bottom 4) with SAFE, LOCAL gates
+        # =========================
+        
+        if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+        
+        ens <- as.integer(ensemble_number)
+        tot <- if (!is.null(self$ensemble)) length(self$ensemble) else as.integer(get0("num_networks", ifnotfound = 1L))
+        mod <- if (exists("model_iter_num", inherits = TRUE) && length(model_iter_num)) as.integer(model_iter_num) else 1L
+        
+        # local gates (no mutation)
+        klist <- c("performance_high_mean_plots","performance_low_mean_plots","relevance_high_mean_plots","relevance_low_mean_plots")
+        cfg   <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
+        as_flag <- function(x) if (isTRUE(x)) TRUE else if (isFALSE(x)) FALSE else FALSE
+        on_all <- as_flag(cfg$viewAllPlots) || as_flag(cfg$verbose)
+        gates  <- setNames(vapply(klist, function(nm) as_flag(cfg[[nm]]) || on_all, logical(1)), klist)
+        force_save_final <- !any(gates)
+        
+        # ---- helpers (drop-in) ----
+        .slug <- function(s) {
+          s <- trimws(as.character(s)); s <- gsub("\\s+", "_", s); s <- gsub("[^A-Za-z0-9_]+", "_", s)
+          tolower(gsub("_+", "_", s))
+        }
+        .plot_label_slug <- function(p) {
+          t <- tryCatch(p$labels$title, error = function(e) NULL)
+          if (!is.null(t) && nzchar(t)) return(.slug(t))
+          y <- tryCatch(p$labels$y,     error = function(e) NULL)
+          if (!is.null(y) && nzchar(y)) return(.slug(y))
+          NULL
+        }
+        
+        # Save a list of ggplots using the item's own name (or plot title) as the base;
+        # falls back to `group_default_k` if nothing useful is found
+        save_plotlist <- function(pls, group_default, fname_fn) {
+          if (is.null(pls) || !length(pls)) return(invisible(NULL))
+          nms <- names(pls)
+          for (k in seq_along(pls)) {
+            p <- pls[[k]]
+            if (!inherits(p, c("gg","ggplot"))) next
+            nm <- if (!is.null(nms) && length(nms) >= k && nzchar(nms[[k]])) .slug(nms[[k]]) else .plot_label_slug(p)
+            base <- if (!is.null(nm) && nzchar(nm)) nm else sprintf("%s_%02d", .slug(group_default), k)
+            out  <- file.path("plots", fname_fn(sprintf("%s.png", base)))
+            ggsave(out, p, width = 6, height = 4, dpi = 300); message("💾 saved: ", out)
+          }
+          invisible(NULL)
+        }
+        
+        
+        # helper: run printing once to the Plots pane (no saving)
+        show_once <- function(pls, label) print_plotlist_verbose(pls, label, print_plots = TRUE)
+        
+        # -------- scenario-aware saving --------
+        save_group <- function(flag, pls, base, label) {
+          if (!(flag || force_save_final)) return(invisible(NULL))
+          
+          if (do_ensemble) {
+            # C/D: save once per model → DESONN_<ens>_SONN_<m>_<base>_<k>.png
+            for (m in seq_len(tot)) {
+              fname_m <- make_fname_prefix(TRUE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = m, who = "DESONN")
+              save_plotlist(pls, base, fname_m)
+            }
+          } else if (tot > 1L) {
+            # B: always SONN_1-<tot>_<base>_<k>.png (use model_index=1)
+            fname_b <- make_fname_prefix(FALSE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = 1L, who = "DESONN")
+            save_plotlist(pls, base, fname_b)
+          } else {
+            # A: SONN_<mod>_<base>_<k>.png
+            fname_a <- make_fname_prefix(FALSE, num_networks = 1L, total_models = 1L, ensemble_number = ens, model_index = mod, who = "DESONN")
+            save_plotlist(pls, base, fname_a)
+          }
+          
+          show_once(pls, label)
+        }
+        
+        # 1) Performance High Mean
+        save_group(gates[["performance_high_mean_plots"]], performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", "Performance High Mean Plots")
+        
+        # 2) Performance Low Mean
+        save_group(gates[["performance_low_mean_plots"]],  performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",  "Performance Low Mean Plots")
+        
+        # 3) Relevance High Mean
+        save_group(gates[["relevance_high_mean_plots"]],   performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",   "Relevance High Mean Plots")
+        
+        # 4) Relevance Low Mean
+        save_group(gates[["relevance_low_mean_plots"]],    performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",    "Relevance Low Mean Plots")
+        
+        
+        
+        
+        
+        
+        
+        # At the end of the training process, call the predict function
+        # trained_predictions <<- self$predict(Rdata, labels, activation_functions)
+        # print(dim(labels))
+        predicted_outputAndTime$loss_status <- 'exceeds_10000'
+        
+        
+        
+        
+        
+        
       }
       
       return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, threshold = eval_result$best_threshold, accuracy = eval_result$accuracy, metrics = eval_result$metrics, misclassified = eval_result$misclassified))
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions) {
+    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, verbose) {
       
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -3329,7 +3545,9 @@ DESONN <- R6Class(
               run_id = run_id,
               weights = all_weights[[i]],
               biases = all_biases[[i]],
-              activation_functions = all_activation_functions[[i]]
+              activation_functions = all_activation_functions[[i]],
+              ML_NN = ML_NN,
+              verbose = verbose
             )
             
             
@@ -3341,6 +3559,7 @@ DESONN <- R6Class(
               weights = self$ensemble[[i]]$weights,
               biases = self$ensemble[[i]]$biases,
               activation_functions = self$ensemble[[i]]$activation_functions,
+              ML_NN = ML_NN,
               verbose = verbose
             )
             
@@ -3349,12 +3568,8 @@ DESONN <- R6Class(
             relevance_metric <- relevance_list[[i]]$metrics
             
             cat(">> METRICS FOR ENSEMBLE:", ensemble_number, "MODEL:", i, "\n")
-            cat("[quantization error]:", performance_metric$quant_error, "\n")
-            cat("[topographic error]:", performance_metric$topo_error, "\n")
-            cat("[clustering_quality_db]:", performance_metric$db, "\n")
-            cat("[MSE]:", performance_metric$mse, "\n")
-            cat("[speed]:", performance_metric$speed, "\n")
-            cat("[memory]:", performance_metric$memory, "bytes\n")
+            print(performance_metric)
+            print(relevance_metric)
             
           } else if(learnOnlyTrainingRun == TRUE){
             if(hyperparameter_grid_setup){
@@ -3382,7 +3597,9 @@ DESONN <- R6Class(
               run_id = run_id,
               weights = all_weights[[i]],
               biases = all_biases[[i]],
-              activation_functions = all_activation_functions[[i]]
+              activation_functions = all_activation_functions[[i]],
+              ML_NN = ML_NN,
+              verbose = verbose
             )
             
             relevance_list[[i]] <- calculate_relevance_learn(
@@ -3392,7 +3609,9 @@ DESONN <- R6Class(
               ensemble_number,
               weights = self$ensemble[[i]]$weights,
               biases = self$ensemble[[i]]$biases,
-              activation_functions = self$ensemble[[i]]$activation_functions
+              activation_functions = self$ensemble[[i]]$activation_functions,
+              ML_NN = ML_NN,
+              verbose = verbose
             )
             
             
@@ -3410,7 +3629,7 @@ DESONN <- R6Class(
           cat("Run ID: ", single_ensemble_name_model_name, "\n")
           cat("Predicted output shape:\n"); print(dim(single_predicted_output))
           cat("Checking self$ensemble[[", i, "]]\n")
-          print(str(self$ensemble[[i]]))
+          str(self$ensemble[[i]])
           cat("====================================\n\n")
           
           
@@ -3479,7 +3698,6 @@ DESONN <- R6Class(
       
       
       # Function to process performance metrics
-      # Function to process performance metrics
       process_performance <- function(metrics_data, model_names) {
         # Initialize variables to store results
         high_mean_df <- NULL
@@ -3508,7 +3726,7 @@ DESONN <- R6Class(
               set_names(list(metric), metric_name)
             }
           }) %>%
-            flatten()
+            purrr::list_flatten()
           
           # Add the Model_Name
           flattened_data$Model_Name <- model_name
@@ -3590,8 +3808,6 @@ DESONN <- R6Class(
       } else {
         NULL
       }
-      # print("Finished Performance update_performance_and_relevance_high")
-      # print("Finished Performance update_performance_and_relevance_low")
       performance_low_mean_plots <- if (!performance_low_mean_is_null) {
         self$update_performance_and_relevance_low(performance_low_mean_df)
       } else {
@@ -3611,6 +3827,7 @@ DESONN <- R6Class(
       } else {
         NULL
       }
+      
       # print("Finished Relevance update_performance_and_relevance_low")
       
       if(hyperparameter_grid_setup){
@@ -3638,16 +3855,16 @@ DESONN <- R6Class(
           }
       }
       
-      # Call find_and_print_best_performing_models with appropriate arguments
-      find_and_print_best_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best)
-      
-      # Call find_and_print_worst_performing_models with appropriate arguments
-      find_and_print_worst_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number = j)
-      
+      # # Call find_and_print_best_performing_models with appropriate arguments
+      # find_and_print_best_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best)
+      # 
+      # # Call find_and_print_worst_performing_models with appropriate arguments
+      # find_and_print_worst_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number = j)
+      # 
       # Return the lists of plots
       return(list(performance_high_mean_plots = performance_high_mean_plots, performance_low_mean_plots = performance_low_mean_plots, relevance_high_mean_plots = relevance_high_mean_plots, relevance_low_mean_plots = relevance_low_mean_plots))
       
-    
+      
     },
     # Function to identify outliers
     identify_outliers = function(y) {
@@ -3687,16 +3904,14 @@ DESONN <- R6Class(
       
       # Loop over each unique metric
       for (metric in unique(high_mean_df$Metric)) {
-        # Subset the data for the current metric
-        
         # Filter out rows where the Value is 0 for metrics containing "precision" or "mean_precision"
         filtered_high_mean_df <- high_mean_df[!(grepl("precision", high_mean_df$Metric, ignore.case = TRUE) & high_mean_df$Value == 0), ]
         
-        # Filter out rows where the Value is NA
+        # Filter out rows where the Value is NA or infinite
         filtered_high_mean_df <- filtered_high_mean_df[!is.na(filtered_high_mean_df$Value) & !is.infinite(filtered_high_mean_df$Value), ]
         
         # Subset the data for the current metric
-        plot_data_high <- filtered_high_mean_df[filtered_high_mean_df$Metric == metric, ] #<<-
+        plot_data_high <- filtered_high_mean_df[filtered_high_mean_df$Metric == metric, ]
         
         # Check if plot_data is not empty
         if (nrow(plot_data_high) > 0) {
@@ -3704,13 +3919,11 @@ DESONN <- R6Class(
           plot_data <- plot_data_high %>%
             mutate(Outlier = ifelse(Value %in% self$identify_outliers(Value), Value, NA))
           
-          #Add columns for outliers
+          # Add columns for outliers
           plot_data$Model_Name_Outlier <- plot_data$Model_Name
-          
           
           # Set the RowName to NA where there are no outliers
           plot_data$Model_Name_Outlier[is.na(plot_data$Outlier)] <- NA
-          
           
           # Create bin labels for "precisions" or "mean_precisions"
           if (grepl("precision", metric, ignore.case = TRUE)) {
@@ -3733,27 +3946,34 @@ DESONN <- R6Class(
           
           # Store the plot in the list
           high_mean_plots[[metric]] <- high_mean_plot
-        } else {
-          # Print a message if there is no data to plot
-          ##print(paste("No data to plot for metric:", metric))
+          
+          # Save the plot in the "plot" folder (cross-platform)
+          # ggsave(
+          #   file.path("plots", paste0("high_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
+          #   high_mean_plot,
+          #   width = 6,
+          #   height = 4,
+          #   dpi = 300
+          # )
         }
       }
       return(high_mean_plots)
-    },
+    }
+    ,
     
     update_performance_and_relevance_low = function(low_mean_df) {
       low_mean_plots <- list()
+      
       # Loop over each unique metric
       for (metric in unique(low_mean_df$Metric)) {
-        # Subset the data for the current metric
-        
         # Filter out rows where the Value is 0 for metrics containing "precision" or "mean_precision"
         filtered_low_mean_df <- low_mean_df[!(grepl("precision", low_mean_df$Metric, ignore.case = TRUE) & low_mean_df$Value == 0), ]
         
-        # Filter out rows where the Value is NA
+        # Filter out rows where the Value is NA or infinite
         filtered_low_mean_df <- filtered_low_mean_df[!is.na(filtered_low_mean_df$Value) & !is.infinite(filtered_low_mean_df$Value), ]
         
-        plot_data_low <- filtered_low_mean_df[filtered_low_mean_df$Metric == metric, ] #<<-
+        # Subset the data for the current metric
+        plot_data_low <- filtered_low_mean_df[filtered_low_mean_df$Metric == metric, ]
         
         # Check if plot_data is not empty
         if (nrow(plot_data_low) > 0) {
@@ -3761,19 +3981,17 @@ DESONN <- R6Class(
           plot_data <- plot_data_low %>%
             mutate(Outlier = ifelse(Value %in% self$identify_outliers(Value), Value, NA))
           
-          #Add columns for outliers
+          # Add columns for outliers
           plot_data$Model_Name_Outlier <- plot_data$Model_Name
-          
           
           # Set the RowName to NA where there are no outliers
           plot_data$Model_Name_Outlier[is.na(plot_data$Outlier)] <- NA
-          
           
           # Create bin labels for "precisions" or "mean_precisions"
           if (grepl("precision", metric, ignore.case = TRUE)) {
             plot_data$Title <- paste0("Boxplot for ", metric, " (", self$create_bin_labels(plot_data$Value), ")")
           } else {
-            plot_data$Title <- paste("Boxplot for", metric) #, " Ensemble Number: ", ensemble_name)
+            plot_data$Title <- paste("Boxplot for", metric)
           }
           
           # Create box plot
@@ -3790,40 +4008,25 @@ DESONN <- R6Class(
           
           # Store the plot in the list
           low_mean_plots[[metric]] <- low_mean_plot
-        } else {
-          # Print a message if there is no data to plot
-          ##print(paste("No data to plot for metric:", metric))
+          
+          # Save the plot in the "plot" folder (cross-platform)
+          # ggsave(
+          #   file.path("plots", paste0("low_mean_plot_", gsub("[^A-Za-z0-9_]", "_", metric), ".png")),
+          #   low_mean_plot,
+          #   width = 6,
+          #   height = 4,
+          #   dpi = 300
+          # )
         }
       }
+      
       return(low_mean_plots)
-      #},
-      #         # Method for predicting output values
-      #         predict = function(Rdata) {
-      #             # Use the ensemble of SONNs to predict output values
-      #             predictions <- lapply(self$ensemble, function(SONN) {
-      #                 SONN$predict(Rdata)
-      #             })
-      #             # Combine the predictions from each SONN
-      #             # (Implementation details omitted for brevity)
-      #             return(combined_predictions)
-      #         },
-      #         # Method for predicting output values using weighted averaging
-      #         predict_weighted_average = function(Rdata) {
-      #             predictions <- lapply(self$ensemble, function(SONN) {
-      #                 SONN$predict(Rdata)
-      #             })
-      #
-      #             # Calculate the performance-weighted average of the predictions
-      #             weighted_average_predictions <- rowMeans(sapply(seq_along(predictions), function(i) {
-      #                 predictions[[i]] * self$performance[i]
-      #             }))
-      #
-      #             return(weighted_average_predictions)
-    },
+    }
+    ,
     #This is for NvrRan TRUE and LearnOnlyTraining TRUE
     store_metadata_precursor = function(run_id, model_iter_num, num_epochs, threshold, all_weights, all_biases, single_predicted_output_learn, single_learn_time, actual_values) {
       
-
+      
       if (ncol(actual_values) != ncol(single_predicted_output_learn)) {
         if (ncol(single_predicted_output_learn) < ncol(actual_values)) {
           # Calculate the required replication factor
@@ -3950,7 +4153,7 @@ DESONN <- R6Class(
       # Create a list to store weights and biases records
       best_weights_records <- list()
       best_biases_records <- list()
-
+      
       # Loop through each network to extract weights and biases from the passed-in lists
       for (i in 1:num_networks) {
         best_weights_records[[i]] <- all_weights[[i]]
@@ -4013,8 +4216,6 @@ DESONN <- R6Class(
       }
     }
     
-    
-    
   )
 )
 
@@ -4073,7 +4274,7 @@ initialize_optimizer_params <- function(optimizer, dim, lookahead_step, layer, v
   
   if (verbose) {
     cat("Layer", current_layer, "optimizer tracking params initialized:\n")
-    print(str(entry))
+    str(entry)
   }
   
   return(entry)
@@ -5031,66 +5232,47 @@ lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch =
 
 
 
-calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, learn_time, predicted_output, prediction_time, ensemble_number, run_id, weights, biases, activation_functions) {
+calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, learn_time, predicted_output, prediction_time, ensemble_number, run_id, weights, biases, activation_functions, ML_NN, verbose) {
   
-  # --- Standardize single-layer as list ---
-  if (!is.list(SONN$weights)) {
-    SONN$weights <- list(SONN$weights)
-  }
-  if (!is.null(SONN$map) && !is.list(SONN$map)) {
-    SONN$map <- list(SONN$map)
-  }
-  
-  # --- Elbow Method to get optimal K for clustering ---
-  max_k <- 15
-  calculate_wss <- function(Rdata, max_k) {
+  # --- Elbow method for clustering (robust) ---
+  calculate_wss <- function(X, max_k = 15L) {
+    max_k <- min(max_k, max(2L, nrow(X) - 1L))
     wss <- numeric(max_k)
-    for (i in 2:max_k) {
-      km.out <- kmeans(Rdata, centers = i)
-      wss[i] <- km.out$tot.withinss
+    for (k in 1:max_k) {
+      wss[k] <- kmeans(X, centers = k, iter.max = 20)$tot.withinss
     }
-    return(wss)
+    wss
   }
+  wss <- calculate_wss(Rdata)
+  dd  <- diff(diff(wss))
+  if (length(dd)) {
+    optimal_k <- max(2L, which.max(dd) + 1L)
+  } else {
+    optimal_k <- min(3L, max(2L, nrow(Rdata) - 1L))
+  }
+  cluster_assignments <- kmeans(Rdata, centers = optimal_k, iter.max = 50)$cluster
   
-  wss <- calculate_wss(Rdata, max_k)
-  optimal_k <- which(diff(diff(wss)) == max(diff(diff(wss)))) + 1
-  result <- kmeans(Rdata, centers = optimal_k)
-  cluster_assignments <- result$cluster
   
   cat("Length of SONN$weights: ", length(SONN$weights), "\n")
   cat("Length of SONN$map: ", if (is.null(SONN$map)) "NULL" else length(SONN$map), "\n")
   
-  # --- Final layer weights (used for most performance metrics) ---
-  final_layer_index <- length(SONN$weights)
-  final_weights <- SONN$weights[[final_layer_index]]
   
-  # --- Topographic error: compute using first layer only ---
-  if (!is.null(SONN$map) && length(SONN$map) >= 1 && length(SONN$weights) >= 1) {
-    topo_layer_index <- 1
-    topo_weights <- SONN$weights[[topo_layer_index]]
-    topo_map <- as.matrix(SONN$map[[topo_layer_index]])
-    cat("[topographic error] using weights + map from layer", topo_layer_index, "\n")
-    topo_error <- topographic_error(topo_weights, topo_map, Rdata, threshold, verbose)
-  } else {
-    cat("[topographic error] skipped: no valid map or weights found for layer 1\n")
-    topo_error <- NULL
-  }
   
-  # --- Compile performance metrics ---
+  # --- Metrics (all take SONN) ---
   perf_metrics <- list(
-    quantization_error             = quantization_error(final_weights, Rdata, run_id, verbose),
-    topographic_error              = topo_error,
-    clustering_quality_db          = clustering_quality_db(final_weights, Rdata, cluster_assignments, verbose),
-    MSE                            = MSE(final_weights, Rdata, labels, predicted_output, verbose),
-    MAE                            = MAE(SONN, Rdata, labels, predicted_output, verbose),
-    RMSE                           = RMSE(SONN, Rdata, labels, predicted_output, verbose),
-    precision                      = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    recall                         = recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    f1_score                       = f1_score(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    speed                          = speed(final_weights, prediction_time, verbose),
-    speed_learn                    = speed_learn(SONN, learn_time, verbose),
-    memory_usage                   = memory_usage(final_weights, Rdata, verbose),
-    robustness                     = robustness(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose),
+    quantization_error            = quantization_error(SONN, Rdata, run_id, verbose),
+    topographic_error             = topographic_error(SONN, Rdata, threshold, verbose),
+    clustering_quality_db         = clustering_quality_db(SONN, Rdata, cluster_assignments, verbose),
+    MSE                           = MSE(SONN, Rdata, labels, predicted_output, verbose),
+    MAE                           = MAE(SONN, Rdata, labels, predicted_output, verbose),
+    RMSE                          = RMSE(SONN, Rdata, labels, predicted_output, verbose),
+    precision                     = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    recall                        = recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    f1_score                      = f1_score(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    speed                         = speed(SONN, prediction_time, verbose),
+    speed_learn                   = speed_learn(SONN, learn_time, verbose),
+    memory_usage                  = memory_usage(SONN, Rdata, verbose),
+    robustness                    = robustness(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose),
     custom_relative_error_binned  = custom_relative_error_binned(SONN, Rdata, labels, predicted_output, verbose)
   )
   
@@ -5107,7 +5289,7 @@ calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_e
 }
 
 
-calculate_relevance <- function(SONN, Rdata, labels, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, verbose) {
+calculate_relevance <- function(SONN, Rdata, labels, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, ML_NN, verbose) {
   
   # --- Standardize single-layer to list format ---
   if (!is.list(SONN$weights)) {
@@ -5151,9 +5333,22 @@ calculate_relevance <- function(SONN, Rdata, labels, model_iter_num, predicted_o
 
 calculate_performance_learn <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, predicted_output, learn_time, ensemble_number, run_id) {
   
-  # --- Standardize single-layer as list ---
-  if (!is.list(SONN$weights)) SONN$weights <- list(SONN$weights)
-  if (!is.null(SONN$map) && !is.list(SONN$map)) SONN$map <- list(SONN$map)
+  # --- Normalize SONN so $weights/$map ALWAYS exist ---
+  if (is.matrix(SONN)) {
+    SONN <- list(weights = list(as.matrix(SONN)))
+  } else if (is.list(SONN) && is.null(SONN$weights) && !is.null(SONN[[1]]) && is.matrix(SONN[[1]])) {
+    SONN$weights <- list(as.matrix(SONN[[1]]))
+  }
+  # Map: ensure list-of-matrix; build a compact grid if missing or wrong type
+  if (is.null(SONN$map)) {
+    m <- nrow(SONN$weights[[1]])
+    r <- max(1L, floor(sqrt(m))); while (m %% r && r > 1L) r <- r - 1L; c <- m %/% r
+    SONN$map <- list(matrix(seq_len(m), nrow = r, ncol = c, byrow = TRUE))
+  } else if (!is.list(SONN$map)) {
+    SONN$map <- list(as.matrix(SONN$map))
+  } else if (!is.matrix(SONN$map[[1]])) {
+    SONN$map[[1]] <- as.matrix(SONN$map[[1]])
+  }
   
   # --- Elbow method for clustering ---
   calculate_wss <- function(Rdata, max_k = 15) {
@@ -5162,39 +5357,42 @@ calculate_performance_learn <- function(SONN, Rdata, labels, lr, model_iter_num,
       km.out <- kmeans(Rdata, centers = i)
       wss[i] <- km.out$tot.withinss
     }
-    return(wss)
+    wss
   }
   wss <- calculate_wss(Rdata)
   optimal_k <- which(diff(diff(wss)) == max(diff(diff(wss)))) + 1
   cluster_assignments <- kmeans(Rdata, centers = optimal_k)$cluster
   
+  cat("Length of SONN$weights: ", length(SONN$weights), "\n")
+  cat("Length of SONN$map: ", if (is.null(SONN$map)) "NULL" else length(SONN$map), "\n")
+  
   # --- Final layer weights ---
   final_weights <- SONN$weights[[length(SONN$weights)]]
   
-  # --- Topographic error (if map exists) ---
+  # --- Topographic error (layer 1) ---
   if (!is.null(SONN$map) && length(SONN$map) >= 1) {
     topo_weights <- SONN$weights[[1]]
-    topo_map <- as.matrix(SONN$map[[1]])
-    topo_error <- topographic_error(topo_weights, topo_map, Rdata, threshold)
+    topo_map     <- as.matrix(SONN$map[[1]])
+    topo_error   <- topographic_error(topo_weights, topo_map, Rdata, threshold, verbose)
   } else {
-    topo_error <- NULL
+    topo_error <- NA_real_
   }
   
-  # --- Metrics ---
+  # --- Metrics (all take SONN) ---
   perf_metrics <- list(
-    quantization_error             = quantization_error(final_weights, Rdata, run_id, verbose),
-    topographic_error              = topo_error,
-    clustering_quality_db          = clustering_quality_db(final_weights, Rdata, cluster_assignments, verbose),
-    MSE                            = MSE(final_weights, Rdata, labels, predicted_output, verbose),
-    MAE                            = MAE(SONN, Rdata, labels, predicted_output, verbose),
-    RMSE                           = RMSE(SONN, Rdata, labels, predicted_output, verbose),
-    precision                      = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    recall                         = recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    f1_score                       = f1_score(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
-    speed                          = speed(final_weights, prediction_time, verbose),
-    speed_learn                    = speed_learn(SONN, learn_time, verbose),
-    memory_usage                   = memory_usage(final_weights, Rdata, verbose),
-    robustness                     = robustness(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose),
+    quantization_error            = quantization_error(SONN, Rdata, run_id, verbose),
+    topographic_error             = topo_error,
+    clustering_quality_db         = clustering_quality_db(SONN, Rdata, cluster_assignments, verbose),
+    MSE                           = MSE(SONN, Rdata, labels, predicted_output, verbose),
+    MAE                           = MAE(SONN, Rdata, labels, predicted_output, verbose),
+    RMSE                          = RMSE(SONN, Rdata, labels, predicted_output, verbose),
+    precision                     = precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    recall                        = recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    f1_score                      = f1_score(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose),
+    speed                         = speed(SONN, prediction_time, verbose),
+    speed_learn                   = speed_learn(SONN, learn_time, verbose),
+    memory_usage                  = memory_usage(SONN, Rdata, verbose),
+    robustness                    = robustness(SONN, Rdata, labels, lr, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose),
     custom_relative_error_binned  = custom_relative_error_binned(SONN, Rdata, labels, predicted_output, verbose)
   )
   
@@ -5235,545 +5433,7 @@ calculate_relevance_learn <- function(SONN, Rdata, labels, model_iter_num, predi
 }
 
 
-find_and_print_best_performing_models <- function(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best) {
-  
-  # Initialize an empty list to hold all metric names
-  all_metric_names <- union(unlist(performance_names), unlist(relevance_names))
-  
-  # Check if the target metric exists in the list of all metrics
-  if (!(target_metric_name_best %in% all_metric_names)) {
-    cat("Target metric", target_metric_name_best, "not found.\n")
-    return(NULL)
-  }
-  
-  # Determine if the target metric should be minimized or maximized
-  minimize_metric <- target_metric_name_best %in% c("speed_learn", "speed", "memory_usage", "quantization_error", "topographic_error", "clustering_quality_db", "MSE", "MAE", "RMSE", "serendipity", "diversity", "hit_rate")
-  maximize_metric <- target_metric_name_best %in% c("precision", "recall", "f1_score", "ndcg", "mean_precision", "robustness", "generalization_ability")
-  
-  # Initialize the best performance value appropriately
-  if (minimize_metric) {
-    best_performance_value <- Inf
-  } else if (maximize_metric) {
-    best_performance_value <- -Inf
-  } else {
-    best_performance_value <- -Inf  # Default to maximizing if not listed
-  }
-  
-  best_model_index <- NULL
-  
-  # Find the best-performing model for the target metric in performance_metrics
-  for (i in seq_along(performance_metrics)) {
-    if (target_metric_name_best %in% performance_names[[i]]) {
-      metric_index <- match(target_metric_name_best, performance_names[[i]])
-      cat("Checking performance model", i, "for metric", target_metric_name_best, "with metric index", metric_index, "\n")  # Debug print
-      
-      if (!is.na(metric_index) && metric_index <= length(performance_metrics[[i]])) {
-        metric_value <- performance_metrics[[i]][[metric_index]]
-        cat("Metric value for performance model", i, "is", toString(metric_value), "\n")  # Debug print
-        
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value < best_performance_value) ||
-              (maximize_metric && metric_value > best_performance_value)) {
-            best_performance_value <- metric_value
-            best_model_index <- i
-            cat("New best model index", best_model_index, "with value", best_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for performance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  
-  # Find the best-performing model for the target metric in relevance_metrics
-  for (i in seq_along(relevance_metrics)) {
-    if (target_metric_name_best %in% relevance_names[[i]]) {
-      metric_index <- match(target_metric_name_best, relevance_names[[i]])
-      cat("Checking relevance model", i, "for metric", target_metric_name_best, "with metric index", metric_index, "\n")  # Debug print
-      if (!is.na(metric_index) && metric_index <= length(relevance_metrics[[i]])) {
-        metric_value <- relevance_metrics[[i]][[metric_index]]
-        cat("Metric value for relevance model", i, "is", metric_value, "\n")  # Debug print
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value < best_performance_value) ||
-              (maximize_metric && metric_value > best_performance_value)) {
-            best_performance_value <- metric_value
-            best_model_index <- i + length(performance_metrics)  # Adjust index for relevance metrics
-            cat("New best model index", best_model_index, "with value", best_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for relevance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  # Print the result
-  if (!is.null(best_model_index)) {
-    cat("Best performing model for metric:", target_metric_name_best, "is SONN",
-        best_model_index, "with value:", best_performance_value, "\n")
-  } else {
-    cat("No model found for metric:", target_metric_name_best, "\n")
-  }
-  
-  return(list(best_model_index = best_model_index, target_metric_name_best = target_metric_name_best))
-}
-
-find_and_print_worst_performing_models <- function(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number) {
-  # Initialize an empty list to hold all metric names
-  all_metric_names <- union(unlist(performance_names), unlist(relevance_names))
-  
-  # Check if the target metric exists in the list of all metrics
-  if (!(target_metric_name_worst %in% all_metric_names)) {
-    cat("Target metric", target_metric_name_worst, "not found.\n")
-    return(NULL)
-  }
-  
-  # Determine if the target metric should be minimized or maximized
-  minimize_metric <- target_metric_name_worst %in% c("speed_learn", "speed", "memory_usage", "quantization_error", "topographic_error", "clustering_quality_db", "MSE", "MAE", "RMSE", "serendipity", "diversity", "hit_rate")
-  maximize_metric <- target_metric_name_worst %in% c("precision", "recall", "f1_score", "ndcg", "mean_precision", "robustness", "generalization_ability")
-  
-  # Initialize the worst performance value appropriately
-  if (minimize_metric) {
-    worst_performance_value <- -Inf
-  } else if (maximize_metric) {
-    worst_performance_value <- Inf
-  } else {
-    worst_performance_value <- Inf  # Default to minimizing if not listed
-  }
-  
-  worst_model_index <- NULL
-  
-  # Find the worst-performing model for the target metric in performance_metrics
-  for (i in seq_along(performance_metrics)) {
-    if (target_metric_name_worst %in% performance_names[[i]]) {
-      metric_index <- match(target_metric_name_worst, performance_names[[i]])
-      cat("Checking performance model", i, "for metric", target_metric_name_worst, "with metric index", metric_index, "\n")  # Debug print
-      
-      if (!is.na(metric_index) && metric_index <= length(performance_metrics[[i]])) {
-        metric_value <- performance_metrics[[i]][[metric_index]]
-        cat("Metric value for performance model", i, "is", toString(metric_value), "\n")  # Debug print
-        
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value > worst_performance_value) ||
-              (maximize_metric && metric_value < worst_performance_value)) {
-            worst_performance_value <- metric_value
-            worst_model_index <- i
-            cat("New worst model index", worst_model_index, "with value", worst_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for performance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  
-  # Find the worst-performing model for the target metric in relevance_metrics
-  for (i in seq_along(relevance_metrics)) {
-    if (target_metric_name_worst %in% relevance_names[[i]]) {
-      metric_index <- match(target_metric_name_worst, relevance_names[[i]])
-      cat("Checking relevance model", i, "for metric", target_metric_name_worst, "with metric index", metric_index, "\n")  # Debug print
-      if (!is.na(metric_index) && metric_index <= length(relevance_metrics[[i]])) {
-        metric_value <- relevance_metrics[[i]][[metric_index]]
-        cat("Metric value for relevance model", i, "is", metric_value, "\n")  # Debug print
-        if (is.numeric(metric_value) && !is.na(metric_value)) {
-          if ((minimize_metric && metric_value > worst_performance_value) ||
-              (maximize_metric && metric_value < worst_performance_value)) {
-            worst_performance_value <- metric_value
-            worst_model_index <- i + length(performance_metrics)  # Adjust index for relevance metrics
-            cat("New worst model index", worst_model_index, "with value", worst_performance_value, "\n")  # Debug print
-          }
-        }
-      } else {
-        cat("Invalid metric index or metric not found for relevance model", i, "\n")  # Debug print
-      }
-    }
-  }
-  
-  # Print the result
-  if (!is.null(worst_model_index)) {
-    cat("Worst performing model for metric:", target_metric_name_worst, "is DESONN", ensemble_number, "SONN",
-        worst_model_index, "with value:", worst_performance_value, "\n")
-  } else {
-    cat("No model found for metric:", target_metric_name_worst, "\n")
-  }
-  
-  return(worst_model_index)
-}
-
-add_network_to_ensemble <- function(ensembles, target_metric_name_best, removed_network, ensemble_number, worst_model_index) {
-  
-  # Extract performance and relevance metrics
-  performance_metrics <- lapply(ensembles$temp_ensemble, function(x) x$performance_metric)
-  relevance_metrics <- lapply(ensembles$temp_ensemble, function(x) x$relevance_metric)
-  
-  performance_names <- lapply(performance_metrics, function(x) names(x))
-  relevance_names <- lapply(relevance_metrics, function(x) names(x))
-  
-  extract_and_combine_metrics <- function(metrics){
-    # Combine the data into a single list of lists
-    combined_data <- lapply(seq_along(metrics), function(i) {
-      data <- metrics[[i]]
-      # Flatten metrics with multiple values into named individual metrics
-      flattened_data <- purrr::map2(data, names(data), function(metric, name) {
-        if (length(metric) > 1) {
-          # If metric has multiple values, name each value
-          set_names(as.list(metric), paste0(name, "_", seq_along(metric)))
-        } else {
-          # If metric has a single value, keep it as is
-          set_names(list(metric), name)
-        }
-      }) %>%
-        flatten()
-      return(flattened_data)
-    })
-    return(combined_data)
-  }
-  
-  #fixed_relevance
-  relevance_metrics <- extract_and_combine_metrics(relevance_metrics)
-  
-  # # Convert to a data frame
-  # df <- bind_rows(combined_data)
-  #
-  # # Ensure all columns are of atomic types
-  # df[] <- lapply(df, function(x) if (is.list(x)) unlist(x) else x)
-  #
-  # # Reshape the data into long format
-  # df <- df %>%
-  #     pivot_longer(cols = -c(Model_Name), names_to = "Metric", values_to = "Value")
-  #
-  # # Switch column order
-  # df <- df[, c("Model_Name", "Metric", "Value")]
-  #
-  # # Convert "Value" column to numeric if possible
-  # df$Value <- as.numeric(as.character(df$Value))
-  #
-  # # Filter out NA values
-  # df <<- df[complete.cases(df), ]
-  
-  
-  # Extract optimal epochs from ensembles$temp_ensemble
-  extract_optimal_epoch <- lapply(ensembles$temp_ensemble, function(x) x$optimal_epoch)
-  
-  # # Step 3: Create a corresponding list for the optimal epochs
-  # optimal_epochs_performance_metrics <- unlist(lapply(seq_along(extract_optimal_epoch), function(i) {
-  #     rep(extract_optimal_epoch[[i]], length(performance_metrics[[i]]))
-  # }))
-  #
-  # optimal_epochs_relevance_metrics <- unlist(lapply(seq_along(extract_optimal_epoch), function(i) {
-  #     rep(extract_optimal_epoch[[i]], length(relevance_metrics[[i]]))
-  # }))
-  
-  # Get run_id and model_iter_num_id from each element in ensembles$temp_ensemble
-  runid <- unlist(lapply(ensembles$temp_ensemble, function(x) x$run_id))
-  model_iter_num_id <- unlist(lapply(ensembles$temp_ensemble, function(x) x$model_iter_num))
-  loss_increase_flag <- unlist(lapply(ensembles$temp_ensemble, function(x) x$loss_increase_flag))
-  
-  # Create a dataframe for performance metrics
-  df_performance_metrics <- do.call(rbind, lapply(performance_metrics, data.frame))
-  df_performance_metrics$runid <- runid
-  df_performance_metrics$model_index <- model_iter_num_id
-  df_performance_metrics$loss_increase_flag <- loss_increase_flag
-  df_performance_metrics$Optimal_Epochs <- extract_optimal_epoch
-  
-  # Reshape performance metrics
-  df_performance_metrics <- tidyr::gather(df_performance_metrics, key = "Metric", value = "Value", -runid, -model_index, -Optimal_Epochs, -loss_increase_flag)
-  
-  # Create a dataframe for relevance metrics
-  df_relevance_metrics <- do.call(rbind, lapply(relevance_metrics, data.frame))
-  df_relevance_metrics$runid <- runid
-  df_relevance_metrics$model_index <- model_iter_num_id
-  df_relevance_metrics$loss_increase_flag <- loss_increase_flag
-  df_relevance_metrics$Optimal_Epochs <- extract_optimal_epoch
-  
-  # Reshape relevance metrics
-  df_relevance_metrics <- tidyr::gather(df_relevance_metrics, key = "Metric", value = "Value", -runid, -model_index, -Optimal_Epochs, -loss_increase_flag)
-  
-  
-  # Combine the two dataframes
-  df_metrics <<- rbind(df_performance_metrics, df_relevance_metrics)
-  
-  
-  # Find the best performing model
-  best_performing_models <<- find_and_print_best_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best)
-  
-  metric_to_vlookup <- best_performing_models$target_metric_name_best
-  
-  best_model_index <<- best_performing_models$best_model_index
-  
-  
-  # Check if best_model_index is valid
-  if (is.numeric(best_model_index) && (!is.infinite(best_model_index) || !is.na(best_model_index) || !is.null(best_model_index))) {
-    # If best_model_index is valid, filter df_metrics and summarize
-    result <<- df_metrics %>%
-      filter(Metric == metric_to_vlookup, model_index == best_model_index, Optimal_Epochs > 1, loss_increase_flag == FALSE) %>%
-      summarise(best_model_index = first(model_index))
-    target_metric_name_best_value <<- df_metrics %>%
-      filter(Metric == metric_to_vlookup, model_index == best_model_index) %>%
-      summarise(Value = first(Value)) %>%
-      pull(Value)
-    optimal_epoch <<- df_metrics %>%
-      filter(Metric == "Optimal_Epochs", model_index == best_model_index) %>%
-      summarise(Value = first(Value)) %>%
-      pull(Value)
-    # Filter the data frame
-    filtered_df <- df_metrics %>%
-      filter(Metric == metric_to_vlookup, model_index == best_model_index)
-    
-    # Now you can access the loss_increase_flag value
-    loss_increase_flag_value <- filtered_df$loss_increase_flag
-    if((nrow(result) > 0 && !is.na(result)) || (nrow(result) > 0 && !is.null(result)) && (!is.null(optimal_epoch) || optimal_epoch > 1 || !is.na(optimal_epoch)) && loss_increase_flag_value == FALSE) {#if found best metric of interest out of the temp ... even if higher than the main ensemble ..we will account for this below
-      best_model_index_new <<-  result$best_model_index
-    }else{#if couldn't find best model in temp ensemble
-      best_model_index_new <- NULL
-      print("Optimal Epoch is <= 1 or does not exist and/or losses exceed initial loss.")
-    }
-    
-  } else {
-    best_model_index_new <- NULL
-    # If best_model_index is invalid, assign NA to result
-    result <<- NA
-    target_metric_name_best_value <<- NA
-  }
-  
-  
-  # optimal_epoch <<- df_metrics %>%
-  #     filter(Metric == "Optimal_Epochs", model_index == best_model_index) %>%
-  #     summarise(Value = first(Value)) %>%
-  #     pull(Value)
-  #
-  # loss_increase_flag_print <- df_metrics %>%
-  #     filter(loss_increase_flag == TRUE, model_index == best_model_index) %>%
-  #     summarise(Value = first(Value)) %>%
-  #     pull(Value)
-  #
-  # print(paste0(metric_to_vlookup, " Metric Value: ", target_metric_name_best_value, ", Optimal Epoch: ", optimal_epoch, " Losses Exceed Intital Epoch:", loss_increase_flag_print))
-  
-  
-  
-  best_model_metadata <- list()
-  
-  # If a best-performing model is found
-  if (!is.null(best_model_index_new)) {
-    # Retrieve the best model and its associated metrics
-    best_model <- ensembles$temp_ensemble[[best_model_index]]
-    best_model$ensemble_number <- best_model$ensemble_number + 1
-    
-    
-    best_model_metadata <- list(
-      ensemble_index = ensemble_number + 1, #we add plus 1 because when hyperparameter_grid_setup == FALSE we did this for initalization too.
-      model_index = best_model_index,
-      input_size = best_model$input_size,
-      output_size = best_model$output_size,
-      N = best_model$N,
-      never_ran_flag = best_model$never_ran_flag,
-      num_samples = best_model$num_samples,
-      num_test_samples = best_model$num_test_samples,
-      num_training_samples = best_model$num_training_samples,
-      num_validation_samples = best_model$num_validation_samples,
-      num_networks = best_model$num_networks,
-      update_weights = best_model$update_weights,
-      update_biases = best_model$update_biases,
-      lr = best_model$lr,
-      lambda = best_model$lambda,
-      num_epochs = best_model$num_epochs,
-      optimal_epoch = best_model$optimal_epoch,
-      run_id = best_model$run_id,
-      model_iter_num = best_model$model_iter_num,
-      ensemble_number = ensemble_number,
-      threshold = best_model$threshold,
-      predicted_output = best_model$predicted_output,
-      predicted_output_tail = best_model$predicted_output_tail,
-      actual_values_tail = best_model$actual_values_tail,
-      differences = best_model$differences,
-      summary_stats = best_model$summary_stats,
-      boxplot_stats = best_model$boxplot_stats,
-      X = best_model$X,
-      y = best_model$y,
-      best_weights_record = best_model$best_weights_record,
-      best_biases_record = best_model$best_biases_record,
-      weights_record2 = best_model$weights_record2, #will likely remove
-      biases_record2 = best_model$biases_record2, #will likely remove
-      lossesatoptimalepoch = best_model$lossesatoptimalepoch,
-      loss_increase_flag = best_model$loss_increase_flag,
-      performance_metric = best_model$performance_metric,
-      relevance_metric = best_model$relevance_metric
-    )
-    
-    cat("Adding model from temp ensemble to main ensemble based on metric:", target_metric_name_best, "\n")
-    
-    ensembles$main_ensemble[[worst_model_index]]$metadata <<- list()
-    
-    # Function to add a new layer of metadata dynamically
-    add_metadata_layer <- function(model, new_metadata) {
-      
-      # Check if the first metadata slot is taken
-      if (!is.null(model$metadata)) {
-        # Initialize metadata counter
-        iteration <- 2
-        print((paste0("metadata", iteration)))
-        # Loop to find the next available metadata slot
-        while (!is.null(model[[paste0("metadata", iteration)]])) {
-          iteration <- iteration + 1
-        }
-        
-        # Add the new metadata to the next available slot
-        model[[paste0("metadata", iteration)]] <- new_metadata
-      } else {
-        # If the first metadata slot is not taken, use it
-        model$metadata <- new_metadata
-      }
-      
-      return(model)
-    }
-    removed_network <<- removed_network
-    removed_network_performance_metric <<- list(removed_network$performance_metric)
-    removed_network_relevance_metric <<- extract_and_combine_metrics(list(removed_network$relevance_metric))
-    
-    # Create a dataframe for performance metrics
-    removed_network_df_performance_metrics <<- do.call(rbind, lapply(removed_network_performance_metric, data.frame))
-    
-    # Reshape performance metrics
-    removed_network_df_performance_metrics <<- tidyr::gather(removed_network_df_performance_metrics, key = "Metric", value = "Value")
-    
-    # Create a dataframe for relevance metrics
-    removed_network_df_relevance_metrics <<- do.call(rbind, lapply(removed_network_relevance_metric, data.frame))
-    
-    # Reshape performance metrics
-    removed_network_df_relevance_metrics <<- tidyr::gather(removed_network_df_relevance_metrics, key = "Metric", value = "Value")
-    
-    
-    df_removed_network_performance_metrics_relevance_metrics <<- rbind(removed_network_df_performance_metrics, removed_network_df_relevance_metrics)
-    
-    removed_network_metric <- df_removed_network_performance_metrics_relevance_metrics %>%
-      filter(Metric == metric_to_vlookup) %>%
-      summarise(Value = first(Value)) %>%
-      pull(Value)
-    
-    
-    # Replace the removed network with the best model from the temp ensemble
-    if (!is.null(removed_network) && target_metric_name_best_value < removed_network_metric && nrow(result) > 0 && !is.na(result)) { #if main is > temp, we want to remove the main and replace with temp
-      # Debug: Print the index of the removed network
-      print(paste("Index of the removed network:", worst_model_index))
-      
-      # Construct the variable name dynamically
-      run_result_var_name <- paste0("run_results_1_", worst_model_index)
-      
-      # Create a list that includes the best model and its metadata
-      best_model_with_removed_network_metadata <- list(best_model_metadata = best_model, metadata = removed_network) #incorporate the old metadata #had to add best_model_metadata = for accessing weights in intialization part of DESONN
-      
-      # Update the global variable run_results_1_<index> with the best model and the metadata of the model it's replacing
-      assign(run_result_var_name, best_model_with_removed_network_metadata, envir = .GlobalEnv)
-      
-      ensembles$main_ensemble[[worst_model_index]] <- best_model
-      # Add the removed network as a new layer of metadata in the replaced model / incorporate the old metadata
-      updated_model <- add_metadata_layer(ensembles$main_ensemble[[worst_model_index]], removed_network)
-      
-      # Update the global ensemble list with the modified model
-      ensembles$main_ensemble[[worst_model_index]] <<- updated_model #it was magically working without this line, but i was erroring out before maybe because of global <<- interferring with local <- so I added this line anyways, because logically this makes sense to me.
-      
-      # Debug: Print the metadata of the replaced model
-      print(paste("Metadata of the replaced model at index", worst_model_index, ":"))
-      
-      
-    } else if(!is.null(removed_network) && target_metric_name_best_value > removed_network_metric &&  (nrow(result) <= 0 || is.na(result))) { #if the temp ensemble's metric value is GREATER than the main ensemble's then put the removed network back in its place
-      # Add the removed network back to the ensemble at its original position
-      ensembles$main_ensemble <- append(ensembles$main_ensemble, list(removed_network), after = worst_model_index - 1)
-      cat("Temp Ensemble based on metric:", target_metric_name_best, "with a value of:", target_metric_name_best_value , "is worse than Main Ensemble's", target_metric_name_best, "with a value of:",  removed_network_metric, "\n")
-    }
-  } else {
-    # If no best model is found, print a message
-    cat("No best model found in the temp ensemble based on metric:", target_metric_name_best, "\n")
-  }
-  
-  # Ensure that temp_ensemble is ready for the next iteration (reuse or refresh as needed)
-  ensembles$temp_ensemble <<- ensembles$temp_ensemble
-  
-  # Return the copy of the original main ensemble for backup or logging purposes
-  return(ensembles$main_ensemble)
-}
-
-prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
-  
-  # Initialize lists to store performance and relevance metrics
-  performance_metrics <- list()
-  relevance_metrics <- list()
-  performance_names <- list()
-  relevance_names <- list()
-  
-  # Initialize lists to store performance and relevance metrics
-  performance_metrics <- list()
-  relevance_metrics <- list()
-  
-  # Loop over each ensemble
-  for (i in seq_along(ensembles$main_ensemble)) {
-    # Check if best_model_metadata exists in the i-th ensemble
-    if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-      # Extract performance metric from best_model_metadata
-      performance_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric
-      # Extract relevance metric from best_model_metadata
-      relevance_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$relevance_metric
-    } else {
-      # Extract performance metric from the i-th ensemble
-      performance_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric
-      # Extract relevance metric from the i-th ensemble
-      relevance_metrics[[i]] <- ensembles$main_ensemble[[i]]$relevance_metric
-    }
-  }
-  
-  performance_metrics_review <<- performance_metrics
-  relevance_metrics_review <<- relevance_metrics
-  
-  # Extract metric names
-  performance_names <- lapply(performance_metrics, names)
-  relevance_names <- lapply(relevance_metrics, names)
-  
-  # Find the worst performing model
-  worst_model_index <- find_and_print_worst_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number = j)
-  
-  # # Initialize lists to store run_ids and MSE performance metrics
-  # run_ids <- list()
-  # mse_metrics <- list()
-  
-  # # Loop over each ensemble
-  # for (i in seq_along(ensembles$main_ensemble)) {
-  #     # Check if best_model_metadata exists in the i-th ensemble
-  #     if (!is.null(ensembles$main_ensemble[[i]]$best_model_metadata)) {
-  #         # Extract run_id and MSE performance metric from best_model_metadata
-  #         run_ids[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$run_id
-  #         mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$best_model_metadata$performance_metric$MSE
-  #     } else {
-  #         # Extract run_id and MSE performance metric from the i-th ensemble
-  #         run_ids[[i]] <- ensembles$main_ensemble[[i]]$run_id
-  #         mse_metrics[[i]] <- ensembles$main_ensemble[[i]]$performance_metric$MSE
-  #     }
-  # }
-  #
-  # # Print the run_ids and MSE performance metrics
-  # print("_____________run_ids________________________________")
-  # print(run_ids)
-  # print("_____________mse_metrics________________________________")
-  # print(mse_metrics)
-  
-  
-  
-  # If a worst-performing model is found
-  if (!is.null(worst_model_index)) {
-    # Remove the worst-performing model from the main ensemble
-    removed_network <- ensembles$main_ensemble[[worst_model_index]]
-    ensembles$main_ensemble <- ensembles$main_ensemble[-worst_model_index]
-    
-    # Print information about the removed network
-    cat("Removed network", worst_model_index, "from the main ensemble based on worst", target_metric_name_worst, "metric\n")
-    
-    return(list(removed_network = removed_network, updated_ensemble = ensembles, worst_model_index = worst_model_index))
-  } else {
-    cat("No worst-performing model found for metric:", target_metric_name_worst, "\n")
-    return(NULL)
-  }
-}
+###prune
 
 # Loss Function: Computes the loss based on the type specified and includes regularization term
 loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
@@ -5826,180 +5486,118 @@ loss_function <- function(predictions, labels, reg_loss_total, loss_type) {
 
 quantization_error <- function(SONN, Rdata, run_id, verbose) {
   
-  if(ML_NN){
-    # Ensure both SONN$weights and Rdata are numeric matrices
-    if (!is.matrix(Rdata) || !is.matrix(SONN)) { #SONN matrix part might be wrong.
-      if(!is.matrix(Rdata)){
-        Rdata <- as.matrix(Rdata)
-      }else if(!is.matrix(SONN)){
-        SONN$weights <- as.matrix(SONN)
-      }else{
-        stop("Both SONN$weights and Rdata must be matrices.")
-      }
-      
-      # Ensure SONN weights are numeric matrices
-      if (!is.numeric(Rdata)) {
-        if(!is.numeric(Rdata)){
-          Rdata <- as.numeric(Rdata)
-          
-        }else{
-          stop("Both SONN$weights and Rdata must be numeric matrices.")
-        }
-      }
-    }
-    # Calculate the distance between each Rdata point and its closest neuron
-    distances <- apply(Rdata, 1, function(x) {
-      # Calculate Euclidean distance between the input point and each neuron's weight vector
-      neuron_distances <- apply(SONN, 1, function(w) {
-        dist <- sqrt(sum((x - w)^2))  # Euclidean distance calculation
-        dist  # Return the distance
-      })
-      
-      # Return the minimum distance for the current Rdata point
-      min_dist <- min(neuron_distances)
-      return(min_dist)  # Return the minimum distance for the current Rdata point
-    })
-    
-    
-  }else{
-    
-    if (!is.matrix(Rdata) || !is.matrix(SONN$weights)) {
-      if(!is.matrix(Rdata)){
-        Rdata <- as.matrix(Rdata)
-        
-      }else if(!is.matrix(SONN$weights)){
-        SONN$weights <- as.matrix(SONN$weights)
-        
-      }else{
-        stop("Both SONN$weights and Rdata must be matrices.")
-      }
-      
-      # Ensure SONN weights are numeric matrices
-      if (!is.numeric(Rdata)) {
-        if(!is.numeric(Rdata)){
-          Rdata <- as.numeric(Rdata)
-        }else if(!is.numeric(SONN)){
-          SONN <- as.numeric(SONN)
-        }else{
-          stop("Both SONN$weights and Rdata must be numeric matrices.")
-        }
-      }
+  # keep your structure; just coerce data once
+  if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
+  storage.mode(Rdata) <- "double"
+  
+  if (ML_NN) {
+    # --- ML path: get a matrix W from SONN$weights (first input-facing layer) ---
+    if (is.list(SONN$weights)) {
+      # pick the first layer that matches NCOL(Rdata); fallback to first layer
+      idx <- which(vapply(SONN$weights, function(w)
+        is.matrix(w) && (ncol(w) == NCOL(Rdata) || nrow(w) == NCOL(Rdata)), logical(1L)))[1]
+      if (is.na(idx)) idx <- 1L
+      W <- as.matrix(SONN$weights[[idx]])
+    } else if (is.matrix(SONN$weights)) {
+      W <- as.matrix(SONN$weights)
+    } else if (is.matrix(SONN)) {
+      # legacy: codebook passed directly as a matrix
+      W <- as.matrix(SONN)
+    } else {
+      if (isTRUE(verbose)) cat("[quantization error]: NA\n")
+      return(NA_real_)
     }
     
-    # Calculate the distance between each Rdata point and its closest neuron
-    distances <- apply(Rdata, 1, function(x) {
-      # Calculate Euclidean distance between the input point and each neuron's weight vector
-      neuron_distances <- apply(SONN$weights, 1, function(w) {
-        dist <- sqrt(sum((x - w)^2))  # Euclidean distance calculation
-        dist  # Return the distance
-      })
-      
-      # Return the minimum distance for the current Rdata point
-      min_dist <- min(neuron_distances)
-      
-      return(min_dist)  # Return the minimum distance for the current Rdata point
-    })
+  } else {
     
+    # --- SL path: expect SONN$weights to be a matrix ---
+    if (!is.matrix(SONN$weights)) SONN$weights <- as.matrix(SONN$weights)
+    W <- SONN$weights
   }
   
-  
-  # Debugging step: Print the distances vector
-  # print("Distances vector:")
-  # print(distances)
-  
-  # Handle empty or all NA distances
-  if (length(distances) == 0 || all(is.na(distances))) {
-    warning("Distances vector is empty or contains only NA values")
-    return(NA)
+  # orient W so columns = features in Rdata
+  storage.mode(W) <- "double"
+  if (ncol(W) != NCOL(Rdata) && nrow(W) == NCOL(Rdata)) W <- t(W)
+  if (ncol(W) != NCOL(Rdata)) {
+    if (isTRUE(verbose)) cat("[quantization error]: NA\n")
+    return(NA_real_)
   }
   
-  # Calculate the mean of distances, ignoring NA values
+  # === your original distance logic (but use W, not SONN) ===
+  distances <- apply(Rdata, 1L, function(x) {
+    neuron_distances <- apply(W, 1L, function(w) {
+      sqrt(sum((x - w)^2))
+    })
+    min(neuron_distances)
+  })
+  
+  if (!length(distances) || all(!is.finite(distances))) {
+    if (isTRUE(verbose)) cat("[quantization error]: NA\n")
+    return(NA_real_)
+  }
+  
   mean_distance <- mean(distances, na.rm = TRUE)
   
-  # Print the mean_distance to verify its value
-  # print("Mean of distances:")
-  if (verbose) {
-    print("quantization error")
-    print(mean_distance)
+  if (isTRUE(verbose)) {
+    cat("[quantization error]: ", format(mean_distance, digits = 7), "\n", sep = "")
   }
-  # Return the average distance, which measures how well the network represents the input data
   return(mean_distance)
-  if (verbose) {
-    print("quantization error complete")
-  }
 }
 
-topographic_error <- function(SONN, map, Rdata, threshold, verbose) {
-  
-  adjacency_log <- list()
-  
-  if (ML_NN) {
-    if (!is.matrix(SONN)) SONN <- as.matrix(SONN)
-    if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
-    if (!is.numeric(SONN)) SONN <- as.numeric(SONN)
-    if (!is.numeric(Rdata)) Rdata <- as.numeric(Rdata)
-  } else {
-    if (!is.matrix(SONN$weights)) SONN$weights <- as.matrix(SONN$weights)
-    if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
-    if (!is.numeric(SONN$weights)) SONN$weights <- as.numeric(SONN$weights)
-    if (!is.numeric(Rdata)) Rdata <- as.numeric(Rdata)
+# Model-only topo error: uses layer-1 weights + map inside SONN
+topographic_error <- function(SONN, Rdata, threshold, verbose = FALSE) {
+  # --- normalize to list-of-matrix ---
+  if (is.matrix(SONN)) SONN <- list(weights = list(as.matrix(SONN)))
+  if (is.matrix(SONN$weights)) SONN$weights <- list(as.matrix(SONN$weights))
+  if (is.null(SONN$map)) {
+    m <- nrow(SONN$weights[[1]])
+    r <- max(1L, floor(sqrt(m))); while (m %% r && r > 1L) r <- r - 1L
+    c <- max(1L, m %/% r)
+    SONN$map <- list(matrix(seq_len(m), nrow = r, ncol = c, byrow = TRUE))
+  } else if (!is.list(SONN$map)) {
+    SONN$map <- list(as.matrix(SONN$map))
+  } else if (!is.matrix(SONN$map[[1]])) {
+    SONN$map[[1]] <- as.matrix(SONN$map[[1]])
   }
   
-  if (ML_NN) {
-    errors <- apply(Rdata, 1, function(x) {
-      distances <- apply(SONN, 1, function(w) sqrt(sum((x - w)^2)))
-      if (nrow(map) > 1) {
-        if (!is.matrix(map)) stop("SONN$map must be a matrix.")
-        closest_neurons <- order(distances)[1:2]
-        error <- !is.adjacent(map, closest_neurons[1], closest_neurons[2])
-        adjacency_log[[length(adjacency_log) + 1]] <<- list(
-          neuron1 = closest_neurons[1],
-          neuron2 = closest_neurons[2],
-          are_adjacent = !error
-        )
-      } else {
-        error <- min(distances) > threshold
-      }
-      return(error)
-    })
-  } else {
-    errors <- apply(Rdata, 1, function(x) {
-      distances <- apply(SONN$weights, 1, function(w) sqrt(sum((x - w)^2)))
-      if (!is.matrix(SONN$map[[1]])) stop("SONN$map[[1]] must be a matrix.")
-      
-      # 💡 Ensure rownames exist
-      if (is.null(rownames(SONN$map[[1]]))) {
-        rownames(SONN$map[[1]]) <- as.character(1:nrow(SONN$map[[1]]))
-      }
-      
-      closest_neurons <- order(distances)[1:2]
-      error <- !is.adjacent(SONN$map[[1]], closest_neurons[1], closest_neurons[2])
-      adjacency_log[[length(adjacency_log) + 1]] <<- list(
-        neuron1 = closest_neurons[1],
-        neuron2 = closest_neurons[2],
-        are_adjacent = !error
-      )
-      return(error)
-    })
+  W <- as.matrix(SONN$weights[[1]])   # units x features
+  M <- as.matrix(SONN$map[[1]])       # grid with labels 1..m
+  X <- as.matrix(Rdata)
+  storage.mode(W) <- "double"; storage.mode(X) <- "double"
+  
+  m <- nrow(W); n <- nrow(X)
+  if (m < 2L || n < 1L) return(NA_real_)
+  
+  # if map size doesn't match units, rebuild a compact grid
+  if (length(M) != m) {
+    r <- max(1L, floor(sqrt(m))); while (m %% r && r > 1L) r <- r - 1L
+    c <- max(1L, m %/% r)
+    M <- matrix(seq_len(m), nrow = r, ncol = c, byrow = TRUE)
   }
   
-  if (length(errors) == 0 || all(is.na(errors))) {
-    warning("Errors vector is empty or contains only NA values")
-    return(NA)
+  # distances X -> each unit
+  D <- matrix(0, n, m)
+  for (j in 1:m) {
+    diffj <- sweep(X, 2, W[j, ], "-")
+    D[, j] <- rowSums(diffj * diffj)
+  }
+  bmu  <- max.col(-D, ties.method = "first")
+  D[cbind(seq_len(n), bmu)] <- Inf
+  sbmu <- max.col(-D, ties.method = "first")
+  
+  # grid coords for units 1..m
+  coords <- matrix(NA_integer_, m, 2)
+  for (k in 1:m) {
+    pos <- which(M == k, arr.ind = TRUE)
+    coords[k, ] <- if (length(pos)) c(pos[1, 1], pos[1, 2]) else c(1L, k)
   }
   
-  adjacency_df <- do.call(rbind, lapply(adjacency_log, as.data.frame))
-  saveRDS(adjacency_df, file = "adjacency_check_log.rds")
-  
-  mean_error <- mean(errors, na.rm = TRUE)
-  
-  if (exists("verbose") && verbose) {
-    print("topographic error")
-    print(mean_error)
-  }
-  
-  return(mean_error)
+  dgrid <- sqrt(rowSums((coords[bmu, , drop = FALSE] - coords[sbmu, , drop = FALSE])^2))
+  err <- mean(dgrid > 1)
+  if (isTRUE(verbose)) { print("topographic error"); print(err) }
+  err
 }
+
 
 is.adjacent <- function(map, neuron1, neuron2) {
   # 💡 Ensure map rownames exist and match neuron indices
@@ -6020,73 +5618,60 @@ is.adjacent <- function(map, neuron1, neuron2) {
 }
 
 # Clustering quality (Davies-Bouldin index)
-clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose) {
-  # Check if cluster_assignments is available
+clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose = FALSE) {
   if (is.null(cluster_assignments)) {
     stop("Cluster assignments not available. Perform kmeans clustering first.")
   }
   
-  # Convert the SONN weights to a matrix (if needed)
-  # mat_data <- as.matrix(SONN)
+  # Ensure Rdata is a numeric matrix
+  if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
+  Rdata <- apply(Rdata, 2, as.numeric)  # force numeric values
   
-  # Calculate the centroids
-  centroids <- aggregate(Rdata, by=list(cluster_assignments), FUN=mean)
-  centroids <- centroids[,-1]  # Remove the grouping column
+  # Compute centroids and ensure it's numeric matrix
+  centroids <- aggregate(Rdata, by = list(cluster_assignments), FUN = mean)[, -1]
+  centroids <- as.matrix(centroids)
+  centroids <- apply(centroids, 2, as.numeric)
   
-  # Initialize a matrix to store squared Euclidean distances between centroids
   n_clusters <- nrow(centroids)
-  dist_mat <- matrix(0, nrow = n_clusters, ncol = n_clusters)
   
-  # Calculate squared Euclidean distances between centroids
-  for (i in 1:n_clusters) {
-    for (j in 1:n_clusters) {
-      if (i != j) {
-        dist_mat[i, j] <- sum((centroids[i,] - centroids[j,])^2)
-      }
-    }
+  # Split indices by cluster
+  cluster_indices <- split(seq_len(nrow(Rdata)), cluster_assignments)
+  
+  # Precompute intra-cluster dispersion for each cluster (Si)
+  S <- numeric(n_clusters)
+  for (i in seq_len(n_clusters)) {
+    data_i <- Rdata[cluster_indices[[i]], , drop = FALSE]
+    centroid_i <- centroids[i, ]
+    centroid_matrix <- matrix(centroid_i, nrow(data_i), ncol(data_i), byrow = TRUE)
+    S[i] <- mean(rowSums((data_i - centroid_matrix)^2))
   }
   
-  # Initialize variable to store Davies-Bouldin index
+  # Precompute inter-cluster distances (squared Euclidean)
+  D <- as.matrix(dist(centroids))^2
+  
+  # Compute Davies-Bouldin index
   db_index <- 0
-  
-  # Loop through each cluster
-  for (i in 1:n_clusters) {
-    # Initialize variable to store maximum inter-cluster separation
-    max_inter_cluster_sep <- -Inf
-    
-    # Loop through other clusters
-    for (j in 1:n_clusters) {
+  for (i in seq_len(n_clusters)) {
+    max_ratio <- -Inf
+    for (j in seq_len(n_clusters)) {
       if (i != j) {
-        # Calculate intra-cluster dispersion
-        s_i <- mean(sapply(which(cluster_assignments == i), function(x) sum((Rdata[x,] - centroids[i,])^2)))
-        s_j <- mean(sapply(which(cluster_assignments == j), function(x) sum((Rdata[x,] - centroids[j,])^2)))
-        
-        # Calculate inter-cluster separation
-        inter_cluster_sep <- (s_i + s_j) / sqrt(dist_mat[i, j])
-        
-        # Update maximum inter-cluster separation if needed
-        if (inter_cluster_sep > max_inter_cluster_sep) {
-          max_inter_cluster_sep <- inter_cluster_sep
-        }
+        ratio <- (S[i] + S[j]) / sqrt(D[i, j])
+        if (ratio > max_ratio) max_ratio <- ratio
       }
     }
-    
-    # Update Davies-Bouldin index
-    db_index <- db_index + max_inter_cluster_sep
+    db_index <- db_index + max_ratio
   }
   
-  # Calculate final Davies-Bouldin index
   db_index <- db_index / n_clusters
   
   if (verbose) {
-    print("clustering_quality_db")
-    print(db_index)
+    cat("clustering_quality_db:", db_index, "\n")
   }
+  
   return(db_index)
-  if (verbose) {
-    print("clustering_quality_db complete")
-  }
 }
+
+
 
 # Classification accuracy placeholder
 MSE <- function(SONN, Rdata, labels, predicted_output, verbose) {
@@ -6331,23 +5916,21 @@ hit_rate <- function(SONN, Rdata, predicted_output, labels, verbose) {
 
 # Precision
 precision <- function(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose) {
-  # Predict the output for each Rdata point
+  # Predict the output for each Rdata point (you don't use it below, so leaving as-is)
   predictions <- SONN$predict(Rdata, weights, biases, activation_functions)
+  
+  # --- shape/num coercions (keep dims) ---  # FIX
+  labels <- as.matrix(labels); predicted_output <- as.matrix(predicted_output)
+  storage.mode(labels) <- "double"; storage.mode(predicted_output) <- "double"
   
   if (ncol(labels) != ncol(predicted_output)) {
     if (ncol(predicted_output) < ncol(labels)) {
-      # Calculate the required replication factor
       rep_factor <- ceiling((nrow(labels) * ncol(labels)) / length(predicted_output))
-      # Create the replicated vector and check its length
       replicated_predicted_output <- rep(predicted_output, rep_factor)
-      # Truncate the replicated vector to match the required length
       replicated_predicted_output <- replicated_predicted_output[1:(nrow(labels) * ncol(labels))]
-      # Create the matrix and check its dimensions
       predicted_output_matrix <- matrix(replicated_predicted_output, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
     } else {
-      # Truncate predicted_output to match the number of columns in labels
-      truncated_predicted_output <- predicted_output[, 1:ncol(labels)]
-      # Create the matrix and check its dimensions
+      truncated_predicted_output <- predicted_output[, 1:ncol(labels), drop = FALSE]
       predicted_output_matrix <- matrix(truncated_predicted_output, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
     }
   } else {
@@ -6357,64 +5940,124 @@ precision <- function(SONN, Rdata, labels, predicted_output, weights, biases, ac
   # Calculate the error
   error_prediction <- predicted_output_matrix - labels
   
-  # Calculate percentage difference between actual and predicted values
-  percentage_difference <<- abs(error_prediction) / abs(labels)
+  # Safe percentage diff: avoid divide-by-zero & non-finite denom   # FIX
+  denom <- abs(labels)
+  denom[denom == 0 | !is.finite(denom)] <- .Machine$double.eps
+  percentage_difference <<- as.numeric(abs(error_prediction) / denom)
   
-  # Check for NaNs in percentage_difference
-  if (any(is.na(percentage_difference))) {
-    print("NaNs produced; probably Inf issue error")
-    return(NULL)  # Exit the function early if NaNs are found
+  # If anything still non-finite, drop those entries (don’t bail to NULL)  # FIX
+  good <- is.finite(percentage_difference)
+  if (!all(good)) {
+    if (verbose) print("NaNs produced; probably Inf issue — skipping non-finite entries")
+    percentage_difference <- percentage_difference[good]
   }
-  
-  # Define precision percentage bins
+  # If nothing left, return all zeros with correct length               # FIX
   bins <- c(0, 0.05, 0.1, 0.5, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
   bins_percentage <- bins / 100
+  if (length(percentage_difference) == 0L) {
+    precisions <<- rep(0, length(bins) - 1)
+    if (verbose) { print("precisions"); print(precisions) }
+    return(precisions)
+  }
   
   # Initialize counters for each bin
-  bin_counts <- rep(0, length(bins) - 1)
+  bin_counts <- rep(0L, length(bins) - 1)
   
-  # Iterate through each prediction and assign it to the corresponding bin
-  for (i in 1:length(percentage_difference)) {
+  # Iterate & bin; include values >= last bound into last bin           # FIX
+  for (i in seq_along(percentage_difference)) {
+    val <- percentage_difference[i]
+    placed <- FALSE
     for (j in 1:(length(bins) - 1)) {
-      if (percentage_difference[i] >= bins_percentage[j] && percentage_difference[i] < bins_percentage[j + 1]) {
-        bin_counts[j] <- bin_counts[j] + 1
+      if (val >= bins_percentage[j] && val < bins_percentage[j + 1]) {
+        bin_counts[j] <- bin_counts[j] + 1L
+        placed <- TRUE
         break
       }
+    }
+    if (!placed && val >= tail(bins_percentage, 1)) {
+      bin_counts[length(bin_counts)] <- bin_counts[length(bin_counts)] + 1L
     }
   }
   
   bin_counts_review <<- bin_counts
   
-  # Calculate precision for each bin
-  precisions <<- bin_counts / sum(bin_counts)
+  # Avoid divide-by-zero when all bins are zero                          # FIX
+  total <- sum(bin_counts)
+  if (total == 0L) {
+    precisions <<- rep(0, length(bin_counts))
+  } else {
+    precisions <<- bin_counts / total
+  }
   
   if (verbose) {
     print("precisions")
     print(precisions)
   }
   
-  # Return the precisions for each bin
   return(precisions)
-  
-  if (verbose) {
-    print("precisions complete")
-  }
 }
 
 # Recall
 recall <- function(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose = FALSE) {
-  Rdata <- data.frame(Rdata)
-  relevant_Rdata <- Rdata[Rdata$class == "relevant", ]
+  # always a data.frame for the IR path
+  Rdf <- tryCatch(as.data.frame(Rdata), error = function(e) NULL)
   
-  recall_value <- sum(predicted_output %in% relevant_Rdata$id) / nrow(relevant_Rdata)
-  
-  if (verbose) {
-    print("recall")
-    print(recall_value)
-    print("recall complete")
+  if (!is.null(Rdf) && all(c("class","id") %in% names(Rdf))) {
+    # --- IR-style recall: relevant = rows with class == "relevant"
+    relevant_Rdata <- Rdf[Rdf$class == "relevant", , drop = FALSE]
+    denom <- nrow(relevant_Rdata)
+    
+    # if no relevant items exist, define recall = 0 (avoids NaN)
+    if (denom == 0L) {
+      recall_value <- 0
+      if (isTRUE(verbose)) { print("recall"); print(recall_value); print("recall complete") }
+      return(recall_value)
+    }
+    
+    # normalize predicted_output -> vector of IDs
+    preds <- predicted_output
+    if (is.matrix(preds) || is.data.frame(preds)) preds <- preds[, 1, drop = TRUE]
+    preds <- preds[!is.na(preds)]
+    # match types
+    true_ids <- as.character(relevant_Rdata$id)
+    preds    <- as.character(preds)
+    # dedupe predictions so we don't overcount
+    preds <- unique(preds)
+    
+    TP <- sum(preds %in% true_ids)
+    recall_value <- TP / denom
+    
+    if (isTRUE(verbose)) { print("recall"); print(recall_value); print("recall complete") }
+    return(as.numeric(recall_value))
   }
   
-  return(recall_value)
+  # --- Fallback: classification-style recall on labels/predicted_output ---
+  y_true <- as.vector(labels)
+  y_hat  <- as.vector(predicted_output)
+  
+  # Handle NAs
+  good <- is.finite(y_true) & is.finite(y_hat)
+  if (!all(good)) {
+    y_true <- y_true[good]
+    y_hat  <- y_hat[good]
+  }
+  
+  # Binarize: if y_hat looks like probs/continuous, threshold at 0.5 else treat nonzero as positive
+  if (length(unique(y_hat)) > 2L) {
+    y_hat_bin <- as.integer(y_hat >= 0.5)
+  } else {
+    y_hat_bin <- as.integer(y_hat != 0)
+  }
+  y_true_bin <- as.integer(y_true != 0)
+  
+  TP <- sum(y_hat_bin == 1 & y_true_bin == 1, na.rm = TRUE)
+  FN <- sum(y_hat_bin == 0 & y_true_bin == 1, na.rm = TRUE)
+  
+  denom <- TP + FN
+  recall_value <- if (denom == 0L) 0 else TP / denom
+  
+  if (isTRUE(verbose)) { print("recall"); print(recall_value); print("recall complete") }
+  return(as.numeric(recall_value))
 }
 
 MAE <- function(SONN, Rdata, labels, predicted_output, verbose) {
@@ -6459,21 +6102,27 @@ MAE <- function(SONN, Rdata, labels, predicted_output, verbose) {
 
 # F1 Score
 f1_score <- function(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose) {
-  # Calculate the precision and recall
-  precision <- precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose)
-  recall <-  recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions)
+  # Compute precision/recall (keep your calls)
+  p_val <- suppressWarnings(as.numeric(
+    precision(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions, verbose)
+  ))
+  r_val <- suppressWarnings(as.numeric(
+    recall(SONN, Rdata, labels, predicted_output, weights, biases, activation_functions)
+  ))
   
-  # Calculate the F1-score
-  f1_score <- 2 * (precision * recall) / (precision + recall)
-  if (verbose) {
+  # FIX: ensure scalar, finite values
+  p <- if (length(p_val) == 0L || !is.finite(p_val[1])) 0 else p_val[1]
+  r <- if (length(r_val) == 0L || !is.finite(r_val[1])) 0 else r_val[1]
+  
+  # FIX: protect against 0/0 -> NaN
+  denom <- p + r
+  f1 <- if (denom == 0) 0 else 2 * p * r / denom
+  
+  if (isTRUE(verbose)) {
     print("f1_score")
-    print(f1_score)
+    print(f1)
   }
-  # Return the F1-score
-  return(f1_score)
-  if (verbose) {
-    print("f1_score complete")
-  }
+  return(as.numeric(f1))
 }
 
 # NDCG (Normalized Discounted Cumulative Gain)
@@ -6516,68 +6165,61 @@ ndcg <- function(SONN, Rdata, predicted_output, labels, verbose) {
 
 # MAP (Mean Average Precision)
 custom_relative_error_binned <- function(SONN, Rdata, labels, predicted_output, verbose) {
+  # coerce
+  labels <- as.matrix(labels); predicted_output <- as.matrix(predicted_output)
+  storage.mode(labels) <- "double"; storage.mode(predicted_output) <- "double"
   
+  # align shapes (your logic)
   if (ncol(labels) != ncol(predicted_output)) {
     if (ncol(predicted_output) < ncol(labels)) {
-      # Calculate the required replication factor
       rep_factor <- ceiling((nrow(labels) * ncol(labels)) / length(predicted_output))
-      # Create the replicated vector and check its length
-      replicated_predicted_output <- rep(predicted_output, rep_factor)
-      # Truncate the replicated vector to match the required length
-      replicated_predicted_output <- replicated_predicted_output[1:(nrow(labels) * ncol(labels))]
-      # Create the matrix and check its dimensions
-      predicted_output_matrix <- matrix(replicated_predicted_output, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
+      replicated <- rep(predicted_output, rep_factor)[1:(nrow(labels) * ncol(labels))]
+      predicted_output_matrix <- matrix(replicated, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
     } else {
-      # Truncate predicted_output to match the number of columns in labels
-      truncated_predicted_output <- predicted_output[, 1:ncol(labels)]
-      # Create the matrix and check its dimensions
-      predicted_output_matrix <- matrix(truncated_predicted_output, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
+      predicted_output_matrix <- matrix(predicted_output[, 1:ncol(labels)],
+                                        nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
     }
   } else {
     predicted_output_matrix <- predicted_output
   }
   
-  # Calculate the error
+  # error & safe percentage diff
   error_prediction <- predicted_output_matrix - labels
+  denom <- abs(labels)
+  denom[denom == 0 | !is.finite(denom)] <- .Machine$double.eps
+  percentage_difference <- as.numeric(abs(error_prediction) / denom)
   
-  
-  # Calculate percentage difference between actual and predicted values
-  percentage_difference <<- abs(error_prediction) / abs(labels)
-  
-  # Define precision percentage bins
+  # bins (percent thresholds) and labels
   bins <- c(0, 0.05, 0.1, 0.5, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+  brks <- bins / 100
+  bin_names <- paste0("rel_", bins[-length(bins)], "_", bins[-1], "pct")
   
-  bins_percentage <<- bins / 100
+  # assign to bins (skip non-finite)
+  finite_idx <- is.finite(percentage_difference)
+  vals <- percentage_difference[finite_idx]
   
-  # Initialize a list to store precision values for each bin
-  bin_counts <<- vector("list", length(bins) - 1)
-  
-  # Iterate through each prediction and assign it to the corresponding bin
-  for (i in 1:length(percentage_difference)) {
-    for (j in 1:(length(bins) - 1)) {
-      if (percentage_difference[i] >= bins_percentage[j] && percentage_difference[i] < bins_percentage[j + 1]) {
-        # Append the precision value to the corresponding bin
-        bin_counts[[j]] <- c(bin_counts[[j]], percentage_difference[i])
-        break
-      }
+  mean_precisions <- numeric(length(brks) - 1)
+  if (length(vals) > 0L) {
+    idx <- findInterval(vals, brks, rightmost.closed = TRUE, all.inside = TRUE)
+    for (j in seq_along(mean_precisions)) {
+      v <- vals[idx == j]
+      mean_precisions[j] <- if (length(v) == 0L) 0 else mean(v)
     }
+  } else {
+    mean_precisions[] <- 0
   }
-  bin_counts_review2 <<- bin_counts
   
-  bin_counts[sapply(bin_counts, is.null)] <- NA
-  # Calculate mean precision for each bin
-  mean_precisions <- sapply(bin_counts, mean, na.rm = TRUE)
-  mean_precisions[is.na(mean_precisions)] <- 0
-  if (verbose) {
+  if (isTRUE(verbose)) {
     print("mean_precisions")
     print(mean_precisions)
   }
-  # Return the mean precisions for each bin
-  return(mean_precisions)
-  if (verbose) {
-    print("mean_precisions complete")
-  }
+  
+  # IMPORTANT: return a named LIST of scalars (not a vector) so your flattener can unlist into columns
+  names(mean_precisions) <- bin_names
+  return(as.list(mean_precisions))
 }
+
+
 
 # Diversity
 diversity <- function(SONN, Rdata, predicted_output, verbose) {
@@ -6649,30 +6291,3 @@ serendipity <- function(SONN, Rdata, predicted_output, verbose) {
     print("serendipity complete")
   }
 }
-
-# Helper function to adjust biases for the first layer of the predict function
-# Top-level helper
-adjust_biases_layer_1 <- function(biases, weights, Rdata) {
-  biases <- as.numeric(unlist(biases))
-  input_rows <- as.integer(nrow(Rdata))
-  output_cols <- as.integer(ncol(weights))
-  
-  if (length(biases) == 1) {
-    cat("Using single bias value:", biases, "\n")
-    matrix(biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(biases) < output_cols) {
-    cat("Bias length and neuron count mismatch. Adjusting (replicating)...\n")
-    matrix(rep(biases, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else if (length(biases) > output_cols) {
-    cat("Bias length exceeds neuron count. Truncating...\n")
-    matrix(biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  } else {
-    matrix(biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-  }
-}
-
-
-
-
-
-
