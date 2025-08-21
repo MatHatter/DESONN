@@ -1,4 +1,5 @@
 source("DESONN.R")
+source("utils/utils.R")
 # source("DESONN_20240629_v6.R")
 # Initialize activation functions
 # self$activation_functions <- vector("list", self$num_layers)
@@ -78,12 +79,12 @@ epsilon_bn <- 1e-6  # Increase for numerical stability
 momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
-beta2 <- 0.8 # Slightly lower for better adaptabilit
+beta2 <- 0.8 # Slig1htly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
-num_epochs <- 3
+num_epochs <- 117
 custom_scale <- .05
-threshold <- .98
+# threshold <- .98
 # ML_NN <- TRUE
 ML_NN <- TRUE
 train <- TRUE
@@ -91,7 +92,7 @@ learnOnlyTrainingRun <- FALSE
 update_weights <- TRUE
 update_biases <- TRUE
 # hidden_sizes <- NULL
-hidden_sizes <- c(32, 12)
+hidden_sizes <- c(64, 32)
 
 activation_functions <- list(relu, relu, sigmoid) #hidden layers + output layer
 
@@ -376,14 +377,14 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
   # num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
-  do_ensemble         <- FALSE
-  num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
-  num_temp_iterations <- 0L
+  # do_ensemble         <- FALSE
+  # num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
+  # num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
-  # do_ensemble         <- TRUE
-  # num_networks        <- 2L          # example main size
-  # num_temp_iterations <- 0L
+  do_ensemble         <- TRUE
+  num_networks        <- 1L          # example main size
+  num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
   # do_ensemble         <- TRUE
@@ -411,70 +412,6 @@ ensembles <- list(main_ensemble = vector("list"), temp_ensemble = vector("list")
 metric_name <- "MSE"
 viewTables  <- FALSE
 
-## ====== HELPERS (needed in both modes) ======
-is_real_serial <- function(x) is.character(x) && length(x) == 1 && !is.na(x) && nzchar(x)
-.metric_minimize <- function(m) grepl("mse|mae|rmse|error|loss|quantization_error|topographic_error", tolower(m))
-
-main_meta_var  <- function(i) sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(i))
-temp_meta_var  <- function(e,i) sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(e), as.integer(i))
-
-.resolve_metric_from_pm <- function(pm, metric_name) {
-  if (is.null(pm)) return(NA_real_)
-  if (is.list(pm) || is.environment(pm)) {
-    val <- pm[[metric_name]]; if (!is.null(val)) return(as.numeric(val)[1])
-    nm <- names(pm)
-    if (!is.null(nm)) {
-      hit <- which(tolower(nm) == tolower(metric_name))
-      if (length(hit)) return(as.numeric(pm[[ nm[hit[1]] ]])[1])
-    }
-  }
-  if (is.atomic(pm) && !is.null(names(pm))) {
-    nm <- names(pm)
-    if (metric_name %in% nm) return(as.numeric(pm[[metric_name]])[1])
-    hit <- which(tolower(nm) == tolower(metric_name))
-    if (length(hit)) return(as.numeric(pm[[ hit[1] ]])[1])
-  }
-  if (is.data.frame(pm)) {
-    if (metric_name %in% names(pm)) return(as.numeric(pm[[metric_name]][1]))
-    hit <- which(tolower(names(pm)) == tolower(metric_name))
-    if (length(hit)) return(as.numeric(pm[[ hit[1] ]][1]))
-    cn <- tolower(names(pm))
-    if (all(c("metric","value") %in% cn)) {
-      midx <- which(cn == "metric")[1]; vidx <- which(cn == "value")[1]
-      rows <- which(tolower(pm[[midx]]) == tolower(metric_name))
-      if (length(rows)) return(as.numeric(pm[[vidx]][ rows[1] ]))
-    }
-  }
-  NA_real_
-}
-
-serial_to_meta_name <- function(serial) {
-  if (!is_real_serial(serial)) return(NA_character_)
-  p <- strsplit(serial, "\\.")[[1]]
-  if (length(p) < 3) return(NA_character_)
-  e <- suppressWarnings(as.integer(p[1])); i <- suppressWarnings(as.integer(p[3]))
-  if (is.na(e) || is.na(i)) return(NA_character_)
-  if (e == 1) sprintf("Ensemble_Main_%d_model_%d_metadata", e, i)
-  else        sprintf("Ensemble_Temp_%d_model_%d_metadata", e, i)
-}
-
-get_metric_by_serial <- function(serial, metric_name) {
-  var <- serial_to_meta_name(serial)
-  if (nzchar(var) && exists(var, envir = .GlobalEnv)) {
-    md <- get(var, envir = .GlobalEnv)
-    return(.resolve_metric_from_pm(md$performance_metric, metric_name))
-  }
-  NA_real_
-}
-
-.collect_vals <- function(serials, metric_name) {
-  if (!length(serials)) return(data.frame(serial = character(), value = numeric()))
-  data.frame(
-    serial = as.character(serials),
-    value  = vapply(serials, get_metric_by_serial, numeric(1), metric_name),
-    stringsAsFactors = FALSE
-  )
-}
 
 ## ====== Control panel flags ======
 viewAllPlots <- FALSE  # TRUE shows all plots regardless of individual flags
@@ -491,6 +428,101 @@ performance_low_mean_plots  <- FALSE
 relevance_high_mean_plots   <- FALSE
 relevance_low_mean_plots    <- FALSE
 
+# =======================
+# PREDICT-ONLY SHORT-CIRCUIT
+# =======================
+## ============ PREDICT-ONLY SHORT-CIRCUIT ============
+
+## ======================= PREDICT-ONLY SHORT-CIRCUIT =======================
+if (!train) {
+  cat("Predict-only mode (train == FALSE).\n")
+  
+  # 1) Choose how to pass params to predict
+  predict_mode <- "stateless"                 # "stateless" or "stateful"
+  
+  # 2) Choose data to predict on
+  X_new <- as.matrix(X_validation)            # or X_test / any same-schema matrix
+  
+  # 3) (Optional) explicitly pick a metadata; otherwise auto-detect the best one found
+  # meta_pref <- list(kind = "Main", ens = 0, model = 1)   # e.g., Main_0 model_1
+  meta_pref <- NULL
+  
+  # 4) Build architecture-only DESONN (no training)
+  target_model_index <- if (!is.null(meta_pref)) as.integer(meta_pref$model) else 1L
+  nn_for_build <- max(1L, as.integer(num_networks), target_model_index)
+  
+  main_model <- DESONN$new(
+    num_networks    = nn_for_build,
+    input_size      = input_size,
+    hidden_sizes    = hidden_sizes,
+    output_size     = output_size,
+    N               = N,
+    lambda          = lambda,
+    ensemble_number = 1L,
+    ensembles       = NULL,
+    ML_NN           = ML_NN,
+    method          = init_method,
+    custom_scale    = custom_scale
+  )
+  
+  # 5) Resolve a metadata object
+  if (!is.null(meta_pref)) {
+    meta <- .find_meta(kind = meta_pref$kind, ens = meta_pref$ens, model = meta_pref$model)
+    if (is.null(meta)) stop(sprintf(
+      "Metadata not found for Ensemble_%s_%d_model_%d_(metadata|metada).",
+      meta_pref$kind, as.integer(meta_pref$ens), as.integer(meta_pref$model)))
+  } else {
+    meta <- .auto_find_meta()
+    if (is.null(meta)) stop("No Ensemble_*_*_model_*_metadata object found in .GlobalEnv.")
+  }
+  
+  # 6) Extract best weights/biases (use slot [[1]] in the metadata)
+  rec <- extract_best_records(meta, ML_NN = main_model$ensemble[[1]]$ML_NN, model_index = 1L)
+  
+  # 7) Pick which SONN inside DESONN to use (default 1; or match meta_pref$model if provided)
+  sonn_idx <- min(target_model_index, length(main_model$ensemble))
+  model_obj <- main_model$ensemble[[sonn_idx]]
+  
+  # 8) Predict
+  if (identical(predict_mode, "stateful")) {
+    if (model_obj$ML_NN) {
+      model_obj$load_all_weights(rec$weights)
+      model_obj$load_all_biases(rec$biases)
+    } else {
+      model_obj$load_weights(rec$weights)
+      model_obj$load_biases(rec$biases)
+    }
+    out <- model_obj$predict(Rdata = X_new, activation_functions = activation_functions)
+  } else {
+    out <- model_obj$predict(
+      Rdata = X_new,
+      weights = rec$weights,
+      biases  = rec$biases,
+      activation_functions = activation_functions
+    )
+  }
+  
+  # 9) Use results
+  probs <- out$predicted_output
+  cat("Predict-only complete. Head(probs):\n"); print(head(probs))
+  
+  # --- Quick validation metrics (temporary) ---
+  if (exists("y_validation", inherits = TRUE)) {
+    binary_preds_val <- ifelse(probs >= 0.5, 1, 0)
+    val_accuracy <- mean(binary_preds_val == y_validation, na.rm = TRUE)
+    cat(sprintf("\nValidation Accuracy (predict-only): %.2f%%\n", 100 * val_accuracy))
+  } else {
+    cat("\n[No y_validation found in environment → skipping accuracy calc]\n")
+  }
+  
+  
+  # 10) Exit before any training code runs
+  if (interactive()) {
+    invisible(out)
+  } else {
+    quit(save = "no")
+  }
+} else {
 ## =========================================================================================
 ## SINGLE-RUN MODE (no logs, no lineage, no temp/prune/add) — covers Scenario A & Scenario B
 ## =========================================================================================
@@ -512,7 +544,13 @@ if (!isTRUE(do_ensemble)) {
     method          = init_method,
     custom_scale    = custom_scale
   )
-  
+  # NOTE: The code below still uses the word "ensemble" for consistency,
+  # even in single-run mode. It is not a true ensemble in that case,
+  # but changing the naming caused downstream issues with plotting logic
+  # (especially where plots are returned as lists). To avoid the heavy
+  # rework needed just for naming, we keep the "ensemble" wording here
+  # and simply document the distinction.
+  # Apply per-SONN plotting flags to all internal models
   # Apply per‑SONN plotting flags to all internal models
   if (length(main_model$ensemble)) {
     for (m in seq_along(main_model$ensemble)) {
@@ -533,9 +571,9 @@ if (!isTRUE(do_ensemble)) {
       )
     }
   }
-  
+  # R defaults to doubles for numbers unless you explicitly add the L.
   invisible(main_model$train(
-    Rdata=X, labels=y, lr=lr, ensemble_number=1L, num_epochs=num_epochs,
+    Rdata=X, labels=y, lr=lr, ensemble_number=0L, num_epochs=num_epochs,
     threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
     activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
     dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
@@ -546,6 +584,15 @@ if (!isTRUE(do_ensemble)) {
     X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
     train=train, verbose=verbose
   ))
+
+  # Keep the ID on the run object too (belt-and-suspenders)
+  main_model$ensemble_number <- 0L
+  
+  # Attach the run into the top-level container (so downstream code sees it)
+  ensembles <- attach_run_to_container(ensembles, main_model)
+  
+  # Optional: quick tree view
+  print_ensembles_summary(ensembles)
   
   # Optional: expose under ensembles$main_ensemble[[1]] for downstream convenience
   if (exists("ensembles", inherits = TRUE) && is.list(ensembles)) {
@@ -561,7 +608,7 @@ if (!isTRUE(do_ensemble)) {
     cat("\nSingle run relevance_metric (DESONN-level):\n"); print(main_model$relevance_metric)
   }
   # If you want per-model metrics, iterate main_model$ensemble here as needed.
-  
+
 } else {
   ## ==========================================================
   ## ENSEMBLE MODE (MAIN + optional TEMP/prune/add) — C & D
@@ -1063,8 +1110,7 @@ if (!isTRUE(do_ensemble)) {
     }
   }
 }
-
-
+}
 
 
 
