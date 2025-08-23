@@ -1071,7 +1071,7 @@ SONN <- R6Class(
       
       return(list(predicted_output = output, prediction_time = prediction_time))
     },# Method for training the SONN with L2 regularization
-    train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train) {
+    train_with_l2_regularization = function(Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
       
       # Initialize learning rate scheduler
       # lr_scheduler <- function(epoch, initial_lr = lr) {
@@ -1137,7 +1137,7 @@ SONN <- R6Class(
           
           
           cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
-          flush.console()
+          
           num_epochs_check <<- num_epochs
           
           # start_time <- Sys.time()
@@ -1159,7 +1159,7 @@ SONN <- R6Class(
           #   Place this RIGHT AFTER: learn_result <- self$learn(...)
           #   (assumes `fname` was already built at top of epoch loop)
           # =========================
-        
+          
           # --- per-epoch logs ---
           probs_train        <- learn_result$learn_output
           binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
@@ -1255,7 +1255,7 @@ SONN <- R6Class(
             }, error = function(e) message("❌ output_saturation_plot: ", e$message))
           }
           
-  
+          
           
           
           predicted_output_train_reg <- learn_result
@@ -2036,7 +2036,7 @@ SONN <- R6Class(
             }, error = function(e) message("❌ max_weight_plot: ", e$message))
           }
           
- 
+          
           
           # Update biases
           if (update_biases) {
@@ -3177,7 +3177,7 @@ DESONN <- R6Class(
             # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
             predicted_outputAndTime <- suppressMessages(
               self$ensemble[[i]]$train_with_l2_regularization(
-                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, train
+                Rdata, labels, lr, num_epochs, model_iter_num, update_weights, update_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose
               ))
             
             
@@ -3456,7 +3456,7 @@ DESONN <- R6Class(
         save_group(gates[["relevance_low_mean_plots"]], performance_relevance_plots$relevance_low_mean_plots, "relevance_low_mean", "Relevance Low Mean Plots")
         
         
-
+        
         
         
         

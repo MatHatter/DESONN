@@ -657,6 +657,7 @@ EvaluatePredictionsReport <- function(X_validation, y_validation, probs, predict
   
   saveWorkbook(wb, "Rdata_predictions.xlsx", overwrite = TRUE)
   cat("DEBUG >>> Final best_threshold before return:", best_threshold, "\n")
+  cat("DEBUG >>> Tuned accuracy at best_threshold:", round(accuracy, 5), "\n")
   
   return(list(
     best_threshold = best_threshold,

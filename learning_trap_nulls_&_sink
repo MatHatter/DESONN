@@ -84,10 +84,15 @@ checkSinks <- function() {
 resetSinks <- function(verbose = TRUE) {
   n_out <- sink.number()
   n_err <- sink.number(type = "message")
-  while (sink.number() > 0) sink()
-  while (sink.number(type = "message") > 0) sink(type = "message")
-  if (verbose) message(sprintf("resetSinks(): cleared stdout=%d, stderr=%d", n_out, n_err))
+  
+  if (n_out > 0) for (i in seq_len(n_out)) sink()
+  if (n_err > 0) for (i in seq_len(n_err)) sink(type = "message")
+  
+  if (verbose) message(
+    sprintf("resetSinks(): cleared stdout=%d, stderr=%d", n_out, n_err)
+  )
 }
+
 
 # --- Safe sink pattern (won't leak even on error) ---
 # Use this to log while still seeing console output (split=TRUE).
