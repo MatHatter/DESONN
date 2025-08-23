@@ -171,7 +171,7 @@ SONN <- R6Class(
       self$map <- matrix(1:N, nrow = grid_rows, ncol = grid_cols)
       
       # Configuration flags for enabling/disabling per-SONN model training plots
-      self$PerEpochlViewPlotsConfig <- list(
+      self$PerEpochViewPlotsConfig <- list(
         accuracy_plot = accuracy_plot,  # training accuracy/loss
         saturation_plot = saturation_plot,  # output saturation
         max_weight_plot = max_weight_plot,  # max weight magnitude
@@ -316,7 +316,7 @@ SONN <- R6Class(
       return(x)
     },# Method to perform self-organization
     viewPerEpochPlots = function(name) {
-      cfg <- self$PerEpochlViewPlotsConfig
+      cfg <- self$PerEpochViewPlotsConfig
       on_all <- isTRUE(cfg$viewAllPlots) || isTRUE(cfg$verbose)
       isTRUE(cfg[[name]]) || on_all
     },
@@ -1137,10 +1137,12 @@ SONN <- R6Class(
           
           
           cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
-          
+          flush.console()
           num_epochs_check <<- num_epochs
           
           # start_time <- Sys.time()
+          
+          
           
           # Train model and get predictions
           learn_result <- self$learn(
@@ -1152,115 +1154,79 @@ SONN <- R6Class(
             sample_weights = sample_weights
           )
           
-          # Training prediction and accuracy
-          probs_train <- learn_result$learn_output
-          learn_time <- learn_result$learn_time
+          # =========================
+          # BLOCK A — Accuracy & Saturation
+          #   Place this RIGHT AFTER: learn_result <- self$learn(...)
+          #   (assumes `fname` was already built at top of epoch loop)
+          # =========================
+        
+          # --- per-epoch logs ---
+          probs_train        <- learn_result$learn_output
           binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
-          train_accuracy <- mean(binary_preds_train == labels, na.rm = TRUE)
+          train_accuracy     <- mean(binary_preds_train == labels, na.rm = TRUE)
           train_accuracy_log <- c(train_accuracy_log, train_accuracy)
           
-          # Track best training accuracy
           if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
-            best_train_acc <- train_accuracy
+            best_train_acc   <- train_accuracy
             best_epoch_train <- epoch
           }
           
-          cat(sprintf("Epoch %d | Training Accuracy: %.2f%%\n", epoch, 100 * train_accuracy))
+          # correct layer for saturation
+          predicted_output <- if (isTRUE(self$ML_NN)) learn_result$hidden_outputs[[self$num_layers]] else learn_result$learn_output
+          mean_output      <- mean(predicted_output)
+          sd_output        <- sd(predicted_output)
+          mean_output_log  <- c(mean_output_log, mean_output)
+          sd_output_log    <- c(sd_output_log, sd_output)
           
-          predicted_output_train_reg <- learn_result
-          predicted_output_train_reg_prediction_time <- learn_result$learn_time
-          
-          # Predicted output (use correct output layer)
-          if (self$ML_NN) {
-            predicted_output <- predicted_output_train_reg$hidden_outputs[[self$num_layers]]
-          } else {
-            predicted_output <- predicted_output_train_reg$learn_output
-          }
-          
-          # Output saturation diagnostics
-          mean_output <- mean(predicted_output)
-          sd_output <- sd(predicted_output)
-          cat("Mean Output:", round(mean_output, 4), "| StdDev:", round(sd_output, 4), "\n")
-          mean_output_log <- c(mean_output_log, mean_output)
-          sd_output_log <- c(sd_output_log, sd_output)
-          
-          # Optional: compute and store loss
-          train_loss <- mean((predicted_output - labels)^2, na.rm = TRUE)
+          # optional loss
+          train_loss     <- mean((predicted_output - labels)^2, na.rm = TRUE)
           train_loss_log <- c(train_loss_log, train_loss)
           
-          # Weight explosion diagnostics
-          if (exists("best_weights_record")) {
-            max_weight <- max(sapply(best_weights_record, function(w) max(abs(w))))
-            cat("Max Weight Abs:", round(max_weight, 4), "\n")
-          } else {
-            max_weight <- NA
-          }
-          max_weight_log <- c(max_weight_log, max_weight)
-          
-          ## =========================
-          ## SONN — Top 3 Per-epoch Plots
-          ## =========================
-          ## Requires:
-          ##  - make_fname_prefix(do_ensemble, ensemble_number, model_index, who="SONN") sourced from utils
-          ##  - do_ensemble, ensemble_number, model_iter_num, lr, lambda in scope (or in self$*)
-          ##  - logs: train_accuracy_log, train_loss_log, mean_output_log, sd_output_log, max_weight_log
-          ##  - self$viewPerEpochPlots(name) returning TRUE/FALSE
-          
-          
-          # --- SONN per-epoch gate: debug + sanitize (drop-in) ---
-          # 1) ensure the config list exists
-          if (is.null(self$PerEpochlViewPlotsConfig)) self$PerEpochlViewPlotsConfig <- list()
-          
-          # 2) coerce to strict booleans with safe defaults (TRUE for the 3 plots; FALSE for viewAll/verbose)
-          .fix_flag <- function(v, default) { if (isTRUE(v)) TRUE else if (isFALSE(v)) FALSE else default }
-          defaults <- list(accuracy_plot = TRUE, saturation_plot = TRUE, max_weight_plot = TRUE, viewAllPlots = FALSE, verbose = FALSE)
-          for (nm in names(defaults)) {
-            self$PerEpochlViewPlotsConfig[[nm]] <- .fix_flag(self$PerEpochlViewPlotsConfig[[nm]], defaults[[nm]])
-          }
-          
-          # 3) quick debug snapshot so you can see what the gate will read
-          pe <- self$PerEpochlViewPlotsConfig
-          message(sprintf("SONN per-epoch flags → acc=%s, sat=%s, max=%s, all=%s, verbose=%s",
-                          pe$accuracy_plot, pe$saturation_plot, pe$max_weight_plot, pe$viewAllPlots, pe$verbose))
-          message(sprintf("SONN gate eval → acc=%s, sat=%s, max=%s",
-                          self$viewPerEpochPlots("accuracy_plot"),
-                          self$viewPerEpochPlots("saturation_plot"),
-                          self$viewPerEpochPlots("max_weight_plot")))
-          
-          
-          
-          if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
-          
-          # Resolve IDs once
-          ens <- as.integer(if (!is.null(self$ensemble_number)) self$ensemble_number else get0("ensemble_number", 1L))
-          mod <- as.integer(if (exists("model_iter_num", inherits = TRUE)) model_iter_num else get0("model_iter_num", 1L))
-          
-          # Filename builder
+          # Build the naming closure via utils::make_fname_prefix (NULL-safe)
           fname <- make_fname_prefix(
-            do_ensemble     = do_ensemble,
-            num_networks    = num_networks,
-            total_models    = if (!is.null(self$ensemble)) length(self$ensemble) else num_networks,
-            ensemble_number = ens,
-            model_index     = mod,
+            do_ensemble     = isTRUE(get0("do_ensemble", ifnotfound = FALSE)),
+            num_networks    = get0("num_networks", ifnotfound = NULL),
+            total_models    = if (!is.null(self$ensemble)) length(self$ensemble) else get0("num_networks", ifnotfound = NULL),
+            ensemble_number = if (exists("self", inherits = TRUE)) self$ensemble_number else get0("ensemble_number", ifnotfound = NULL),
+            model_index     = get0("model_iter_num", ifnotfound = NULL),
             who             = "SONN"
           )
           
-          plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) sprintf("DESONN %d SONN %d | lr: %s | lambda: %s", ens, mod, lr, lambda) else sprintf("SONN %d | lr: %s | lambda: %s", mod, lr, lambda)
+          # sanity probe (should print one non-empty filename)
+          cat("[fname probe] -> ", fname("probe.png"), "\n")
           
-          # Per-epoch DF
-          df <- data.frame(
-            Epoch      = seq_along(train_accuracy_log),
-            Accuracy   = train_accuracy_log,
-            Loss       = train_loss_log,
-            MeanOutput = mean_output_log,
-            StdOutput  = sd_output_log,
-            MaxWeight  = max_weight_log
+          
+          # ensure output dir
+          if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+          
+          # title
+          plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) {
+            sprintf("DESONN%s SONN%s | lr: %s | lambda: %s",
+                    if (!is.null(self$ensemble_number)) paste0(" ", self$ensemble_number) else "",
+                    if (exists("model_iter_num", inherits = TRUE)) paste0(" ", model_iter_num) else "",
+                    lr, lambda)
+          } else {
+            sprintf("SONN%s | lr: %s | lambda: %s",
+                    if (exists("model_iter_num", inherits = TRUE)) paste0(" ", model_iter_num) else "",
+                    lr, lambda)
+          }
+          
+          # DF (no MaxWeight here) with padding to align lengths
+          pad <- function(x, n){ length(x) <- n; x }
+          nA  <- max(length(train_accuracy_log), length(train_loss_log),
+                     length(mean_output_log), length(sd_output_log))
+          df_accsat <- data.frame(
+            Epoch      = seq_len(nA),
+            Accuracy   = pad(train_accuracy_log, nA),
+            Loss       = pad(train_loss_log, nA),
+            MeanOutput = pad(mean_output_log, nA),
+            StdOutput  = pad(sd_output_log, nA)
           )
           
           # 1) Accuracy & Loss
           if (self$viewPerEpochPlots("accuracy_plot")) {
             tryCatch({
-              p <- ggplot(df, aes(x = Epoch)) +
+              p <- ggplot(df_accsat, aes(x = Epoch)) +
                 geom_line(aes(y = Accuracy), size = 1) +
                 geom_line(aes(y = Loss),     size = 1) +
                 labs(title = paste(plot_title_prefix, "— Training Accuracy (blue) & Loss (red)"),
@@ -1269,15 +1235,14 @@ SONN <- R6Class(
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
               out <- file.path("plots", fname("training_accuracy_loss_plot.png"))
               message("📸 save: ", out)
-              ggsave(out, p, width = 6, height = 4, dpi = 300)
-              print(p)
+              ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
             }, error = function(e) message("❌ accuracy_loss_plot: ", e$message))
           }
           
           # 2) Output Saturation
           if (self$viewPerEpochPlots("saturation_plot")) {
             tryCatch({
-              p <- ggplot(df, aes(x = Epoch)) +
+              p <- ggplot(df_accsat, aes(x = Epoch)) +
                 geom_line(aes(y = MeanOutput), size = 1) +
                 geom_line(aes(y = StdOutput),  size = 1) +
                 labs(title = paste(plot_title_prefix, "— Output Mean & Std Dev"),
@@ -1286,27 +1251,11 @@ SONN <- R6Class(
                 theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
               out <- file.path("plots", fname("output_saturation_plot.png"))
               message("📸 save: ", out)
-              ggsave(out, p, width = 6, height = 4, dpi = 300)
-              print(p)
+              ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
             }, error = function(e) message("❌ output_saturation_plot: ", e$message))
           }
           
-          # 3) Max Weight Magnitude
-          if (self$viewPerEpochPlots("max_weight_plot")) {
-            tryCatch({
-              p <- ggplot(df, aes(x = Epoch, y = MaxWeight)) +
-                geom_line(size = 1) +
-                labs(title = paste(plot_title_prefix, "— Max Weight Magnitude Over Time"),
-                     y = "Max |Weight|") +
-                theme_minimal() +
-                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
-              out <- file.path("plots", fname("max_weight_plot.png"))
-              message("📸 save: ", out)
-              ggsave(out, p, width = 6, height = 4, dpi = 300)
-              print(p)
-            }, error = function(e) message("❌ max_weight_plot: ", e$message))
-          }
-          
+  
           
           
           predicted_output_train_reg <- learn_result
@@ -2037,6 +1986,57 @@ SONN <- R6Class(
           } else {
             weights_record <- as.matrix(self$weights)
           }
+          
+          # =========================
+          # BLOCK B — Weights (Max Weight + Plot)
+          #   Place THIS BLOCK UNDER your final weight-update in the epoch.
+          #   (assumes `fname` was already built at top of epoch loop)
+          # =========================
+          
+          # post-update max|W| and log
+          max_weight <- tryCatch({
+            stopifnot(is.list(self$weights), length(self$weights) >= 1)
+            max(unlist(lapply(self$weights, function(W) max(abs(as.numeric(W)), na.rm = TRUE))), na.rm = TRUE)
+          }, error = function(e) NA_real_)
+          max_weight_log <- c(max_weight_log, max_weight)
+          
+          # DF for MaxWeight only
+          df_maxw <- data.frame(
+            Epoch     = seq_len(length(max_weight_log)),
+            MaxWeight = max_weight_log
+          )
+          
+          # ensure output dir + title
+          if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+          if (!exists("plot_title_prefix", inherits = TRUE)) {
+            plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) {
+              sprintf("DESONN%s SONN%s | lr: %s | lambda: %s",
+                      if (!is.null(self$ensemble_number)) paste0(" ", self$ensemble_number) else "",
+                      if (exists("model_iter_num", inherits = TRUE)) paste0(" ", model_iter_num) else "",
+                      lr, lambda)
+            } else {
+              sprintf("SONN%s | lr: %s | lambda: %s",
+                      if (exists("model_iter_num", inherits = TRUE)) paste0(" ", model_iter_num) else "",
+                      lr, lambda)
+            }
+          }
+          
+          # 3) Max Weight Magnitude
+          if (self$viewPerEpochPlots("max_weight_plot")) {
+            tryCatch({
+              p <- ggplot(df_maxw, aes(x = Epoch, y = MaxWeight)) +
+                geom_line(size = 1) +
+                labs(title = paste(plot_title_prefix, "— Max Weight Magnitude Over Time"),
+                     y = "Max |Weight|") +
+                theme_minimal() +
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+              out <- file.path("plots", fname("max_weight_plot.png"))
+              message("📸 save: ", out)
+              ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
+            }, error = function(e) message("❌ max_weight_plot: ", e$message))
+          }
+          
+ 
           
           # Update biases
           if (update_biases) {
@@ -3347,50 +3347,32 @@ DESONN <- R6Class(
           verbose = verbose
         )
         
-        `%||%` <- function(a,b) if (is.null(a) || !length(a)) b else a
+        `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
         
         # Prints to RStudio Plots pane ONLY. Never saves. Handles ggplot, list, and nested list.
         print_plotlist_verbose <- function(x, label = NULL, print_plots = TRUE) {
           lab <- label %||% "Plot"
           if (inherits(x, c("gg","ggplot"))) {
             if (print_plots) print(x)
-            message(lab, ": 1 ggplot", if (!print_plots) " (suppressed)")
-            return(invisible(list(printed = if (print_plots) "<single>" else character(0), skipped = character(0))))
+            return(invisible(NULL))
           }
           if (is.list(x)) {
-            nms <- names(x); if (is.null(nms)) nms <- as.character(seq_along(x))
-            printed <- character(0); skipped <- character(0)
             for (i in seq_along(x)) {
-              item <- x[[i]]; nm <- nms[[i]]
-              if (is.null(item)) { skipped <- c(skipped, sprintf("%s (NULL)", nm)); next }
-              if (inherits(item, c("gg","ggplot"))) {
-                if (print_plots) print(item)
-                printed <- c(printed, nm); next
-              }
+              item <- x[[i]]
+              if (inherits(item, c("gg","ggplot")) && print_plots) print(item)
               if (is.list(item)) {
-                # nested list: print each ggplot inside
-                has_any <- FALSE
                 for (j in seq_along(item)) {
                   p <- item[[j]]
-                  if (inherits(p, c("gg","ggplot"))) { has_any <- TRUE; if (print_plots) print(p) }
+                  if (inherits(p, c("gg","ggplot")) && print_plots) print(p)
                 }
-                if (has_any) printed <- c(printed, paste0(nm, "[nested]")) else skipped <- c(skipped, sprintf("%s (nested non-gg)", nm))
-                next
               }
-              skipped <- c(skipped, sprintf("%s (type=%s)", nm, paste(class(item), collapse = "+")))
             }
-            if (length(printed)) message(lab, ": printed [", paste(printed, collapse=", "), "]")
-            if (length(skipped)) message(lab, ": skipped [", paste(skipped, collapse=", "), "]")
-            if (!length(printed) && !length(skipped)) message(lab, ": empty")
-            return(invisible(list(printed = printed, skipped = skipped)))
           }
-          message(lab, ": skipped (not ggplot/list, type=", paste(class(x), collapse="+"), ")")
-          invisible(list(printed = character(0), skipped = lab))
+          invisible(NULL)
         }
         
-        
         # =========================
-        # DESONN — Final perf/relevance lists (bottom 4) with SAFE, LOCAL gates
+        # DESONN — Final perf/relevance lists (bottom 4) with STRICT booleans
         # =========================
         
         if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
@@ -3399,15 +3381,21 @@ DESONN <- R6Class(
         tot <- if (!is.null(self$ensemble)) length(self$ensemble) else as.integer(get0("num_networks", ifnotfound = 1L))
         mod <- if (exists("model_iter_num", inherits = TRUE) && length(model_iter_num)) as.integer(model_iter_num) else 1L
         
-        # local gates (no mutation)
-        klist <- c("performance_high_mean_plots","performance_low_mean_plots","relevance_high_mean_plots","relevance_low_mean_plots")
-        cfg   <- self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
-        as_flag <- function(x) if (isTRUE(x)) TRUE else if (isFALSE(x)) FALSE else FALSE
-        on_all <- as_flag(cfg$viewAllPlots) || as_flag(cfg$verbose)
-        gates  <- setNames(vapply(klist, function(nm) as_flag(cfg[[nm]]) || on_all, logical(1)), klist)
-        force_save_final <- !any(gates)
+        # Plot-list names (data holders inside performance_relevance_plots)
+        klist <- c("performance_high_mean_plots", "performance_low_mean_plots", "relevance_high_mean_plots", "relevance_low_mean_plots")
         
-        # ---- helpers (drop-in) ----
+        # Helper: get a STRICT boolean from your accessor
+        .gate_for <- function(name) {
+          val <- tryCatch(self$viewFinalUpdatePerformanceandRelevancePlots(name), error = function(e) e)
+          if (inherits(val, "error")) return(FALSE)
+          if (!is.logical(val) || length(val) != 1L || is.na(val)) return(FALSE)
+          isTRUE(val)
+        }
+        
+        # Build gates
+        gates <- setNames(vapply(klist, .gate_for, logical(1)), klist)
+        
+        # ---- helpers ----
         .slug <- function(s) {
           s <- trimws(as.character(s)); s <- gsub("\\s+", "_", s); s <- gsub("[^A-Za-z0-9_]+", "_", s)
           tolower(gsub("_+", "_", s))
@@ -3420,8 +3408,6 @@ DESONN <- R6Class(
           NULL
         }
         
-        # Save a list of ggplots using the item's own name (or plot title) as the base;
-        # falls back to `group_default_k` if nothing useful is found
         save_plotlist <- function(pls, group_default, fname_fn) {
           if (is.null(pls) || !length(pls)) return(invisible(NULL))
           nms <- names(pls)
@@ -3431,31 +3417,25 @@ DESONN <- R6Class(
             nm <- if (!is.null(nms) && length(nms) >= k && nzchar(nms[[k]])) .slug(nms[[k]]) else .plot_label_slug(p)
             base <- if (!is.null(nm) && nzchar(nm)) nm else sprintf("%s_%02d", .slug(group_default), k)
             out  <- file.path("plots", fname_fn(sprintf("%s.png", base)))
-            ggsave(out, p, width = 6, height = 4, dpi = 300); message("💾 saved: ", out)
+            ggsave(out, p, width = 6, height = 4, dpi = 300)
           }
           invisible(NULL)
         }
         
-        
-        # helper: run printing once to the Plots pane (no saving)
         show_once <- function(pls, label) print_plotlist_verbose(pls, label, print_plots = TRUE)
         
-        # -------- scenario-aware saving --------
         save_group <- function(flag, pls, base, label) {
-          if (!(flag || force_save_final)) return(invisible(NULL))
+          if (!isTRUE(flag)) return(invisible(NULL))
           
-          if (do_ensemble) {
-            # C/D: save once per model → DESONN_<ens>_SONN_<m>_<base>_<k>.png
+          if (isTRUE(do_ensemble)) {
             for (m in seq_len(tot)) {
               fname_m <- make_fname_prefix(TRUE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = m, who = "DESONN")
               save_plotlist(pls, base, fname_m)
             }
           } else if (tot > 1L) {
-            # B: always SONN_1-<tot>_<base>_<k>.png (use model_index=1)
             fname_b <- make_fname_prefix(FALSE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = 1L, who = "DESONN")
             save_plotlist(pls, base, fname_b)
           } else {
-            # A: SONN_<mod>_<base>_<k>.png
             fname_a <- make_fname_prefix(FALSE, num_networks = 1L, total_models = 1L, ensemble_number = ens, model_index = mod, who = "DESONN")
             save_plotlist(pls, base, fname_a)
           }
@@ -3467,13 +3447,16 @@ DESONN <- R6Class(
         save_group(gates[["performance_high_mean_plots"]], performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", "Performance High Mean Plots")
         
         # 2) Performance Low Mean
-        save_group(gates[["performance_low_mean_plots"]],  performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",  "Performance Low Mean Plots")
+        save_group(gates[["performance_low_mean_plots"]], performance_relevance_plots$performance_low_mean_plots, "performance_low_mean", "Performance Low Mean Plots")
         
         # 3) Relevance High Mean
-        save_group(gates[["relevance_high_mean_plots"]],   performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",   "Relevance High Mean Plots")
+        save_group(gates[["relevance_high_mean_plots"]], performance_relevance_plots$relevance_high_mean_plots, "relevance_high_mean", "Relevance High Mean Plots")
         
         # 4) Relevance Low Mean
-        save_group(gates[["relevance_low_mean_plots"]],    performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",    "Relevance Low Mean Plots")
+        save_group(gates[["relevance_low_mean_plots"]], performance_relevance_plots$relevance_low_mean_plots, "relevance_low_mean", "Relevance Low Mean Plots")
+        
+        
+
         
         
         
@@ -4109,60 +4092,65 @@ DESONN <- R6Class(
     },
     store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
-      # Print the dimensions of predicted_output
-      # print(paste("Dimensions of predicted_output:", paste(dim(predicted_output), collapse = " x ")))
-      # print(paste("Dimensions of actual_values:", paste(dim(actual_values), collapse = " x ")))
       
+      # --- Conform predicted_output shape to match actual_values ---
       if (ncol(actual_values) != ncol(predicted_output)) {
+        total_elements_needed <- nrow(actual_values) * ncol(actual_values)
+        
         if (ncol(predicted_output) < ncol(actual_values)) {
-          # Calculate the required replication factor
-          total_elements_needed <- nrow(actual_values) * ncol(actual_values)
           rep_factor <- ceiling(total_elements_needed / length(predicted_output))
-          
-          # Create the replicated vector and check its length
-          replicated_predicted_output <- rep(predicted_output, rep_factor)
-          # Truncate the replicated vector to match the required length
-          replicated_predicted_output <- replicated_predicted_output[1:total_elements_needed]
-          # Create the matrix and check its dimensions
-          predicted_output_matrix <- matrix(replicated_predicted_output, nrow = nrow(actual_values), ncol = ncol(actual_values), byrow = FALSE)
+          replicated_predicted_output <- rep(predicted_output, rep_factor)[1:total_elements_needed]
+          predicted_output_matrix <- matrix(replicated_predicted_output,
+                                            nrow = nrow(actual_values), ncol = ncol(actual_values), byrow = FALSE)
         } else {
-          # Truncate predicted_output to match the number of columns in actual_values
           truncated_predicted_output <- predicted_output[, 1:ncol(actual_values)]
-          # Create the matrix and check its dimensions
-          predicted_output_matrix <- matrix(truncated_predicted_output, nrow = nrow(actual_values), ncol = ncol(actual_values), byrow = FALSE)
+          predicted_output_matrix <- matrix(truncated_predicted_output,
+                                            nrow = nrow(actual_values), ncol = ncol(actual_values), byrow = FALSE)
         }
       } else {
         predicted_output_matrix <- predicted_output
       }
       
-      # Calculate the error
+      # --- Calculate error and summary statistics ---
       error_prediction <- actual_values - predicted_output_matrix
+      differences     <- error_prediction
+      summary_stats   <- summary(differences)
+      boxplot_stats   <- boxplot.stats(differences)
       
-      # print("Error prediction calculation complete")
+      # --- Load plot_epochs from file (placeholder) ---
+      # plot_epochs <- readRDS(paste0("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds"))
+      plot_epochs <- NULL
       
-      # Calculate differences
-      differences <- error_prediction
-      
-      # Calculate summary statistics
-      summary_stats <- summary(differences)
-      boxplot_stats <- boxplot.stats(differences)
-      
-      # Read the plot_epochs object from the RDS file
-      plot_epochs <- readRDS(paste("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds", sep = ""))
-      
-      # Create a list to store weights and biases records
+      # --- Prepare weight and bias records ---
       best_weights_records <- list()
-      best_biases_records <- list()
-      
-      # Loop through each network to extract weights and biases from the passed-in lists
+      best_biases_records  <- list()
       for (i in 1:num_networks) {
         best_weights_records[[i]] <- all_weights[[i]]
         best_biases_records[[i]]  <- all_biases[[i]]
       }
       
+      # --- Generate model_serial_num ---
+      model_serial_num <- sprintf("%d.0.%d", as.integer(ensemble_number), as.integer(model_iter_num))
       
-      # Store results in a list
-      result <- list(
+      # --- Build filename prefix / artifact names (NULL-safe via updated make_fname_prefix) ---
+      fname <- make_fname_prefix(
+        do_ensemble     = isTRUE(get0("do_ensemble", ifnotfound = FALSE)),
+        num_networks    = get0("num_networks", ifnotfound = NULL),
+        total_models    = get0("num_networks", ifnotfound = NULL),  # falls back to num_networks
+        ensemble_number = ensemble_number,   # may be NULL; builder handles it
+        model_index     = model_iter_num,    # may be NULL; builder handles it
+        who             = "SONN"
+      )
+      
+      artifact_names <- list(
+        training_accuracy_loss_plot = fname("training_accuracy_loss_plot.png"),
+        output_saturation_plot      = fname("output_saturation_plot.png"),
+        max_weight_plot             = fname("max_weight_plot.png")
+      )
+      artifact_paths <- lapply(artifact_names, function(nm) file.path("plots", nm))
+      
+      # --- Create metadata list (unchanged + adds fname artifacts) ---
+      metadata <- list(
         input_size = input_size,
         output_size = output_size,
         N = N,
@@ -4181,6 +4169,7 @@ DESONN <- R6Class(
         run_id = run_id,
         ensemble_number = ensemble_number,
         model_iter_num = model_iter_num,
+        model_serial_num = model_serial_num,
         threshold = threshold,
         predicted_output = predicted_output,
         predicted_output_tail = tail(predicted_output),
@@ -4192,29 +4181,32 @@ DESONN <- R6Class(
         y = y,
         lossesatoptimalepoch = predicted_outputAndTime$lossesatoptimalepoch,
         loss_increase_flag = predicted_outputAndTime$loss_increase_flag,
-        performance_metric  = performance_metric,
+        performance_metric = performance_metric,
         relevance_metric = relevance_metric,
         plot_epochs = plot_epochs,
         best_weights_record = best_weights_records,
-        best_biases_record = best_biases_records
+        best_biases_record = best_biases_records,
+        
+        # NEW: filename artifacts
+        fname_artifact_names = artifact_names,  # e.g., "SONN_2_training_accuracy_loss_plot.png"
+        fname_artifact_paths = artifact_paths   # e.g., "plots/SONN_2_training_accuracy_loss_plot.png"
       )
       
-      # This is for the initial finding the best model out of all the hyperparameters.
-      if ((hyperparameter_grid_setup && !learnOnlyTrainingRun && (never_ran_flag || !never_ran_flag)) || predict_models) {
-        print(model_iter_num)
-        # Append result to the results list
-        results_list[[model_iter_num]] <- result #<<-
-        
-        # Create dynamic variable name
-        variable_name <- paste0("Ensemble_", ensemble_number, "_model_", model_iter_num)
-        
-        # Assign the result to the dynamic variable
-        assign(variable_name, result, envir = .GlobalEnv)
-      } else { # Temp iteration
-        # Append result to the temporary ensemble (second list)
-        ensembles$temp_ensemble[[model_iter_num]] <- result #<<-
+      metadata_main_ensemble <- list()
+      metadata_temp_ensemble <- list()
+      
+      # --- Store metadata by ensemble type (unchanged) ---
+      if (ensemble_number <= 1) {
+        print(paste("Storing metadata for main ensemble model", model_iter_num, "as", model_serial_num))
+        assign(paste0("Ensemble_Main_", ensemble_number, "_model_", model_iter_num, "_metadata"),
+               metadata, envir = .GlobalEnv)
+      } else {
+        print(paste("Storing metadata for temp ensemble model", model_iter_num, "as", model_serial_num))
+        assign(paste0("Ensemble_Temp_", ensemble_number, "_model_", model_iter_num, "_metadata"),
+               metadata, envir = .GlobalEnv)
       }
     }
+    
     
   )
 )

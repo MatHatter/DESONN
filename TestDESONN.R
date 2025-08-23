@@ -372,9 +372,9 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-  # do_ensemble         <- FALSE
-  # num_networks        <- 1L
-  # num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+  do_ensemble         <- FALSE
+  num_networks        <- 2L
+  num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
   # do_ensemble         <- FALSE
@@ -382,9 +382,9 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
   # num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
-  do_ensemble         <- TRUE
-  num_networks        <- 1L          # example main size
-  num_temp_iterations <- 0L
+  # do_ensemble         <- TRUE
+  # num_networks        <- 1L          # example main size
+  # num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
   # do_ensemble         <- TRUE
@@ -419,8 +419,8 @@ verbose      <- FALSE  # TRUE enables additional plot/debug output
 
 # SONN plots
 accuracy_plot     <- FALSE    # show training accuracy/loss
-saturation_plot   <- FALSE   # show output saturation
-max_weight_plot   <- FALSE    # show max weight magnitude
+saturation_plot   <- TRUE   # show output saturation
+max_weight_plot   <- TRUE    # show max weight magnitude
 
 # DESONN plots
 performance_high_mean_plots <- FALSE
@@ -554,7 +554,7 @@ if (!isTRUE(do_ensemble)) {
   # Apply per‑SONN plotting flags to all internal models
   if (length(main_model$ensemble)) {
     for (m in seq_along(main_model$ensemble)) {
-      main_model$ensemble[[m]]$PerEpochlViewPlotsConfig <- list(
+      main_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
         accuracy_plot   = isTRUE(accuracy_plot),
         saturation_plot = isTRUE(saturation_plot),
         max_weight_plot = isTRUE(max_weight_plot),
@@ -908,7 +908,7 @@ if (!isTRUE(do_ensemble)) {
     # Per‑SONN plotting flags
     if (length(main_model$ensemble)) {
       for (m in seq_along(main_model$ensemble)) {
-        main_model$ensemble[[m]]$PerEpochlViewPlotsConfig <- list(
+        main_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
           accuracy_plot   = isTRUE(accuracy_plot),
           saturation_plot = isTRUE(saturation_plot),
           max_weight_plot = isTRUE(max_weight_plot),
@@ -990,7 +990,7 @@ if (!isTRUE(do_ensemble)) {
       # Per‑SONN plotting flags for TEMP
       if (length(temp_model$ensemble)) {
         for (m in seq_along(temp_model$ensemble)) {
-          temp_model$ensemble[[m]]$PerEpochlViewPlotsConfig <- list(
+          temp_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
             accuracy_plot   = isTRUE(accuracy_plot),
             saturation_plot = isTRUE(saturation_plot),
             max_weight_plot = isTRUE(max_weight_plot),

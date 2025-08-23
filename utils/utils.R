@@ -5,35 +5,53 @@
 make_fname_prefix <- function(do_ensemble,
                               num_networks = NULL,
                               total_models = NULL,
-                              ensemble_number,
-                              model_index,
-                              who) {  # "SONN" or "DESONN"
+                              ensemble_number = NULL,
+                              model_index = NULL,
+                              who) {
   if (missing(who) || !nzchar(who)) stop("'who' must be 'SONN' or 'DESONN'")
   who <- toupper(who)
   
   if (is.null(total_models))
     total_models <- if (!is.null(num_networks)) num_networks else get0("num_networks", ifnotfound = 1L)
   
-  ens <- as.integer(ensemble_number)
-  mod <- as.integer(model_index)
-  tot <- as.integer(if (length(total_models)) total_models else 1L)
-  
-  if (isTRUE(do_ensemble)) {
-    return(function(base_name) sprintf("DESONN_%d_SONN_%d_%s", ens, mod, base_name))  # C/D
+  as_int_or_na <- function(x) {
+    if (is.null(x) || length(x) == 0 || is.na(x)) return(NA_integer_)
+    as.integer(x)
   }
   
-  if (!is.na(tot) && tot > 1L) {  # B
+  ens <- as_int_or_na(ensemble_number)
+  mod <- as_int_or_na(model_index)
+  tot <- as_int_or_na(total_models); if (is.na(tot)) tot <- 1L
+  
+  if (isTRUE(do_ensemble)) {
+    return(function(base_name) {
+      paste0(
+        "DESONN", if (!is.na(ens)) paste0("_", ens),    # omit if NA
+        "_SONN",  if (!is.na(mod)) paste0("_", mod),
+        "_", base_name
+      )
+    })
+  }
+  
+  if (!is.na(tot) && tot > 1L) {
     if (who == "SONN") {
-      return(function(base_name) sprintf("SONN_%dof%d_%s", mod, tot, base_name))
+      return(function(base_name) {
+        prefix <- if (!is.na(mod)) sprintf("SONN_%dof%d_", mod, tot) else sprintf("SONN_of%d_", tot)
+        paste0(prefix, base_name)
+      })
     } else if (who == "DESONN") {
-      return(function(base_name) sprintf("SONN_%d-%d_%s", 1L, tot, base_name))  # fixed first index
+      return(function(base_name) paste0(sprintf("SONN_%d-%d_", 1L, tot), base_name))
     } else {
       stop("invalid 'who'")
     }
   }
   
-  function(base_name) sprintf("SONN_%d_%s", mod, base_name)  # A
+  # single-model case
+  function(base_name) {
+    paste0("SONN", if (!is.na(mod)) paste0("_", mod), "_", base_name)
+  }
 }
+
 
 
 # ---- helper for
