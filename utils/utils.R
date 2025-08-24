@@ -52,6 +52,21 @@ make_fname_prefix <- function(do_ensemble,
   }
 }
 
+# ---- helper for
+#  prepare_disk_only
+# ----- tiny helper: cleanly stop script right here -----
+.hard_stop <- function(msg = "[prepare_disk_only] Done; stopping script.") {
+  cat(msg, "\n")
+  if (interactive()) {
+    # In RStudio: stop evaluating this script, but do NOT kill the session
+    stop(invisible(structure(list(message = msg),
+                             class = c("simpleError","error","condition"))),
+         call. = FALSE)
+  } else {
+    # From Rscript/terminal: exit process
+    quit(save = "no")
+  }
+}
 
 
 # ---- helper for

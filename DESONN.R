@@ -1029,14 +1029,31 @@ SONN <- R6Class(
     
     
     ,# Method to perform prediction
-    predict = function(Rdata, weights, biases, activation_functions) {
-      # Ensure weights, biases, activation_functions are lists
+    predict = function(Rdata, weights = NULL, biases = NULL, activation_functions = NULL) {
+      # If weights/biases are missing → fall back to internal state (stateful mode)
+      if (is.null(weights)) {
+        if (!is.null(self$weights)) {
+          weights <- self$weights
+        } else {
+          stop("predict(): weights not provided and self$weights is NULL.")
+        }
+      }
+      if (is.null(biases)) {
+        if (!is.null(self$biases)) {
+          biases <- self$biases
+        } else {
+          stop("predict(): biases not provided and self$biases is NULL.")
+        }
+      }
+      
+      # Ensure lists
       if (!is.list(weights)) weights <- list(weights)
       if (!is.list(biases)) biases <- list(biases)
-      if (!is.list(activation_functions)) activation_functions <- list(activation_functions)
+      if (!is.null(activation_functions) && !is.list(activation_functions)) {
+        activation_functions <- list(activation_functions)
+      }
       
       start_time <- Sys.time()
-      
       output <- as.matrix(Rdata)
       num_layers <- length(weights)
       
@@ -1044,9 +1061,9 @@ SONN <- R6Class(
         w <- as.matrix(weights[[layer]])
         b <- as.numeric(unlist(biases[[layer]]))
         
-        # Create bias matrix with broadcasting
+        # Broadcast bias to match samples × units
         n_samples <- nrow(output)
-        n_units <- ncol(w)
+        n_units   <- ncol(w)
         if (length(b) == 1) {
           bias_mat <- matrix(b, nrow = n_samples, ncol = n_units, byrow = TRUE)
         } else if (length(b) == n_units) {
@@ -1060,7 +1077,8 @@ SONN <- R6Class(
         output <- output %*% w + bias_mat
         
         # Apply activation if provided
-        if (length(activation_functions) >= layer &&
+        if (!is.null(activation_functions) &&
+            length(activation_functions) >= layer &&
             is.function(activation_functions[[layer]])) {
           output <- activation_functions[[layer]](output)
         }

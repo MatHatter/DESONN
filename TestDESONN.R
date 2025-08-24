@@ -1,5 +1,6 @@
 source("DESONN.R")
 source("utils/utils.R")
+source("utils/bootstrap_metadata.R")
 # source("DESONN_20240629_v6.R")
 # Initialize activation functions
 # self$activation_functions <- vector("list", self$num_layers)
@@ -84,10 +85,9 @@ lr <- .121
 lambda <- 0.0003
 num_epochs <- 117
 custom_scale <- .05
-# threshold <- .98
-# ML_NN <- TRUE
+
 ML_NN <- TRUE
-train <- TRUE
+
 learnOnlyTrainingRun <- FALSE
 update_weights <- TRUE
 update_biases <- TRUE
@@ -211,8 +211,7 @@ y <- data %>% dplyr::select(DEATH_EVENT)
 
 # Remove specified columns
 # data_reduced <- data %>% select(-all_of(columns_to_remove))
-numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'platelets',
-                     'serum_creatinine', 'serum_sodium', 'time')
+numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'platelets',  'serum_creatinine', 'serum_sodium', 'time')
 
 # Split the data into features (X) and target (y)
 # X <- data_reduced %>% select(-DEATH_EVENT)
@@ -340,7 +339,6 @@ writeTofiles <- FALSE
 #########################################################################################################################
 
 
-verbose <- TRUE
 hyperparameter_grid_setup <- TRUE
 reg_type = "L2" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
 
@@ -428,6 +426,45 @@ performance_low_mean_plots  <- FALSE
 relevance_high_mean_plots   <- FALSE
 relevance_low_mean_plots    <- FALSE
 
+# =========================
+# Session bootstrap & flags
+# =========================
+
+prepare_disk_only <- FALSE   # same as before
+# Single mode switch: "train", 
+MODE <- "predict:stateful"              # change to "predict:stateless" or "predict:stateful" as needed
+
+# (keep your BM_* prefs the same)
+BM_NAME_HINT    <- NULL
+BM_PREFER_KIND  <- c("Main","Temp")
+BM_PREFER_ENS   <- c(0L, 1L)
+BM_PREFER_MODEL <- 1L
+
+# ------- Phase 1: one-shot export & clean ----------
+if (isTRUE(prepare_disk_only)) {
+  rds_path <- bm_prepare_disk_only(
+    name_hint    = BM_NAME_HINT,
+    prefer_kind  = BM_PREFER_KIND,
+    prefer_ens   = BM_PREFER_ENS,
+    prefer_model = BM_PREFER_MODEL
+  )
+  cat(sprintf("[prepare_disk_only] Saved metadata to: %s\n", rds_path))
+  cat("[prepare_disk_only] Environment cleared. End of phase-1.\n")
+  .hard_stop()
+}
+
+# ------- Phase 2: normal runtime ----------
+try(bm_ensure_loaded(
+  name_hint    = BM_NAME_HINT,
+  prefer_kind  = BM_PREFER_KIND,
+  prefer_ens   = BM_PREFER_ENS,
+  prefer_model = BM_PREFER_MODEL
+), silent = TRUE)
+
+# Derive boolean once from MODE (no redundancy)
+train <- identical(MODE, "train")
+
+
 # =======================
 # PREDICT-ONLY SHORT-CIRCUIT
 # =======================
@@ -437,18 +474,22 @@ relevance_low_mean_plots    <- FALSE
 if (!train) {
   cat("Predict-only mode (train == FALSE).\n")
   
-  # 1) Choose how to pass params to predict
-  predict_mode <- "stateless"                 # "stateless" or "stateful"
+  # Decide stateful vs stateless from MODE
+  predict_mode <- if (identical(MODE, "predict:stateful")) "stateful" else "stateless"
   
-  # 2) Choose data to predict on
-  X_new <- as.matrix(X_validation)            # or X_test / any same-schema matrix
+  # Data to score
+  X_new <- as.matrix(X_validation)  # or X_test
   
-  # 3) (Optional) explicitly pick a metadata; otherwise auto-detect the best one found
-  # meta_pref <- list(kind = "Main", ens = 0, model = 1)   # e.g., Main_0 model_1
-  meta_pref <- NULL
+  # Find metadata in RAM (auto)
+  meta <- .auto_find_meta()
+  if (is.null(meta)) stop("No Ensemble_*_*_model_*_metadata in RAM. Load RDS first or run Phase-1 after training.")
   
-  # 4) Build architecture-only DESONN (no training)
-  target_model_index <- if (!is.null(meta_pref)) as.integer(meta_pref$model) else 1L
+  # Pull best weights/biases
+  rec <- extract_best_records(meta, ML_NN = TRUE, model_index = 1L)
+  if (is.null(rec$weights) || is.null(rec$biases)) stop("[predict-only] Missing weights/biases in metadata.")
+  
+  # Build architecture-only DESONN (no training)
+  target_model_index <- 1L
   nn_for_build <- max(1L, as.integer(num_networks), target_model_index)
   
   main_model <- DESONN$new(
@@ -464,28 +505,12 @@ if (!train) {
     method          = init_method,
     custom_scale    = custom_scale
   )
-  
-  # 5) Resolve a metadata object
-  if (!is.null(meta_pref)) {
-    meta <- .find_meta(kind = meta_pref$kind, ens = meta_pref$ens, model = meta_pref$model)
-    if (is.null(meta)) stop(sprintf(
-      "Metadata not found for Ensemble_%s_%d_model_%d_(metadata|metada).",
-      meta_pref$kind, as.integer(meta_pref$ens), as.integer(meta_pref$model)))
-  } else {
-    meta <- .auto_find_meta()
-    if (is.null(meta)) stop("No Ensemble_*_*_model_*_metadata object found in .GlobalEnv.")
-  }
-  
-  # 6) Extract best weights/biases (use slot [[1]] in the metadata)
-  rec <- extract_best_records(meta, ML_NN = main_model$ensemble[[1]]$ML_NN, model_index = 1L)
-  
-  # 7) Pick which SONN inside DESONN to use (default 1; or match meta_pref$model if provided)
   sonn_idx <- min(target_model_index, length(main_model$ensemble))
   model_obj <- main_model$ensemble[[sonn_idx]]
   
-  # 8) Predict
+  # Predict (stateful vs stateless)
   if (identical(predict_mode, "stateful")) {
-    if (model_obj$ML_NN) {
+    if (isTRUE(model_obj$ML_NN)) {
       model_obj$load_all_weights(rec$weights)
       model_obj$load_all_biases(rec$biases)
     } else {
@@ -495,28 +520,85 @@ if (!train) {
     out <- model_obj$predict(Rdata = X_new, activation_functions = activation_functions)
   } else {
     out <- model_obj$predict(
-      Rdata = X_new,
+      Rdata   = X_new,
       weights = rec$weights,
       biases  = rec$biases,
       activation_functions = activation_functions
     )
   }
   
-  # 9) Use results
+  # Normalize probs (handle logits)
   probs <- out$predicted_output
-  cat("Predict-only complete. Head(probs):\n"); print(head(probs))
+  if (is.list(probs) && length(probs) == 1L) probs <- probs[[1]]
+  if (is.data.frame(probs)) probs <- probs[[1]]
+  if (is.matrix(probs)) probs <- as.numeric(probs[,1])
+  probs <- as.numeric(probs)
+  if (any(probs < 0, na.rm=TRUE) || any(probs > 1, na.rm=TRUE)) {
+    cat("Predictions look like logits; applying sigmoid transform.\n")
+    probs <- plogis(probs)
+  }
   
-  # --- Quick validation metrics (temporary) ---
+  cat("Predict-only complete. Head(probs_val):\n"); print(head(probs))
+  
+  # Metrics
   if (exists("y_validation", inherits = TRUE)) {
-    binary_preds_val <- ifelse(probs >= 0.5, 1, 0)
-    val_accuracy <- mean(binary_preds_val == y_validation, na.rm = TRUE)
-    cat(sprintf("\nValidation Accuracy (predict-only): %.2f%%\n", 100 * val_accuracy))
+    y <- y_validation
+    if (is.list(y) && length(y) == 1L) y <- y[[1]]
+    if (is.data.frame(y)) y <- y[[1]]
+    if (is.matrix(y)) y <- as.numeric(y[,1])
+    if (is.factor(y)) y <- as.integer(y) - 1L
+    y <- as.numeric(y)
+    
+    n <- min(length(probs), length(y))
+    if (length(probs) != length(y)) {
+      warning(sprintf("Length mismatch: preds=%d, labels=%d → truncating to %d", length(probs), length(y), n))
+      probs <- probs[seq_len(n)]
+      y     <- y[seq_len(n)]
+    }
+    
+    cat(sprintf("Label prevalence: pos=%.2f%%, neg=%.2f%%\n",
+                100*mean(y==1, na.rm=TRUE), 100*mean(y==0, na.rm=TRUE)))
+    
+    pred_at <- function(t) as.integer(probs >= t)
+    t0 <- 0.5
+    p0 <- pred_at(t0)
+    acc0 <- mean(p0 == y)
+    tp <- sum(p0==1 & y==1); fp <- sum(p0==1 & y==0)
+    fn <- sum(p0==0 & y==1); tn <- sum(p0==0 & y==0)
+    prec <- if ((tp+fp)>0) tp/(tp+fp) else NA_real_
+    rec  <- if ((tp+fn)>0) tp/(tp+fn) else 0
+    f1   <- if (!is.na(prec) && (prec+rec)>0) 2*prec*rec/(prec+rec) else NA_real_
+    cat(sprintf("Validation Accuracy @0.5: %.2f%%\n", 100*acc0))
+    cat(sprintf("Precision: %s | Recall: %s | F1: %s\n",
+                format(prec, digits=4, nsmall=4),
+                format(rec,  digits=4, nsmall=4),
+                format(f1,   digits=4, nsmall=4)))
+    
+    ths <- seq(0.05, 0.95, by=0.05)
+    metrics <- sapply(ths, function(t) {
+      p <- pred_at(t)
+      tp <- sum(p==1 & y==1); fp <- sum(p==1 & y==0)
+      fn <- sum(p==0 & y==1); tn <- sum(p==0 & y==0)
+      acc <- (tp+tn)/length(y)
+      pr  <- if ((tp+fp)>0) tp/(tp+fp) else NA_real_
+      rc  <- if ((tp+fn)>0) tp/(tp+fn) else 0
+      f1  <- if (!is.na(pr) && (pr+rc)>0) 2*pr*rc/(pr+rc) else NA_real_
+      c(acc=acc, prec=pr, rec=rc, f1=f1, pos=sum(p))
+    })
+    metrics_df <- data.frame(threshold=ths, t(metrics))
+    print(metrics_df, digits=4, row.names=FALSE)
+    
+    best_f1_idx <- which.max(ifelse(is.na(metrics_df$f1), -Inf, metrics_df$f1))
+    cat(sprintf("Best F1 at t=%.2f → F1=%.4f, Acc=%.4f, Prec=%s, Rec=%s, Pos=%d\n",
+                metrics_df$threshold[best_f1_idx], metrics_df$f1[best_f1_idx],
+                metrics_df$acc[best_f1_idx],
+                format(metrics_df$prec[best_f1_idx], digits=4),
+                format(metrics_df$rec[best_f1_idx],  digits=4),
+                as.integer(metrics_df$pos[best_f1_idx])))
   } else {
     cat("\n[No y_validation found in environment → skipping accuracy calc]\n")
   }
   
-  
-  # 10) Exit before any training code runs
   if (interactive()) {
     invisible(out)
   } else {
