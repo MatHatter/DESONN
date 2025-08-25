@@ -404,4 +404,143 @@ evaluate_classification_metrics <- function(preds, labels) {
   return(list(precision = precision, recall = recall, F1 = F1))
 }
 
+##helpers for calculate_performance_grouped 
+
+aggregate_predictions <- function(predicted_output_list, method = c("mean","median","vote"), weights = NULL) {
+  stopifnot(length(predicted_output_list) >= 1)
+  method <- match.arg(method)
+  P <- do.call(cbind, lapply(predicted_output_list, as.numeric))
+  if (!is.null(weights)) {
+    stopifnot(length(weights) == ncol(P))
+    w <- weights / sum(weights)
+  } else {
+    w <- rep(1/ncol(P), ncol(P))
+  }
+  if (method == "mean")   as.matrix(drop(P %*% w))
+  else if (method == "median") as.matrix(apply(P, 1, stats::median))
+  else { # vote → probability = mean; you can threshold later if you want hard labels
+    as.matrix(rowMeans(P))
+  }
+}
+
+pick_representative_sonn <- function(SONN_list, predicted_output_list, labels) {
+  # Pick the model with best F1 (at 0.5) on the provided labels
+  f1_at_05 <- function(p, y) {
+    yhat <- as.integer(p >= 0.5)
+    tp <- sum(yhat==1 & y==1); fp <- sum(yhat==1 & y==0); fn <- sum(yhat==0 & y==1)
+    prec <- if ((tp+fp)==0) 0 else tp/(tp+fp)
+    rec  <- if ((tp+fn)==0) 0 else tp/(tp+fn)
+    if ((prec+rec)==0) 0 else 2*prec*rec/(prec+rec)
+  }
+  scores <- vapply(seq_along(predicted_output_list),
+                   function(i) f1_at_05(predicted_output_list[[i]], labels),
+                   numeric(1))
+  SONN_list[[ which.max(scores) ]]
+}
+
+# -------------------------------
+# Helpers (keep top-level in file)
+# -------------------------------
+# ---- Safe, name-aligning flattener for per-model metrics ---------------------
+# metric_list: list of length M; each element like list(metrics=<named list>, names=<char>)
+# run_id:      character/list of length M with model labels
+flatten_metrics_to_df <- function(metric_list, run_id) {
+  if (is.null(metric_list) || length(metric_list) == 0) return(NULL)
+  
+  # Build one wide row per model
+  rows <- lapply(seq_along(metric_list), function(i) {
+    mi <- metric_list[[i]]
+    if (is.null(mi) || is.null(mi$metrics)) return(NULL)
+    
+    # Flatten nested lists to atomic named vector
+    flat <- tryCatch(
+      unlist(mi$metrics, recursive = TRUE, use.names = TRUE),
+      error = function(e) NULL
+    )
+    if (is.null(flat) || length(flat) == 0) return(NULL)
+    
+    # Coerce to one-row data.frame
+    df <- as.data.frame(as.list(flat), stringsAsFactors = FALSE)
+    
+    # Ensure syntactically valid, unique names
+    names(df) <- make.names(names(df), unique = TRUE)
+    
+    # Attach model label
+    df$Model_Name <- if (!is.null(run_id) && length(run_id) >= i) run_id[[i]] else paste0("Model_", i)
+    
+    df
+  })
+  
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) return(NULL)
+  
+  # Align columns across all rows
+  all_names <- unique(unlist(lapply(rows, names), use.names = FALSE))
+  
+  rows <- lapply(rows, function(df) {
+    missing <- setdiff(all_names, names(df))
+    if (length(missing)) {
+      # fill missing metrics with NA (numeric); keep Model_Name as character
+      for (nm in missing) df[[nm]] <- NA_real_
+    }
+    # Order columns consistently
+    df <- df[all_names]
+    df
+  })
+  
+  # Bind safely (names now match); avoid base rbind name-matching issues
+  wide <- do.call(rbind, rows)
+  rownames(wide) <- NULL
+  
+  # Long tidy form (Model_Name + Metric + Value)
+  metric_cols <- setdiff(names(wide), "Model_Name")
+  
+  # Use tidyr if available; otherwise base reshape
+  if (requireNamespace("tidyr", quietly = TRUE)) {
+    long <- tidyr::pivot_longer(
+      wide,
+      cols = dplyr::all_of(metric_cols),
+      names_to = "Metric",
+      values_to = "Value"
+    )
+  } else {
+    # Base fallback
+    long <- stats::reshape(
+      wide,
+      varying = metric_cols,
+      v.names = "Value",
+      timevar = "Metric",
+      times = metric_cols,
+      idvar = "Model_Name",
+      direction = "long"
+    )
+    long <- long[ , c("Model_Name", "Metric", "Value")]
+  }
+  
+  # Best-effort numeric coercion for Value
+  suppressWarnings(long$Value <- as.numeric(long$Value))
+  
+  long
+}
+
+summarize_grouped <- function(long_df) {
+  if (is.null(long_df) || !nrow(long_df)) return(NULL)
+  
+  keep <- with(long_df, tapply(Value, Metric, function(v) any(is.finite(v))))
+  keep_metrics <- names(keep)[keep]
+  df <- long_df[long_df$Metric %in% keep_metrics, c("Model_Name","Metric","Value"), drop = FALSE]
+  if (!nrow(df)) return(NULL)
+  
+  stats_mat <- do.call(rbind, lapply(split(df$Value, df$Metric), function(v) {
+    v <- v[is.finite(v)]
+    c(mean = mean(v, na.rm = TRUE),
+      median = stats::median(v, na.rm = TRUE),
+      n = length(v))
+  }))
+  data.frame(Metric = rownames(stats_mat), stats_mat, row.names = NULL, check.names = FALSE)
+}
+
+
+
+
 

@@ -84,6 +84,7 @@ beta2 <- 0.8 # Slig1htly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
 num_epochs <- 117
+
 custom_scale <- .05
 
 ML_NN <- TRUE
@@ -370,14 +371,14 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-do_ensemble         <- FALSE
-num_networks        <- 1L
-num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+# do_ensemble         <- FALSE
+# num_networks        <- 1L
+# num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
-# do_ensemble         <- FALSE
-# num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
-# num_temp_iterations <- 0L
+do_ensemble         <- FALSE
+num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
+num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
 # do_ensemble         <- TRUE
@@ -413,12 +414,12 @@ viewTables  <- FALSE
 
 ## ====== Control panel flags ======
 viewAllPlots <- FALSE  # TRUE shows all plots regardless of individual flags
-verbose      <- FALSE  # TRUE enables additional plot/debug output
+verbose      <- TRUE  # TRUE enables additional plot/debug output
 
 # SONN plots
 accuracy_plot     <- FALSE    # show training accuracy/loss
-saturation_plot   <- TRUE   # show output saturation
-max_weight_plot   <- TRUE    # show max weight magnitude
+saturation_plot   <- FALSE   # show output saturation
+max_weight_plot   <- FALSE    # show max weight magnitude
 
 # DESONN plots
 performance_high_mean_plots <- FALSE
@@ -432,8 +433,8 @@ relevance_low_mean_plots    <- FALSE
 
 prepare_disk_only <- FALSE   # same as before
 # Single mode switch: "train", 
-MODE <- "predict:stateful"              # change to "predict:stateless" or "predict:stateful" as needed
-
+# MODE <- "predict:stateful"              # change to "predict:stateless" or "predict:stateful" as needed
+MODE <- "train"
 # (keep your BM_* prefs the same)
 BM_NAME_HINT    <- NULL
 BM_PREFER_KIND  <- c("Main","Temp")
@@ -664,7 +665,7 @@ if (!train) {
       epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
       shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
       X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
-      train=train, verbose=verbose
+      train=train, viewTables=viewTables, verbose=verbose
     ))
     
     # Keep the ID on the run object too (belt-and-suspenders)
@@ -1024,7 +1025,7 @@ if (!train) {
         epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
         shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
         X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
-        train=train, verbose=verbose
+        train=train, viewTables=viewTables, verbose=verbose
       ))
       ensembles$main_ensemble[[1]] <- main_model
       firstRun <- FALSE

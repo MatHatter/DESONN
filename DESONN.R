@@ -1256,7 +1256,7 @@ SONN <- R6Class(
               ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
             }, error = function(e) message("❌ accuracy_loss_plot: ", e$message))
           }
-          
+    
           # 2) Output Saturation
           if (self$viewPerEpochPlots("saturation_plot")) {
             tryCatch({
@@ -3073,7 +3073,7 @@ DESONN <- R6Class(
     }
     ,
     
-    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
+    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, viewTables, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3362,6 +3362,7 @@ DESONN <- R6Class(
           all_biases                   = all_biases,
           all_activation_functions     = all_activation_functions,
           ML_NN = ML_NN,
+          viewTables = viewTables,
           verbose = verbose
         )
         
@@ -3390,8 +3391,10 @@ DESONN <- R6Class(
         }
         
         # =========================
-        # DESONN — Final perf/relevance lists (bottom 4) with STRICT booleans
+        # DESONN — Final perf/relevance lists (always SAVE + VIEW, no dumps)
         # =========================
+        
+        `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
         
         if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
         
@@ -3399,81 +3402,88 @@ DESONN <- R6Class(
         tot <- if (!is.null(self$ensemble)) length(self$ensemble) else as.integer(get0("num_networks", ifnotfound = 1L))
         mod <- if (exists("model_iter_num", inherits = TRUE) && length(model_iter_num)) as.integer(model_iter_num) else 1L
         
-        # Plot-list names (data holders inside performance_relevance_plots)
-        klist <- c("performance_high_mean_plots", "performance_low_mean_plots", "relevance_high_mean_plots", "relevance_low_mean_plots")
-        
-        # Helper: get a STRICT boolean from your accessor
-        .gate_for <- function(name) {
-          val <- tryCatch(self$viewFinalUpdatePerformanceandRelevancePlots(name), error = function(e) e)
-          if (inherits(val, "error")) return(FALSE)
-          if (!is.logical(val) || length(val) != 1L || is.na(val)) return(FALSE)
-          isTRUE(val)
+        # Ensure we have a filename namer
+        if (!exists("fname", inherits = TRUE) || !is.function(fname)) {
+          fname <- make_fname_prefix(
+            isTRUE(get0("do_ensemble", ifnotfound = FALSE)),
+            num_networks    = tot,
+            total_models    = tot,
+            ensemble_number = ens,
+            model_index     = mod,
+            who             = "DESONN"
+          )
         }
         
-        # Build gates
-        gates <- setNames(vapply(klist, .gate_for, logical(1)), klist)
-        
-        # ---- helpers ----
         .slug <- function(s) {
-          s <- trimws(as.character(s)); s <- gsub("\\s+", "_", s); s <- gsub("[^A-Za-z0-9_]+", "_", s)
+          s <- trimws(as.character(s))
+          s <- gsub("\\s+", "_", s)
+          s <- gsub("[^A-Za-z0-9_]+", "_", s)
           tolower(gsub("_+", "_", s))
         }
+        
         .plot_label_slug <- function(p) {
-          t <- tryCatch(p$labels$title, error = function(e) NULL)
-          if (!is.null(t) && nzchar(t)) return(.slug(t))
-          y <- tryCatch(p$labels$y,     error = function(e) NULL)
-          if (!is.null(y) && nzchar(y)) return(.slug(y))
+          # Safely coerce any ggplot label to a single string, or NULL
+          .first_label <- function(obj) {
+            if (is.null(obj)) return(NULL)
+            s <- tryCatch(as.character(obj), error = function(e) NULL)
+            if (is.null(s) || !length(s)) return(NULL)
+            s1 <- s[[1]]
+            if (is.null(s1) || !nzchar(s1)) return(NULL)
+            s1
+          }
+          t1 <- .first_label(tryCatch(p$labels$title, error = function(e) NULL))
+          if (!is.null(t1)) return(.slug(t1))
+          y1 <- .first_label(tryCatch(p$labels$y,     error = function(e) NULL))
+          if (!is.null(y1)) return(.slug(y1))
           NULL
         }
         
-        save_plotlist <- function(pls, group_default, fname_fn) {
-          if (is.null(pls) || !length(pls)) return(invisible(NULL))
-          nms <- names(pls)
-          for (k in seq_along(pls)) {
-            p <- pls[[k]]
-            if (!inherits(p, c("gg","ggplot"))) next
-            nm <- if (!is.null(nms) && length(nms) >= k && nzchar(nms[[k]])) .slug(nms[[k]]) else .plot_label_slug(p)
-            base <- if (!is.null(nm) && nzchar(nm)) nm else sprintf("%s_%02d", .slug(group_default), k)
-            out  <- file.path("plots", fname_fn(sprintf("%s.png", base)))
-            ggsave(out, p, width = 6, height = 4, dpi = 300)
+        
+        # Walk any mixture of ggplot / list / nested list; save PNG and view each ggplot
+        .walk_save_view <- function(x, base, idx_env) {
+          if (is.null(x) || !length(x)) return(invisible(NULL))
+          
+          save_one <- function(p, nm_fallback) {
+            nm <- .plot_label_slug(p) %||% .slug(nm_fallback)
+            idx_env[[nm]] <- (idx_env[[nm]] %||% 0L) + 1L
+            file_base <- sprintf("%s_%03d", nm, idx_env[[nm]])
+            out <- file.path("plots", fname(sprintf("%s.png", file_base)))
+            
+            # Save (quiet)
+            try(suppressWarnings(suppressMessages(
+              ggsave(out, p, width = 6, height = 4, dpi = 300)
+            )), silent = TRUE)
+            
+            # View (print only real ggplots)
+            try(print(p), silent = TRUE)
+          }
+          
+          # recurse
+          if (inherits(x, c("gg","ggplot"))) {
+            save_one(x, base)
+          } else if (is.list(x)) {
+            for (k in seq_along(x)) {
+              elem <- x[[k]]
+              if (inherits(elem, c("gg","ggplot"))) {
+                save_one(elem, sprintf("%s_%02d", base, k))
+              } else if (is.list(elem)) {
+                .walk_save_view(elem, sprintf("%s_%02d", base, k), idx_env)
+              } # non-gg, non-list: ignore silently
+            }
           }
           invisible(NULL)
         }
         
-        show_once <- function(pls, label) print_plotlist_verbose(pls, label, print_plots = TRUE)
+        # Independent counters per group to keep filenames stable
+        .idx <- new.env(parent = emptyenv())
         
-        save_group <- function(flag, pls, base, label) {
-          if (!isTRUE(flag)) return(invisible(NULL))
-          
-          if (isTRUE(do_ensemble)) {
-            for (m in seq_len(tot)) {
-              fname_m <- make_fname_prefix(TRUE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = m, who = "DESONN")
-              save_plotlist(pls, base, fname_m)
-            }
-          } else if (tot > 1L) {
-            fname_b <- make_fname_prefix(FALSE, num_networks = tot, total_models = tot, ensemble_number = ens, model_index = 1L, who = "DESONN")
-            save_plotlist(pls, base, fname_b)
-          } else {
-            fname_a <- make_fname_prefix(FALSE, num_networks = 1L, total_models = 1L, ensemble_number = ens, model_index = mod, who = "DESONN")
-            save_plotlist(pls, base, fname_a)
-          }
-          
-          show_once(pls, label)
-        }
+        # Process all four holders (always save + view if plots exist)
+        .walk_save_view(performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", .idx)
+        .walk_save_view(performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",  .idx)
+        .walk_save_view(performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",   .idx)
+        .walk_save_view(performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",    .idx)
         
-        # 1) Performance High Mean
-        save_group(gates[["performance_high_mean_plots"]], performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", "Performance High Mean Plots")
-        
-        # 2) Performance Low Mean
-        save_group(gates[["performance_low_mean_plots"]], performance_relevance_plots$performance_low_mean_plots, "performance_low_mean", "Performance Low Mean Plots")
-        
-        # 3) Relevance High Mean
-        save_group(gates[["relevance_high_mean_plots"]], performance_relevance_plots$relevance_high_mean_plots, "relevance_high_mean", "Relevance High Mean Plots")
-        
-        # 4) Relevance Low Mean
-        save_group(gates[["relevance_low_mean_plots"]], performance_relevance_plots$relevance_low_mean_plots, "relevance_low_mean", "Relevance Low Mean Plots")
-        
-        
+        invisible(NULL)  # prevent any accidental auto-print of return value
         
         
         
@@ -3498,7 +3508,7 @@ DESONN <- R6Class(
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, verbose) {
+    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
       
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -3637,36 +3647,6 @@ DESONN <- R6Class(
           self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
           
         }
-      }else if(never_ran_flag == FALSE){
-        for (i in 1:length(self$ensemble)) {
-          if(hyperparameter_grid_setup){
-            cat("___________________________________________________________________________\n")
-            cat("______________________________DESONN_", ensemble_number + 1, "_SONN_", i, "______________________________\n", sep = "")
-          }else{
-            cat("___________________________________________________________________________\n")
-            cat("______________________________DESONN_", ensemble_number, "_SONN_", i, "______________________________\n", sep = "")
-          }
-          single_predicted_outputAndTime <- all_predicted_outputAndTime[[i]] #this is for store metadata
-          single_predicted_output <- predicted_output_list[[i]]
-          single_prediction_time <- prediction_time_list[[i]]
-          single_ensemble_name_model_name <- all_ensemble_name_model_name[[i]]
-          
-          if(learnOnlyTrainingRun == FALSE){
-            
-            performance_list[[i]] <- calculate_performance(self$ensemble[[i]], Rdata, labels, lr, i, num_epochs, threshold, learn_time, single_predicted_output, single_prediction_time, ensemble_number, single_ensemble_name_model_name)
-            
-            relevance_list[[i]] <- calculate_relevance(self$ensemble[[i]], Rdata, labels, i, single_predicted_output, ensemble_number)
-            
-          }
-          
-          performance_metric <- performance_list[[i]]$metrics
-          relevance_metric <- relevance_list[[i]]$metrics
-          
-          
-          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold, predicted_output = single_predicted_output, actual_values = y, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
-          
-        }
-        
       }
       
       #████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████
@@ -3829,41 +3809,84 @@ DESONN <- R6Class(
         NULL
       }
       
-      # print("Finished Relevance update_performance_and_relevance_low")
+      # -----------------------------------------------
+      # Grouped metrics + printing policy (final)
+      # -----------------------------------------------
+      # Predeclare so they're always in scope
+      perf_df <- relev_df <- NULL
+      perf_group_summary <- relev_group_summary <- NULL
+      group_perf <- group_relev <- NULL
       
-      if(hyperparameter_grid_setup){
-        if(never_ran_flag == TRUE){
-          if (learnOnlyTrainingRun == FALSE) {
-            run_results_1_1 <- results_list[[1]] #<<-
-            # run_results_1_2 <<- results_list[[2]]
-            # run_results_1_3 <<- results_list[[3]]
-            # run_results_1_4 <<- results_list[[4]]
-            # run_results_1_5 <<- results_list[[5]]
-          }else if(learnOnlyTrainingRun == TRUE){
-            results_list_learnOnly_1_1 <- results_list_learnOnly[[1]] #<<-
-            results_list_learnOnly_1_2 <- results_list_learnOnly[[2]] #<<-
-            results_list_learnOnly_1_3 <- results_list_learnOnly[[3]] #<<-
-            results_list_learnOnly_1_4 <- results_list_learnOnly[[4]] #<<-
-            results_list_learnOnly_1_5 <- results_list_learnOnly[[5]] #<<-
-          }}else if(never_ran_flag == FALSE){
-            if (learnOnlyTrainingRun == FALSE) {
-              run_results_2_1 <- results_list[[1]] #<<-
-              run_results_2_2 <- results_list[[2]] #<<-
-              run_results_2_3 <- results_list[[3]] #<<-
-              run_results_2_4 <- results_list[[4]] #<<-
-              run_results_2_5 <- results_list[[5]] #<<-
-            }
-          }
+      # Build per-model long DFs (works for 1+ models)
+      perf_df  <- flatten_metrics_to_df(performance_list, run_id)
+      relev_df <- flatten_metrics_to_df(relevance_list,     run_id)
+      
+      # --- Vanilla group summaries (across models) ---
+      perf_group_summary  <- summarize_grouped(perf_df)
+      relev_group_summary <- summarize_grouped(relev_df)
+      
+      # --- Optional notify user ---
+      if (!isTRUE(verbose) && !isTRUE(viewTables)) {
+        cat("\n[ℹ] Group summaries computed silently. 
+      Set `verbose = TRUE` to print data frames, 
+      or `viewTables = TRUE` to see tables.\n")
       }
       
-      # # Call find_and_print_best_performing_models with appropriate arguments
-      # find_and_print_best_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_best)
-      # 
-      # # Call find_and_print_worst_performing_models with appropriate arguments
-      # find_and_print_worst_performing_models(performance_names, relevance_names, performance_metrics, relevance_metrics, target_metric_name_worst, ensemble_number = j)
-      # 
+      # Grouped metrics (run whenever you have ≥1 model)
+      if (length(self$ensemble) >= 1) {
+        group_perf <- calculate_performance_grouped(
+          SONN_list             = self$ensemble,
+          Rdata                 = Rdata,
+          labels                = labels,
+          lr                    = lr,
+          num_epochs            = num_epochs,
+          threshold             = threshold,
+          predicted_output_list = predicted_output_list,
+          prediction_time_list  = prediction_time_list,
+          ensemble_number       = ensemble_number,
+          run_id                = run_id,
+          ML_NN                 = ML_NN,
+          verbose               = verbose,
+          agg_method            = "mean",
+          metric_mode           = "aggregate_predictions+rep_sonn"
+        )
+        
+        group_relev <- calculate_relevance_grouped(
+          SONN_list             = self$ensemble,
+          Rdata                 = Rdata,
+          labels                = labels,
+          predicted_output_list = predicted_output_list,
+          ensemble_number       = ensemble_number,
+          run_id                = run_id,
+          ML_NN                 = ML_NN,
+          verbose               = verbose,
+          agg_method            = "mean",
+          metric_mode           = "aggregate_predictions+rep_sonn"
+        )
+      }
+      
+      # ---------- Printing policy ----------
+      # Tables (DF heads) print if EITHER verbose OR viewTables
+      if (isTRUE(verbose) || isTRUE(viewTables)) {
+        if (!is.null(perf_df))  { cat("\n--- performance_long_df (head) ---\n"); print(utils::head(perf_df, 12)) }
+        if (!is.null(relev_df)) { cat("\n--- relevance_long_df (head) ---\n"); print(utils::head(relev_df, 12)) }
+      }
+      
+      # Summaries + grouped metrics print ONLY when verbose = TRUE
+      if (isTRUE(verbose)) {
+        if (!is.null(perf_group_summary))  { cat("\n=== PERFORMANCE group summary ===\n"); print(perf_group_summary) }
+        if (!is.null(relev_group_summary)) { cat("\n=== RELEVANCE group summary ===\n"); print(relev_group_summary) }
+        if (!is.null(group_perf))  { cat("\n=== GROUPED PERFORMANCE metrics ===\n"); print(group_perf$metrics) }
+        if (!is.null(group_relev)) { cat("\n=== GROUPED RELEVANCE metrics ===\n"); print(group_relev$metrics) }
+      }
+      
+      
+      
+      
+      
+      
       # Return the lists of plots
-      return(list(performance_high_mean_plots = performance_high_mean_plots, performance_low_mean_plots = performance_low_mean_plots, relevance_high_mean_plots = relevance_high_mean_plots, relevance_low_mean_plots = relevance_low_mean_plots))
+      return(list(performance_high_mean_plots = performance_high_mean_plots, performance_low_mean_plots = performance_low_mean_plots, relevance_high_mean_plots = relevance_high_mean_plots, relevance_low_mean_plots = relevance_low_mean_plots, performance_group_summary = perf_group_summary, relevance_group_summary = relev_group_summary, performance_long_df = perf_df, relevance_long_df = relev_df, performance_grouped = if (exists("group_perf")  && !is.null(group_perf))  group_perf$metrics  else NULL, relevance_grouped   = if (exists("group_relev") && !is.null(group_relev)) group_relev$metrics else NULL))
       
       
     },
@@ -5441,6 +5464,133 @@ calculate_relevance_learn <- function(SONN, Rdata, labels, model_iter_num, predi
   
   return(list(metrics = rel_metrics, names = names(rel_metrics)))
 }
+
+
+
+calculate_performance_grouped <- function(SONN_list, Rdata, labels, lr, num_epochs, threshold, predicted_output_list, prediction_time_list, ensemble_number, run_id, ML_NN, verbose,
+    agg_method = c("mean","median","vote"),
+    metric_mode = c("aggregate_predictions+rep_sonn", "average_per_model"),
+    weights_list = NULL, biases_list = NULL, act_list = NULL
+) {
+  agg_method <- match.arg(agg_method)
+  metric_mode <- match.arg(metric_mode)
+  
+  # 1) Aggregate predictions once
+  p_agg <- aggregate_predictions(predicted_output_list, method = agg_method)
+  pred_time_agg <- mean(unlist(prediction_time_list), na.rm = TRUE)
+  
+  if (metric_mode == "aggregate_predictions+rep_sonn") {
+    # 2a) Use ONE representative SONN (best F1) so we can reuse your metric code as-is
+    rep_sonn <- pick_representative_sonn(SONN_list, predicted_output_list, labels)
+    rep_w <- rep_sonn$weights; rep_b <- rep_sonn$biases; rep_af <- rep_sonn$activation_functions
+    
+    calculate_performance(
+      SONN             = rep_sonn,
+      Rdata            = Rdata,
+      labels           = labels,
+      lr               = lr,
+      model_iter_num   = NA_integer_,
+      num_epochs       = num_epochs,
+      threshold        = threshold,
+      learn_time       = NA_real_,
+      predicted_output = p_agg,
+      prediction_time  = pred_time_agg,
+      ensemble_number  = ensemble_number,
+      run_id           = paste0(run_id[[1]], "::GROUP"),
+      weights          = rep_w,
+      biases           = rep_b,
+      activation_functions = rep_af,
+      ML_NN            = ML_NN,
+      verbose          = verbose
+    )
+  } else {
+    # 2b) Average per-model metrics (no re-implementation): compute each, then average numerics
+    perfs <- lapply(seq_along(SONN_list), function(i) {
+      calculate_performance(
+        SONN             = SONN_list[[i]],
+        Rdata            = Rdata,
+        labels           = labels,
+        lr               = lr,
+        model_iter_num   = i,
+        num_epochs       = num_epochs,
+        threshold        = threshold,
+        learn_time       = NA_real_,
+        predicted_output = predicted_output_list[[i]],
+        prediction_time  = prediction_time_list[[i]],
+        ensemble_number  = ensemble_number,
+        run_id           = run_id[[i]],
+        weights          = if (is.null(weights_list)) SONN_list[[i]]$weights else weights_list[[i]],
+        biases           = if (is.null(biases_list))  SONN_list[[i]]$biases  else biases_list[[i]],
+        activation_functions = if (is.null(act_list)) SONN_list[[i]]$activation_functions else act_list[[i]],
+        ML_NN            = ML_NN,
+        verbose          = FALSE
+      )
+    })
+    # fold to a single metrics list by averaging numeric leafs
+    keys <- Reduce(union, lapply(perfs, `[[`, "names"))
+    avg_metrics <- lapply(keys, function(k) {
+      vals <- lapply(perfs, function(p) p$metrics[[k]])
+      nums <- suppressWarnings(as.numeric(unlist(vals)))
+      if (all(is.na(nums))) NULL else mean(nums, na.rm = TRUE)
+    })
+    names(avg_metrics) <- keys
+    list(metrics = avg_metrics, names = names(avg_metrics))
+  }
+}
+
+calculate_relevance_grouped <- function(SONN_list, Rdata, labels, predicted_output_list, ensemble_number, run_id, ML_NN, verbose,
+    agg_method = c("mean","median","vote"),
+    metric_mode = c("aggregate_predictions+rep_sonn", "average_per_model")
+) {
+  agg_method <- match.arg(agg_method)
+  metric_mode <- match.arg(metric_mode)
+  p_agg <- aggregate_predictions(predicted_output_list, method = agg_method)
+  
+  if (metric_mode == "aggregate_predictions+rep_sonn") {
+    rep_sonn <- pick_representative_sonn(SONN_list, predicted_output_list, labels)
+    calculate_relevance(
+      SONN             = rep_sonn,
+      Rdata            = Rdata,
+      labels           = labels,
+      model_iter_num   = NA_integer_,
+      predicted_output = p_agg,
+      ensemble_number  = ensemble_number,
+      weights          = rep_sonn$weights,
+      biases           = rep_sonn$biases,
+      activation_functions = rep_sonn$activation_functions,
+      ML_NN            = ML_NN,
+      verbose          = verbose
+    )
+  } else {
+    rels <- lapply(seq_along(SONN_list), function(i) {
+      calculate_relevance(
+        SONN             = SONN_list[[i]],
+        Rdata            = Rdata,
+        labels           = labels,
+        model_iter_num   = i,
+        predicted_output = predicted_output_list[[i]],
+        ensemble_number  = ensemble_number,
+        weights          = SONN_list[[i]]$weights,
+        biases           = SONN_list[[i]]$biases,
+        activation_functions = SONN_list[[i]]$activation_functions,
+        ML_NN            = ML_NN,
+        verbose          = FALSE
+      )
+    })
+    keys <- Reduce(union, lapply(rels, `[[`, "names"))
+    avg_metrics <- lapply(keys, function(k) {
+      vals <- lapply(rels, function(r) r$metrics[[k]])
+      nums <- suppressWarnings(as.numeric(unlist(vals)))
+      if (all(is.na(nums))) NULL else mean(nums, na.rm = TRUE)
+    })
+    names(avg_metrics) <- keys
+    list(metrics = avg_metrics, names = names(avg_metrics))
+  }
+}
+
+
+
+
 
 
 ###prune
