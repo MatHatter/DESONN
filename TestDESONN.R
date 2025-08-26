@@ -104,14 +104,14 @@ loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'Categorical
 
 dropout_rates <- list(0.1) # NULL for output layer
 
+
+threshold_function <- tune_threshold_accuracy
+# threshold <- .98  # Classification threshold (not directly used in Random Forest)
+
 dropout_rates_learn <- dropout_rates
 
 num_layers <- length(hidden_sizes) + 1
 output_size <- 1  # For binary classification
-
-threshold_function <- tune_threshold_accuracy
-threshold <- .98  # Classification threshold (not directly used in Random Forest)
-
 # Load the dataset
 data <- read.csv("C:/Users/wfky1/Downloads/heart_failure_clinical_records.csv")
 
@@ -139,64 +139,64 @@ if(!ML_NN) {
 library(readxl)
 
 # Load file
-Rdata_predictions <- read_excel("Rdata_predictions.xlsx", sheet = "Rdata_Predictions")
+# Rdata_predictions <- read_excel("Rdata_predictions.xlsx", sheet = "Rdata_Predictions")
 
 # Deceptively healthy flag
-Rdata_predictions$deceptively_healthy <- ifelse(
-  Rdata_predictions$serum_creatinine < quantile(Rdata_predictions$serum_creatinine, 0.10, na.rm = TRUE) &
-    Rdata_predictions$age < quantile(Rdata_predictions$age, 0.15, na.rm = TRUE) &
-    Rdata_predictions$creatinine_phosphokinase < quantile(Rdata_predictions$creatinine_phosphokinase, 0.20, na.rm = TRUE),
-  1, 0
-)
+# Rdata_predictions$deceptively_healthy <- ifelse(
+#   Rdata_predictions$serum_creatinine < quantile(Rdata_predictions$serum_creatinine, 0.10, na.rm = TRUE) &
+#     Rdata_predictions$age < quantile(Rdata_predictions$age, 0.15, na.rm = TRUE) &
+#     Rdata_predictions$creatinine_phosphokinase < quantile(Rdata_predictions$creatinine_phosphokinase, 0.20, na.rm = TRUE),
+#   1, 0
+# )
 
 
 
 # Extract vectors
-probs            <- suppressWarnings(as.numeric(Rdata_predictions[[15]][1:800]))
-labels           <- suppressWarnings(as.numeric(Rdata_predictions[[13]][1:800]))
-deceptive_flags  <- suppressWarnings(as.numeric(Rdata_predictions$deceptively_healthy[1:800]))
-risky_flags      <- suppressWarnings(as.numeric(Rdata_predictions$risky[1:800]))  # <- You must have this column!
+# probs            <- suppressWarnings(as.numeric(Rdata_predictions[[15]][1:800]))
+# labels           <- suppressWarnings(as.numeric(Rdata_predictions[[13]][1:800]))
+# deceptive_flags  <- suppressWarnings(as.numeric(Rdata_predictions$deceptively_healthy[1:800]))
+# risky_flags      <- suppressWarnings(as.numeric(Rdata_predictions$risky[1:800]))  # <- You must have this column!
 
 # NA checks
-check_na <- function(vec, name) {
-  if (any(is.na(vec))) {
-    cat(paste0("X NA in '", name, "' at Excel rows:\n"))
-    print(which(is.na(vec)) + 1)
-    stop(paste("Fix NA in", name))
-  }
-}
-check_na(probs, "probs")
-check_na(labels, "labels")
-check_na(deceptive_flags, "deceptive_flags")
-check_na(risky_flags, "risky")
-
-# Error vector
-errors <- abs(probs - labels)
-
-# Base weights
-base_weights <- rep(1, length(labels))
-
-# 👇 Apply rule-based scaling
-# Boost deaths overall
-base_weights[labels == 1] <- base_weights[labels == 1] * 2
-
-# Strong boost for risky deaths
-base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(20) * 4
-
-# Optional: boost deceptive healthy deaths (the hard cases)
-base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 3
-
-
-# Blend with error
-raw_weights <- base_weights * errors
-raw_weights <- pmin(pmax(raw_weights, 0.05), 23)
-
-# Final adaptive weights
-sample_weights <- 0.6 * base_weights + 0.4 * raw_weights
-sample_weights <- sample_weights / mean(sample_weights)
-
-stopifnot(length(sample_weights) == length(labels))
-cat("✅ Sample weights created with 'risky' boost. Mean:", round(mean(sample_weights), 4), "\n")
+# check_na <- function(vec, name) {
+#   if (any(is.na(vec))) {
+#     cat(paste0("X NA in '", name, "' at Excel rows:\n"))
+#     print(which(is.na(vec)) + 1)
+#     stop(paste("Fix NA in", name))
+#   }
+# }
+# check_na(probs, "probs")
+# check_na(labels, "labels")
+# check_na(deceptive_flags, "deceptive_flags")
+# check_na(risky_flags, "risky")
+# 
+# # Error vector
+# errors <- abs(probs - labels)
+# 
+# # Base weights
+# base_weights <- rep(1, length(labels))
+# 
+# # 👇 Apply rule-based scaling
+# # Boost deaths overall
+# base_weights[labels == 1] <- base_weights[labels == 1] * 2
+# 
+# # Strong boost for risky deaths
+# base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(20) * 4
+# 
+# # Optional: boost deceptive healthy deaths (the hard cases)
+# base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 3
+# 
+# 
+# # Blend with error
+# raw_weights <- base_weights * errors
+# raw_weights <- pmin(pmax(raw_weights, 0.05), 23)
+# 
+# # Final adaptive weights
+# sample_weights <- 0.6 * base_weights + 0.4 * raw_weights
+# sample_weights <- sample_weights / mean(sample_weights)
+# 
+# stopifnot(length(sample_weights) == length(labels))
+# cat("✅ Sample weights created with 'risky' boost. Mean:", round(mean(sample_weights), 4), "\n")
 sample_weights <- NULL
 
 # Split the data into features (X) and target (y)
@@ -371,14 +371,14 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-# do_ensemble         <- FALSE
-# num_networks        <- 1L
-# num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+do_ensemble         <- FALSE
+num_networks        <- 1L
+num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
-do_ensemble         <- FALSE
-num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
-num_temp_iterations <- 0L
+# do_ensemble         <- FALSE
+# num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
+# num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
 # do_ensemble         <- TRUE

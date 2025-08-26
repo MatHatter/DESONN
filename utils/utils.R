@@ -346,47 +346,152 @@ print_ensembles_summary <- function(ensembles_container,
 
 
 
-tune_threshold <- function(predicted_output, labels) {
-  thresholds <- seq(0.05, 0.95, by = 0.01)
+tune_threshold_accuracy <- function(predicted_output, labels,
+                                    metric = c("accuracy", "f1", "precision", "recall",
+                                               "macro_f1", "macro_precision", "macro_recall"),
+                                    threshold_grid = seq(0.05, 0.95, by = 0.01),
+                                    verbose = FALSE) {
+  grid <- threshold_grid
+  metric <- match.arg(metric)
   
-  f1_scores <- sapply(thresholds, function(t) {
-    preds <- ifelse(predicted_output >= t, 1, 0)
-    TP <- sum(preds == 1 & labels == 1)
-    FP <- sum(preds == 1 & labels == 0)
-    FN <- sum(preds == 0 & labels == 1)
-    precision <- TP / (TP + FP + 1e-8)
-    recall <- TP / (TP + FN + 1e-8)
-    f1 <- 2 * precision * recall / (precision + recall + 1e-8)
-    return(f1)
-  })
+  # --- Sanitize 'grid' (avoid passing function/env/list/NULL and clamp to (0,1)) ---
+  if (missing(grid) || is.null(grid) || is.function(grid) || is.environment(grid) || is.list(grid)) {
+    grid <- seq(0.05, 0.95, by = 0.01)
+  } else {
+    grid <- tryCatch(as.numeric(unlist(grid, use.names = FALSE)), error = function(e) numeric(0))
+    grid <- grid[is.finite(grid)]
+    grid <- grid[grid > 0 & grid < 1]     # thresholds must be in (0,1)
+    grid <- sort(unique(grid))
+    if (length(grid) == 0L) grid <- seq(0.05, 0.95, by = 0.01)
+  }
   
-  best_threshold <- thresholds[which.max(f1_scores)]
-  binary_preds <- ifelse(predicted_output >= best_threshold, 1, 0)
+  # --- Coerce to numeric matrices and align columns ---
+  P <- as.matrix(predicted_output); storage.mode(P) <- "double"
+  L <- as.matrix(labels);           storage.mode(L) <- "double"
   
+  nL <- ncol(L); nP <- ncol(P); K <- max(nL, nP)
+  if (K < 1L) K <- 1L
+  
+  if (ncol(P) < K) {
+    total_needed <- nrow(L) * K
+    replicated <- rep(as.vector(P), length.out = total_needed)
+    P <- matrix(replicated, nrow = nrow(L), ncol = K, byrow = FALSE)
+  } else if (ncol(P) > K) {
+    P <- P[, 1:K, drop = FALSE]
+  }
+  
+  # =========================
+  # Binary
+  # =========================
+  if (K == 1L) {
+    y_true <- as.numeric(L[, 1])
+    y_true01 <- as.integer(ifelse(y_true > 0, 1L, 0L))
+    
+    best_t <- NA_real_; best_val <- -Inf; best_pred <- NULL
+    for (t in grid) {
+      y_pred <- as.integer(P[, 1] >= t)
+      TP <- sum(y_pred == 1 & y_true01 == 1)
+      FP <- sum(y_pred == 1 & y_true01 == 0)
+      FN <- sum(y_pred == 0 & y_true01 == 1)
+      prec <- TP / (TP + FP + 1e-8)
+      rec  <- TP / (TP + FN + 1e-8)
+      
+      val <- switch(metric,
+                    accuracy  = mean(y_pred == y_true01),
+                    f1        = 2 * prec * rec / (prec + rec + 1e-8),
+                    precision = prec,
+                    recall    = rec
+      )
+      if (val > best_val) { best_val <- val; best_t <- t; best_pred <- y_pred }
+    }
+    tuned_acc <- mean(best_pred == y_true01)
+    if (verbose) cat(sprintf("[Binary] best_t=%.3f | tuned_%s=%.6f\n", best_t, metric, best_val))
+    return(list(
+      thresholds     = best_t,
+      y_pred_class   = best_pred,
+      tuned_score    = as.numeric(best_val),
+      tuned_accuracy = as.numeric(tuned_acc),
+      metric_used    = metric
+    ))
+  }
+  
+  # =========================
+  # Multiclass
+  # =========================
+  if (ncol(L) > 1L) {
+    y_true_ids <- max.col(L, ties.method = "first")
+  } else {
+    cls <- as.integer(L[, 1]); if (min(cls, na.rm = TRUE) == 0L) cls <- cls + 1L
+    cls[cls < 1L] <- 1L; cls[cls > K] <- K
+    y_true_ids <- cls
+  }
+  
+  thr <- numeric(K)
+  for (k in seq_len(K)) {
+    y_true01 <- as.integer(y_true_ids == k)
+    best_tk <- NA_real_; best_valk <- -Inf
+    for (t in grid) {
+      y_pred01 <- as.integer(P[, k] >= t)
+      TP <- sum(y_pred01 == 1 & y_true01 == 1)
+      FP <- sum(y_pred01 == 1 & y_true01 == 0)
+      FN <- sum(y_pred01 == 0 & y_true01 == 1)
+      prec <- TP / (TP + FP + 1e-8)
+      rec  <- TP / (TP + FN + 1e-8)
+      
+      val <- switch(metric,
+                    macro_f1        = 2 * prec * rec / (prec + rec + 1e-8),
+                    macro_precision = prec,
+                    macro_recall    = rec,
+                    accuracy        = mean(y_pred01 == y_true01)
+      )
+      if (val > best_valk) { best_valk <- val; best_tk <- t }
+    }
+    thr[k] <- best_tk
+  }
+  
+  # Apply thresholds with masked argmax + fallback
+  masked <- P
+  for (k in seq_len(K)) masked[, k] <- ifelse(P[, k] >= thr[k], P[, k], -Inf)
+  y_pred_ids <- max.col(masked, ties.method = "first")
+  all_neg_inf <- !is.finite(apply(masked, 1, max))
+  if (any(all_neg_inf)) {
+    y_pred_ids[all_neg_inf] <- max.col(P[all_neg_inf, , drop = FALSE], ties.method = "first")
+  }
+  
+  # Evaluate tuned metrics
+  tuned_acc <- mean(y_pred_ids == y_true_ids)
+  
+  # If optimizing a macro metric, report its value from the confusion matrix
+  tuned_score <- tuned_acc
+  if (metric %in% c("macro_f1", "macro_precision", "macro_recall")) {
+    tab <- table(factor(y_true_ids, levels = 1:K), factor(y_pred_ids, levels = 1:K))
+    TPk <- diag(tab)
+    FPk <- colSums(tab) - TPk
+    FNk <- rowSums(tab) - TPk
+    Prec_k <- ifelse((TPk + FPk) > 0, TPk / (TPk + FPk), 0)
+    Rec_k  <- ifelse((TPk + FNk) > 0, TPk / (TPk + FNk), 0)
+    if (metric == "macro_precision") tuned_score <- mean(Prec_k)
+    if (metric == "macro_recall")    tuned_score <- mean(Rec_k)
+    if (metric == "macro_f1") {
+      F1_k <- ifelse((Prec_k + Rec_k) > 0, 2 * Prec_k * Rec_k / (Prec_k + Rec_k), 0)
+      tuned_score <- mean(F1_k)
+    }
+  }
+  
+  if (verbose) {
+    cat(sprintf("[Multiclass] tuned_acc=%.6f | metric=%s\n", tuned_acc, metric))
+    cat(" thresholds: ", paste0(sprintf("%.3f", thr), collapse = ", "), "\n")
+  }
   return(list(
-    best_threshold = best_threshold,
-    binary_preds = binary_preds,
-    f1_scores = f1_scores
+    thresholds     = thr,
+    y_pred_class   = y_pred_ids,
+    tuned_score    = as.numeric(tuned_score),
+    tuned_accuracy = as.numeric(tuned_acc),
+    metric_used    = metric
   ))
 }
 
-tune_threshold_accuracy <- function(predicted_output, labels) {
-  thresholds <- seq(0.05, 0.95, by = 0.01)
-  
-  accuracies <- sapply(thresholds, function(t) {
-    preds <- ifelse(predicted_output >= t, 1, 0)
-    sum(preds == labels) / length(labels)
-  })
-  
-  best_threshold <- thresholds[which.max(accuracies)]
-  binary_preds <- ifelse(predicted_output >= best_threshold, 1, 0)
-  
-  return(list(
-    best_threshold = best_threshold,
-    binary_preds = binary_preds,
-    accuracy_scores = accuracies
-  ))
-}
+
 
 
 evaluate_classification_metrics <- function(preds, labels) {
