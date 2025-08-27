@@ -3590,7 +3590,7 @@ DESONN <- R6Class(
               Rdata = X_validation
               labels = y_validation
             }
-              
+
             
             performance_list[[i]] <- calculate_performance(
               SONN = self$ensemble[[i]],
@@ -3612,8 +3612,6 @@ DESONN <- R6Class(
               verbose = verbose
             )
             
-            
-            
             relevance_list[[i]] <- calculate_relevance(
               self$ensemble[[i]],
               Rdata = Rdata, 
@@ -3628,13 +3626,15 @@ DESONN <- R6Class(
               verbose = verbose
             )
             
-            
             performance_metric <- performance_list[[i]]$metrics
             relevance_metric <- relevance_list[[i]]$metrics
             
+            if (ensemble_number < 1 && length(self$ensemble) >= 1 || (verbose && (ensemble_number < 1 && length(self$ensemble) >= 1))){
             cat(">> METRICS FOR ENSEMBLE:", ensemble_number, "MODEL:", i, "\n")
             print(performance_metric)
             print(relevance_metric)
+            
+            }
             
           }
         
@@ -3895,7 +3895,8 @@ DESONN <- R6Class(
           metric_mode           = "aggregate_predictions+rep_sonn"
         )
       
-      
+        perf_df <<- perf_df
+        relev_df <<- relev_df
       # ---------- Printing policy ----------
       # Tables (DF heads) print if EITHER verbose OR viewTables
       if (isTRUE(verbose) || isTRUE(viewTables)) {
@@ -5101,9 +5102,9 @@ quantization_error <- function(SONN, Rdata, run_id, verbose) {
   
   mean_distance <- mean(distances, na.rm = TRUE)
   
-  if (isTRUE(verbose)) {
-    cat("[quantization error]: ", format(mean_distance, digits = 7), "\n", sep = "")
-  }
+  # if (isTRUE(verbose)) {
+  #   cat("[quantization error]: ", format(mean_distance, digits = 7), "\n", sep = "")
+  # }
   return(mean_distance)
 }
 
@@ -5157,7 +5158,7 @@ topographic_error <- function(SONN, Rdata, threshold, verbose = FALSE) {
   
   dgrid <- sqrt(rowSums((coords[bmu, , drop = FALSE] - coords[sbmu, , drop = FALSE])^2))
   err <- mean(dgrid > 1)
-  if (isTRUE(verbose)) { print("topographic error"); print(err) }
+  # if (isTRUE(verbose)) { print("topographic error"); print(err) }
   err
 }
 
@@ -5227,9 +5228,9 @@ clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose = FA
   
   db_index <- db_index / n_clusters
   
-  if (verbose) {
-    cat("clustering_quality_db:", db_index, "\n")
-  }
+  # if (verbose) {
+  #   cat("clustering_quality_db:", db_index, "\n")
+  # }
   
   return(db_index)
 }
@@ -5266,15 +5267,15 @@ MSE <- function(SONN, Rdata, labels, predicted_output, verbose) {
   
   # Calculate the classification accuracy on the  Rdata
   accuracy <- mean((error_prediction)^2)
-  if (verbose) {
-    print("MSE")
-    print(accuracy)
-  }
+  # if (verbose) {
+  #   print("MSE")
+  #   print(accuracy)
+  # }
   # Return the accuracy
   return(accuracy)
-  if (verbose) {
-    print("MSE complete")
-  }
+  # if (verbose) {
+  #   print("MSE complete")
+  # }
   
 }
 
@@ -5286,38 +5287,38 @@ generalization_ability <- function(SONN, Rdata, verbose) {
   train_Rdata <- Rdata[train_idx, ]
   test_Rdata <- Rdata[-train_idx, ]
   
-  if (verbose) {
-    print("generalization_ability")
-  }
-  if (verbose) {
-    print("generalization_ability complete")
-  }
+  # if (verbose) {
+  #   print("generalization_ability")
+  # }
+  # if (verbose) {
+  #   print("generalization_ability complete")
+  # }
 }
 
 # Speed
 speed_learn <- function(SONN, learn_time, verbose) {
   
-  if (verbose) {
-    print("speed")
-    print(learn_time)
-  }
+  # if (verbose) {
+  #   print("speed")
+  #   print(learn_time)
+  # }
   return(learn_time)
-  if (verbose) {
-    print("speed complete")
-  }
+  # if (verbose) {
+  #   print("speed complete")
+  # }
 }
 
 # Speed
 speed <- function(SONN, prediction_time, verbose) {
   
-  if (verbose) {
-    print("speed")
-    print(prediction_time)
-  }
+  # if (verbose) {
+  #   print("speed")
+  #   print(prediction_time)
+  # }
   return(prediction_time)
-  if (verbose) {
-    print("speed complete")
-  }
+  # if (verbose) {
+  #   print("speed complete")
+  # }
 }
 
 # Memory usage
@@ -5328,15 +5329,15 @@ memory_usage <- function(SONN, Rdata, verbose) {
   
   # Calculate the memory usage of the Rdata
   Rdata_size <- object.size(Rdata)
-  if (verbose) {
-    print("memory")
-    print(object_size + Rdata_size)
-  }
+  # if (verbose) {
+  #   print("memory")
+  #   print(object_size + Rdata_size)
+  # }
   # Return the total memory usage without the word "bytes"
   return(as.numeric(gsub("bytes", "", object_size + Rdata_size)))
-  if (verbose) {
-    print("memory complete")
-  }
+  # if (verbose) {
+  #   print("memory complete")
+  # }
 }
 
 # Robustness
@@ -5442,15 +5443,15 @@ robustness <- function(SONN, Rdata, labels, lr, num_epochs, model_iter_num, pred
   #
   #
   # }
-  if (verbose) {
-    print("robustness")
-    print(accuracy)
-  }
+  # if (verbose) {
+  #   print("robustness")
+  #   print(accuracy)
+  # }
   # Return the accuracy on the noisy Rdata
   return(accuracy)
-  if (verbose) {
-    print("robustness complete")
-  }
+  # if (verbose) {
+  #   print("robustness complete")
+  # }
   
 }
 
@@ -5466,15 +5467,15 @@ hit_rate <- function(SONN, Rdata, predicted_output, labels, verbose) {
   
   # Calculate the hit rate
   hit_rate <- sum(predicted_output %in% relevant_Rdata$id) / nrow(relevant_Rdata)
-  if (verbose) {
-    print("hit_rate")
-    print(hit_rate)
-  }
+  # if (verbose) {
+  #   print("hit_rate")
+  #   print(hit_rate)
+  # }
   # Return the hit rate
   return(hit_rate)
-  if (verbose) {
-    print("hit_rate complete")
-  }
+  # if (verbose) {
+  #   print("hit_rate complete")
+  # }
 }
 
 # -------------------------
@@ -5535,9 +5536,9 @@ accuracy <- function(SONN, Rdata, labels, predicted_output, verbose) {
     acc <- mean(y_pred == y_true_class)
   }
   
-  if (verbose) { print("Accuracy"); print(acc) }
+  # if (verbose) { print("Accuracy"); print(acc) }
   return(as.numeric(acc))
-  if (verbose) { print("Accuracy complete") }
+  # if (verbose) { print("Accuracy complete") }
 }
 
 # -------------------------
@@ -5604,9 +5605,9 @@ precision <- function(SONN, Rdata, labels, predicted_output, verbose) {
     prec <- if ((tp + fp) == 0L) 0 else tp / (tp + fp)
   }
   
-  if (verbose) { print("Precision"); print(prec) }
+  # if (verbose) { print("Precision"); print(prec) }
   return(as.numeric(prec))
-  if (verbose) { print("Precision complete") }
+  # if (verbose) { print("Precision complete") }
 }
 
 # -------------------------
@@ -5673,9 +5674,9 @@ recall <- function(SONN, Rdata, labels, predicted_output, verbose) {
     rec <- if ((tp + fn) == 0L) 0 else tp / (tp + fn)
   }
   
-  if (verbose) { print("Recall"); print(rec) }
+  # if (verbose) { print("Recall"); print(rec) }
   return(as.numeric(rec))
-  if (verbose) { print("Recall complete") }
+  # if (verbose) { print("Recall complete") }
 }
 
 # -------------------------
@@ -5749,9 +5750,9 @@ f1_score <- function(SONN, Rdata, labels, predicted_output, verbose) {
     f1 <- if ((p + r) == 0) 0 else 2 * p * r / (p + r)
   }
   
-  if (verbose) { print("F1 Score"); print(f1) }
+  # if (verbose) { print("F1 Score"); print(f1) }
   return(as.numeric(f1))
-  if (verbose) { print("F1 Score complete") }
+  # if (verbose) { print("F1 Score complete") }
 }
 
 accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
@@ -5789,15 +5790,15 @@ accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
   )
   best_thresholds <- thr_res$thresholds  # len 1 (binary) or len K (multiclass)
   
-  if (verbose) {
-    if (length(best_thresholds) == 1L) {
-      message(sprintf("Best threshold (%s-optimized): %.3f",
-                      metric_for_tuning, as.numeric(best_thresholds)))
-    } else {
-      message(sprintf("Best per-class thresholds (%s-optimized): %s",
-                      metric_for_tuning, paste0(sprintf("%.3f", best_thresholds), collapse = ", ")))
-    }
-  }
+  # if (verbose) {
+  #   if (length(best_thresholds) == 1L) {
+  #     message(sprintf("Best threshold (%s-optimized): %.3f",
+  #                     metric_for_tuning, as.numeric(best_thresholds)))
+  #   } else {
+  #     message(sprintf("Best per-class thresholds (%s-optimized): %s",
+  #                     metric_for_tuning, paste0(sprintf("%.3f", best_thresholds), collapse = ", ")))
+  #   }
+  # }
   
   # --- Build predictions in the format your accuracy() expects ---
   if (K == 1L) {
@@ -5813,10 +5814,10 @@ accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
                          verbose = FALSE)
     acc_percent <- acc_prop * 100
     
-    if (verbose) {
-      message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
-      message(sprintf("Accuracy (binary @ tuned threshold): %.6f (%.3f%%)", acc_prop, acc_percent))
-    }
+    # if (verbose) {
+    #   message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
+    #   message(sprintf("Accuracy (binary @ tuned threshold): %.6f (%.3f%%)", acc_prop, acc_percent))
+    # }
     
     # Optional: precision/recall/F1 (only if you have this helper)
     metrics <- tryCatch(
@@ -5850,9 +5851,9 @@ accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
                          verbose = FALSE)
     acc_percent <- acc_prop * 100
     
-    if (verbose) {
-      message(sprintf("Accuracy (multiclass @ tuned thresholds): %.6f (%.3f%%)", acc_prop, acc_percent))
-    }
+    # if (verbose) {
+    #   message(sprintf("Accuracy (multiclass @ tuned thresholds): %.6f (%.3f%%)", acc_prop, acc_percent))
+    # }
     
     return(list(
       accuracy          = as.numeric(acc_prop),
@@ -5896,15 +5897,15 @@ MAE <- function(SONN, Rdata, labels, predicted_output, verbose) {
   # Calculate the classification accuracy on the noisy Rdata
   accuracy <- mean(abs(error_prediction))
   
-  if (verbose) {
-    print("MAE")
-    print(accuracy)
-  }
+  # if (verbose) {
+  #   print("MAE")
+  #   print(accuracy)
+  # }
   # Return the accuracy
   return(accuracy)
-  if (verbose) {
-    print("MAE complete")
-  }
+  # if (verbose) {
+  #   print("MAE complete")
+  # }
 }
 
 # NDCG (Normalized Discounted Cumulative Gain)
@@ -5936,10 +5937,10 @@ ndcg <- function(SONN, Rdata, predicted_output, labels, verbose) {
   # Avoid division by zero
   ndcg_value <- if (idcg == 0) 0 else dcg / idcg
   
-  if (exists("verbose") && verbose) {
-    print("ndcg")
-    print(ndcg_value)
-  }
+  # if (exists("verbose") && verbose) {
+  #   print("ndcg")
+  #   print(ndcg_value)
+  # }
   
   return(ndcg_value)
 }
@@ -5991,10 +5992,10 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, predicted_output, 
     mean_precisions[] <- 0
   }
   
-  if (isTRUE(verbose)) {
-    print("mean_precisions")
-    print(mean_precisions)
-  }
+  # if (isTRUE(verbose)) {
+  #   print("mean_precisions")
+  #   print(mean_precisions)
+  # }
   
   # IMPORTANT: return a named LIST of scalars (not a vector) so your flattener can unlist into columns
   names(mean_precisions) <- bin_names
@@ -6022,10 +6023,10 @@ diversity <- function(SONN, Rdata, predicted_output, verbose) {
     warning("Entropy calculation returned Inf or NaN. Setting to NA.")
   }
   
-  if (verbose) {
-    cat("Diversity (entropy):\n")
-    print(entropy)
-  }
+  # if (verbose) {
+  #   cat("Diversity (entropy):\n")
+  #   print(entropy)
+  # }
   
   return(entropy)
 }
@@ -6043,14 +6044,14 @@ RMSE <- function(SONN, Rdata, labels, predicted_output, verbose) {
   # Calculate the RMSE
   rmse <- sqrt(mean_squared_error)
   
-  if (verbose) {
-    print("RMSE")
-    print(rmse)
-  }
+  # if (verbose) {
+  #   print("RMSE")
+  #   print(rmse)
+  # }
   return(rmse)
-  if (verbose) {
-    print("RMSE complete")
-  }
+  # if (verbose) {
+  #   print("RMSE complete")
+  # }
 }
 
 # Serendipity
@@ -6063,13 +6064,13 @@ serendipity <- function(SONN, Rdata, predicted_output, verbose) {
   
   # Calculate the inverse of the prediction counts
   inverse_prediction_counts <- 1 / prediction_counts
-  if (verbose) {
-    print("serendipity")
-    print(mean(inverse_prediction_counts, na.rm = TRUE))
-  }
+  # if (verbose) {
+  #   print("serendipity")
+  #   print(mean(inverse_prediction_counts, na.rm = TRUE))
+  # }
   # Return the average inverse prediction count
   return(mean(inverse_prediction_counts, na.rm = TRUE))
-  if (verbose) {
-    print("serendipity complete")
-  }
+  # if (verbose) {
+  #   print("serendipity complete")
+  # }
 }

@@ -83,7 +83,7 @@ beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slig1htly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
-num_epochs <- 117
+num_epochs <- 3
 validation_metrics <- TRUE
 custom_scale <- .05
 
@@ -371,18 +371,18 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-do_ensemble         <- FALSE
-num_networks        <- 1L
-num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+# do_ensemble         <- FALSE
+# num_networks        <- 1L
+# num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
-# do_ensemble         <- FALSE
-# num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
-# num_temp_iterations <- 0L
+do_ensemble         <- FALSE
+num_networks        <- 3L          # e.g., run 5 models in one DESONN instance
+num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
 # do_ensemble         <- TRUE
-# num_networks        <- 1L          # example main size
+# num_networks        <- 3L          # example main size
 # num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
