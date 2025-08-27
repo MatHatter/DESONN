@@ -84,7 +84,7 @@ beta2 <- 0.8 # Slig1htly lower for better adaptabilit
 lr <- .121
 lambda <- 0.0003
 num_epochs <- 117
-
+validation_metrics <- TRUE
 custom_scale <- .05
 
 ML_NN <- TRUE
@@ -664,7 +664,7 @@ if (!train) {
       batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
       epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
       shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
-      X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
+      X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
       train=train, viewTables=viewTables, verbose=verbose
     ))
     
@@ -1024,7 +1024,7 @@ if (!train) {
         batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
         epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
         shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
-        X_validation=X_validation, y_validation=y_validation, threshold_function=threshold_function, ML_NN=ML_NN,
+        X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
         train=train, viewTables=viewTables, verbose=verbose
       ))
       ensembles$main_ensemble[[1]] <- main_model

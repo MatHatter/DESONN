@@ -2774,7 +2774,7 @@ SONN <- R6Class(
       
       
       # Return the predicted output
-      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, training_time = training_time, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
+      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, training_time = training_time, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
     },
     # # Method to calculate performance and relevance
     # calculate_metrics = function(Rdata) {
@@ -3074,7 +3074,7 @@ DESONN <- R6Class(
     }
     ,
     
-    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, viewTables, verbose) {
+    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3208,8 +3208,10 @@ DESONN <- R6Class(
             
             all_model_iter_num[[i]] <- model_iter_num
             
+            
+            
             all_predicted_outputAndTime[[i]] <- list(
-              predicted_output = predicted_outputAndTime$predicted_output_l2$learn_output,
+              predicted_output = if (validation_metrics) predicted_outputAndTime$predicted_output_val$predicted_output else predicted_outputAndTime$predicted_output_l2$learn_output,
               prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
               training_time = predicted_outputAndTime$training_time,
               optimal_epoch = predicted_outputAndTime$optimal_epoch,
@@ -3226,7 +3228,7 @@ DESONN <- R6Class(
             # Continue if predictions are available
             if (!is.null(predicted_outputAndTime$predicted_output_l2$learn_output)) {
               
-              all_predicted_outputs[[i]]       <- predicted_outputAndTime$predicted_output_l2$learn_output
+              all_predicted_outputs[[i]]       <-  if (validation_metrics) predicted_outputAndTime$predicted_output_val$predicted_output else predicted_outputAndTime$predicted_output_l2$learn_output
               all_prediction_times[[i]]        <- predicted_outputAndTime$train_reg_prediction_time
               all_errors[[i]]                  <- predicted_outputAndTime$predicted_output_l2$error
               all_hidden_outputs[[i]]          <- predicted_outputAndTime$predicted_output_l2$hidden_outputs
@@ -3266,7 +3268,7 @@ DESONN <- R6Class(
             }
             
             
-            
+            #look into later. must take in Rdata and labels too because we can compare metrics later
             
             # === Evaluate Prediction Diagnostics ===
             if (!is.null(X_validation) && !is.null(y_validation)) {
@@ -3383,10 +3385,13 @@ DESONN <- R6Class(
         }
         
         # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
-        
+
         performance_relevance_plots <- self$update_performance_and_relevance(
           Rdata                        = Rdata,
           labels                       = labels,
+          X_validation                 = X_validation,
+          y_validation                 = y_validation,
+          validation_metrics           = validation_metrics,
           lr                           = lr,
           ensemble_number              = ensemble_number,
           model_iter_num               = model_iter_num,
@@ -3548,7 +3553,7 @@ DESONN <- R6Class(
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
+    update_performance_and_relevance = function(Rdata, labels, X_validation, y_validation, validation_metrics, lr, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
       
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -3580,6 +3585,12 @@ DESONN <- R6Class(
             
             single_prediction_time <- prediction_time_list[[i]]
             
+            #brought X_validation and y_validation as close as possible to metrics without "doubling-up" vars per se
+            if (validation_metrics){
+              Rdata = X_validation
+              labels = y_validation
+            }
+              
             
             performance_list[[i]] <- calculate_performance(
               SONN = self$ensemble[[i]],
@@ -3605,8 +3616,11 @@ DESONN <- R6Class(
             
             relevance_list[[i]] <- calculate_relevance(
               self$ensemble[[i]],
-              Rdata, labels, i,
-              single_predicted_output, ensemble_number,
+              Rdata = Rdata, 
+              labels = labels, 
+              model_iter_num = i,
+              predicted_output = single_predicted_output, 
+              ensemble_number = ensemble_number,
               weights = self$ensemble[[i]]$weights,
               biases = self$ensemble[[i]]$biases,
               activation_functions = self$ensemble[[i]]$activation_functions,
@@ -3636,7 +3650,7 @@ DESONN <- R6Class(
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
+          self$store_metadata(run_id = single_ensemble_name_model_name, ensemble_number, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
           
         }
       }
@@ -4064,7 +4078,7 @@ DESONN <- R6Class(
       return(low_mean_plots)
     }
     ,
-store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
+store_metadata = function(run_id, ensemble_number, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
       
       # --- Conform predicted_output shape to match actual_values ---
@@ -4084,9 +4098,9 @@ store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, t
       } else {
         predicted_output_matrix <- predicted_output
       }
-      
+  
       # --- Calculate error and summary statistics ---
-      error_prediction <- actual_values - predicted_output_matrix
+      error_prediction <- (if (validation_metrics) y_validation else actual_values) - predicted_output_matrix
       differences     <- error_prediction
       summary_stats   <- summary(differences)
       boxplot_stats   <- boxplot.stats(differences)
@@ -4163,7 +4177,8 @@ store_metadata = function(run_id, ensemble_number, model_iter_num, num_epochs, t
         
         # NEW: filename artifacts
         fname_artifact_names = artifact_names,  # e.g., "SONN_2_training_accuracy_loss_plot.png"
-        fname_artifact_paths = artifact_paths   # e.g., "plots/SONN_2_training_accuracy_loss_plot.png"
+        fname_artifact_paths = artifact_paths,   # e.g., "plots/SONN_2_training_accuracy_loss_plot.png"
+        validation_metrics = validation_metrics
       )
       
       metadata_main_ensemble <- list()
@@ -4732,16 +4747,6 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
   return(updated_params_list)
 }
 
-
-
-
-
-
-
-
-
-
-
 clip_gradient_norm <- function(gradient, min_norm = 1e-3, max_norm = 5) {
   if (any(is.na(gradient)) || all(gradient == 0)) return(gradient)
   
@@ -4758,25 +4763,10 @@ clip_gradient_norm <- function(gradient, min_norm = 1e-3, max_norm = 5) {
   return(gradient)
 }
 
-
-
-
-
-
-
-
-
-
-
-
 lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-6) {
   decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
   return(max(min_lr, decayed_lr))
 }
-
-
-
-
 
 calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, learn_time, predicted_output, prediction_time, ensemble_number, run_id, weights, biases, activation_functions, ML_NN, verbose) {
   
@@ -4802,8 +4792,7 @@ calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_e
   cat("Length of SONN$weights: ", length(SONN$weights), "\n")
   cat("Length of SONN$map: ", if (is.null(SONN$map)) "NULL" else length(SONN$map), "\n")
   
-  
-  
+
   # --- Metrics (all take SONN) ---
   perf_metrics <- list(
     quantization_error            = quantization_error(SONN, Rdata, run_id, verbose),
