@@ -645,7 +645,77 @@ summarize_grouped <- function(long_df) {
   data.frame(Metric = rownames(stats_mat), stats_mat, row.names = NULL, check.names = FALSE)
 }
 
+##helpers for performance and relevance metric fun.
 
+# Sanitize a numeric threshold grid
+sanitize_grid <- function(grid, default = seq(0.05, 0.95, by = 0.01)) {
+  if (missing(grid) || is.null(grid) || is.function(grid) || is.environment(grid) || is.list(grid)) {
+    return(default)
+  }
+  g <- suppressWarnings(as.numeric(grid))
+  g <- unique(g[is.finite(g)])
+  if (!length(g)) default else sort(g)
+}
+
+# Collapse label matrix to a 0/1 vector when possible
+# - 1 col: >0 -> 1 else 0
+# - 2 col: argmax -> {0,1}
+# - >=3 col: return NULL (treat as multiclass upstream)
+labels_to_binary_vec <- function(L) {
+  if (is.null(ncol(L)) || ncol(L) == 1L) {
+    return(ifelse(as.vector(L) > 0, 1L, 0L))
+  }
+  if (ncol(L) == 2L) {
+    return(max.col(L, ties.method = "first") - 1L)  # 0/1
+  }
+  NULL
+}
+
+# Extract a single positive-class probability vector from predictions
+# - 1 col: treat as P(pos)
+# - 2 col: use column 2 as P(pos) (common {neg,pos})
+# - >=3 col: return NULL (multiclass)
+preds_to_pos_prob <- function(P) {
+  if (is.null(ncol(P)) || ncol(P) == 1L) {
+    p <- as.vector(P)
+  } else if (ncol(P) == 2L) {
+    p <- as.vector(P[, 2, drop = TRUE])
+  } else {
+    return(NULL)
+  }
+  p[!is.finite(p)] <- 0
+  p <- pmin(pmax(p, 0), 1)
+  p
+}
+
+# Decide if the task is binary based on labels (preferred) or predictions
+infer_is_binary <- function(L, P) {
+  Lb <- labels_to_binary_vec(L)
+  if (!is.null(Lb)) {
+    uniqL <- unique(na.omit(Lb))
+    return(list(is_binary = length(uniqL) <= 2 && all(uniqL %in% c(0,1)), Lb = Lb))
+  }
+  # If labels inconclusive (>=3 cols), use predictions shape as hint
+  list(is_binary = (!is.null(P) && ncol(P) <= 2L), Lb = NULL)
+}
+
+# Build one-hot matrix (N x K) from class ids (1..K)
+one_hot_from_ids <- function(ids, K, N = NULL) {
+  if (is.null(N)) N <- length(ids)
+  M <- matrix(0, nrow = N, ncol = K)
+  ok <- ids >= 1 & ids <= K & is.finite(ids)
+  if (any(ok)) M[cbind(seq_len(N)[ok], ids[ok])] <- 1L
+  M
+}
+
+# Safe call to a user-provided metrics helper (optional)
+safe_eval_metrics <- function(y_pred_class, y_true01, verbose = FALSE) {
+  out <- NULL
+  try({
+    out <- evaluate_classification_metrics(y_pred_class, y_true01)
+  }, silent = !verbose)
+  out
+}
 
 
 

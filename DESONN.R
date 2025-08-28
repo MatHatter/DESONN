@@ -1151,9 +1151,9 @@ SONN <- R6Class(
           
           
           
-          lr <- lr_scheduler(epoch)
-          
-          cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
+          lr_sched <- lr_scheduler(epoch)
+
+          cat("Epoch:", epoch, "| Learning Rate:", lr_sched, "| Decay Rate:", lr_decay_rate, "| Decay Epoch:", lr_decay_epoch, "| Minimal lr:", lr_min, "\n")
           
 
           
@@ -1201,12 +1201,17 @@ SONN <- R6Class(
           train_loss     <- mean((predicted_output - labels)^2, na.rm = TRUE)
           train_loss_log <- c(train_loss_log, train_loss)
           
+
+
+          
+
+          
           # Build the naming closure via utils::make_fname_prefix (NULL-safe)
           fname <- make_fname_prefix(
             do_ensemble     = isTRUE(get0("do_ensemble", ifnotfound = FALSE)),
             num_networks    = get0("num_networks", ifnotfound = NULL),
             total_models    = if (!is.null(self$ensemble)) length(self$ensemble) else get0("num_networks", ifnotfound = NULL),
-            ensemble_number = if (exists("self", inherits = TRUE)) self$ensemble_number else get0("ensemble_number", ifnotfound = NULL),
+            ensemble_number = get0("ensemble_number", ifnotfound = NULL),
             model_index     = get0("model_iter_num", ifnotfound = NULL),
             who             = "SONN"
           )
@@ -1221,7 +1226,7 @@ SONN <- R6Class(
           # title
           plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) {
             sprintf("DESONN%s SONN%s | lr: %s | lambda: %s",
-                    if (!is.null(self$ensemble_number)) paste0(" ", self$ensemble_number) else "",
+                    if (!is.null(ensemble_number)) paste0(" ", ensemble_number) else "",
                     if (exists("model_iter_num", inherits = TRUE)) paste0(" ", model_iter_num) else "",
                     lr, lambda)
           } else {
@@ -1251,7 +1256,7 @@ SONN <- R6Class(
                 labs(title = paste(plot_title_prefix, "— Training Accuracy (blue) & Loss (red)"),
                      y = "Value") +
                 theme_minimal() +
-                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11))
               out <- file.path("plots", fname("training_accuracy_loss_plot.png"))
               message("📸 save: ", out)
               ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
@@ -1267,7 +1272,7 @@ SONN <- R6Class(
                 labs(title = paste(plot_title_prefix, "— Output Mean & Std Dev"),
                      y = "Output Value") +
                 theme_minimal() +
-                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11))
               out <- file.path("plots", fname("output_saturation_plot.png"))
               message("📸 save: ", out)
               ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
@@ -2007,16 +2012,46 @@ SONN <- R6Class(
           }
           
           # =========================
-          # BLOCK B — Weights (Max Weight + Plot)
-          #   Place THIS BLOCK UNDER your final weight-update in the epoch.
-          #   (assumes `fname` was already built at top of epoch loop)
+          # BLOCK B — Weights (Max Weight + Plot)  — SLNN + MLNN SAFE
+          # Place under your final weight update in the epoch.
           # =========================
           
-          # post-update max|W| and log
+          # helper: normalize weights to a list of numeric matrices
+          .as_matrix_list <- function(wobj) {
+            if (is.null(wobj)) return(list())
+            if (is.matrix(wobj)) return(list(wobj))
+            if (is.list(wobj)) {
+              # allow structures like list(W1, W2) or list(weights=..., biases=...)
+              mats <- c(
+                Filter(is.matrix, wobj),
+                if (!is.null(wobj$weights) && is.matrix(wobj$weights)) list(wobj$weights) else list()
+              )
+              return(mats)
+            }
+            list()
+          }
+          
+          # pull from primary; fallbacks for SLNNs that keep snapshots
+          mats <- .as_matrix_list(self$weights)
+          if (!length(mats) && exists("weights_record", inherits = TRUE))
+            mats <- .as_matrix_list(get("weights_record", inherits = TRUE)[[1]])
+          if (!length(mats) && exists("all_weights", inherits = TRUE))
+            mats <- .as_matrix_list(get("all_weights", inherits = TRUE)[[length(all_weights)]])
+          
+          # compute max |W| over all layers we can find
           max_weight <- tryCatch({
-            stopifnot(is.list(self$weights), length(self$weights) >= 1)
-            max(unlist(lapply(self$weights, function(W) max(abs(as.numeric(W)), na.rm = TRUE))), na.rm = TRUE)
-          }, error = function(e) NA_real_)
+            if (!length(mats)) stop("no weight matrices found")
+            vals <- unlist(lapply(mats, function(M) as.numeric(M)), use.names = FALSE)
+            vals <- vals[is.finite(vals)]
+            if (!length(vals)) stop("no finite weights")
+            max(abs(vals))
+          }, error = function(e) {
+            message("⚠ max_weight compute issue: ", e$message)
+            NA_real_
+          })
+          
+          # init the log if needed, then append
+          if (!exists("max_weight_log", inherits = TRUE)) max_weight_log <- numeric(0)
           max_weight_log <- c(max_weight_log, max_weight)
           
           # DF for MaxWeight only
@@ -2025,7 +2060,7 @@ SONN <- R6Class(
             MaxWeight = max_weight_log
           )
           
-          # ensure output dir + title
+          # ensure output dir + title (re-use Block A’s title if present)
           if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
           if (!exists("plot_title_prefix", inherits = TRUE)) {
             plot_title_prefix <- if (isTRUE(get0("do_ensemble", ifnotfound = FALSE))) {
@@ -2048,12 +2083,13 @@ SONN <- R6Class(
                 labs(title = paste(plot_title_prefix, "— Max Weight Magnitude Over Time"),
                      y = "Max |Weight|") +
                 theme_minimal() +
-                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
+                theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 11))
               out <- file.path("plots", fname("max_weight_plot.png"))
               message("📸 save: ", out)
               ggsave(filename = out, plot = p, width = 6, height = 4, dpi = 300, device = "png")
             }, error = function(e) message("❌ max_weight_plot: ", e$message))
           }
+          
           
           
           
@@ -3074,7 +3110,7 @@ DESONN <- R6Class(
     }
     ,
     
-    train = function(Rdata, labels, lr, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
+    train = function(Rdata, labels, lr, lr_decay_rate, lr_decay_epoch, lr_min, ensemble_number, num_epochs, threshold, reg_type, numeric_columns, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3895,8 +3931,8 @@ DESONN <- R6Class(
           metric_mode           = "aggregate_predictions+rep_sonn"
         )
       
-        perf_df <<- perf_df
-        relev_df <<- relev_df
+        perf_df_global <<- perf_df
+        relev_df_global <<- relev_df
       # ---------- Printing policy ----------
       # Tables (DF heads) print if EITHER verbose OR viewTables
       if (isTRUE(verbose) || isTRUE(viewTables)) {
@@ -4764,9 +4800,9 @@ clip_gradient_norm <- function(gradient, min_norm = 1e-3, max_norm = 5) {
   return(gradient)
 }
 
-lr_scheduler <- function(epoch, initial_lr = lr, decay_rate = 0.5, decay_epoch = 20, min_lr = 1e-6) {
-  decayed_lr <- initial_lr * decay_rate ^ floor(epoch / decay_epoch)
-  return(max(min_lr, decayed_lr))
+lr_scheduler <- function(epoch, initial_lr = lr, lr_decay_rate = 0.5, lr_decay_epoch = 20, lr_min = 1e-6) {
+  decayed_lr <- initial_lr * lr_decay_rate ^ floor(epoch / lr_decay_epoch)
+  return(max(lr_min, decayed_lr))
 }
 
 calculate_performance <- function(SONN, Rdata, labels, lr, model_iter_num, num_epochs, threshold, learn_time, predicted_output, prediction_time, ensemble_number, run_id, weights, biases, activation_functions, ML_NN, verbose) {
@@ -5755,32 +5791,79 @@ f1_score <- function(SONN, Rdata, labels, predicted_output, verbose) {
   # if (verbose) { print("F1 Score complete") }
 }
 
-accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
-                           metric_for_tuning = c("accuracy", "f1", "precision", "recall",
-                                                 "macro_f1", "macro_precision", "macro_recall"),
-                           threshold_grid = seq(0.05, 0.95, by = 0.01),
-                           verbose = FALSE) {
-  grid <- threshold_grid
+
+accuracy_tuned <- function(
+    SONN, Rdata, labels, predicted_output,
+    metric_for_tuning = c("accuracy", "f1", "precision", "recall", "macro_f1", "macro_precision", "macro_recall"),
+    threshold_grid = seq(0.05, 0.95, by = 0.01),
+    verbose = FALSE
+) {
   metric_for_tuning <- match.arg(metric_for_tuning)
+  grid <- sanitize_grid(threshold_grid)
   
-  # --- Sanitize 'grid' (avoid NULL, package env 'grid', lists, NAs, unsorted) ---
-  if (missing(grid) || is.null(grid) || is.function(grid) ||
-      is.environment(grid) || is.list(grid)) {
-    grid <- seq(0.05, 0.95, by = 0.01)
-  } else {
-    grid <- suppressWarnings(as.numeric(grid))
-    grid <- unique(grid[is.finite(grid)])
-    if (!length(grid)) grid <- seq(0.05, 0.95, by = 0.01)
+  # Coerce to numeric matrices
+  L <- as.matrix(labels);           storage.mode(L) <- "double"
+  P <- as.matrix(predicted_output); storage.mode(P) <- "double"
+  
+  # Decide binary vs multiclass
+  bin_info <- infer_is_binary(L, P)
+  is_binary <- isTRUE(bin_info$is_binary)
+  
+  if (is_binary) {
+    # Labels: 0/1 vector -> Nx1 matrix
+    Lb <- if (!is.null(bin_info$Lb)) bin_info$Lb else labels_to_binary_vec(L)
+    if (is.null(Lb)) stop("Binary inferred, but labels cannot be coerced to {0,1}.")
+    L_for_acc <- matrix(Lb, ncol = 1L)
+    
+    # Predictions: positive-class probability vector
+    Ppos <- preds_to_pos_prob(P)
+    if (is.null(Ppos)) stop("Binary inferred, but predictions cannot be coerced to a single probability column.")
+    
+    # Tune threshold using your existing tuner
+    thr_res <- tune_threshold_accuracy(
+      predicted_output = matrix(Ppos, ncol = 1L),
+      labels           = matrix(Lb,   ncol = 1L),
+      metric           = metric_for_tuning,
+      threshold_grid   = grid,
+      verbose          = FALSE
+    )
+    best_t <- as.numeric(thr_res$thresholds[1])
+    
+    # Apply threshold -> 0/1 classes
+    y_pred_class <- as.integer(Ppos >= best_t)
+    
+    # Shape for your accuracy(): Nx1 0/1
+    P_for_acc <- matrix(y_pred_class, ncol = 1L)
+    
+    acc_prop <- accuracy(
+      SONN = SONN, Rdata = Rdata,
+      labels = L_for_acc,
+      predicted_output = P_for_acc,
+      verbose = FALSE
+    )
+    acc_percent <- as.numeric(acc_prop) * 100
+    
+    metrics <- safe_eval_metrics(y_pred_class, Lb, verbose = verbose)
+    
+    if (verbose) {
+      message(sprintf("[Binary] tuned threshold = %.3f | acc = %.6f (%.2f%%)",
+                      best_t, as.numeric(acc_prop), acc_percent))
+    }
+    
+    return(list(
+      accuracy         = as.numeric(acc_prop),
+      accuracy_percent = acc_percent,
+      best_threshold   = best_t,
+      best_thresholds  = as.numeric(best_t),  # kept for API compatibility
+      y_pred_class     = y_pred_class,
+      metrics          = metrics,
+      grid_used        = grid
+    ))
   }
   
+  ## -------- Multiclass path --------
+  K <- max(ncol(L), ncol(P)); if (K < 1L) K <- 1L
   
-  # --- Shapes ---
-  L <- as.matrix(labels); storage.mode(L) <- "double"
-  P <- as.matrix(predicted_output); storage.mode(P) <- "double"
-  K <- max(ncol(L), ncol(P))
-  if (K < 1L) K <- 1L
-  
-  # --- Tune thresholds (single source of truth) ---
   thr_res <- tune_threshold_accuracy(
     predicted_output = P,
     labels           = L,
@@ -5788,84 +5871,35 @@ accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
     threshold_grid   = grid,
     verbose          = FALSE
   )
-  best_thresholds <- thr_res$thresholds  # len 1 (binary) or len K (multiclass)
+  best_thresholds <- thr_res$thresholds
+  pred_ids        <- thr_res$y_pred_class  # 1..K
   
-  # if (verbose) {
-  #   if (length(best_thresholds) == 1L) {
-  #     message(sprintf("Best threshold (%s-optimized): %.3f",
-  #                     metric_for_tuning, as.numeric(best_thresholds)))
-  #   } else {
-  #     message(sprintf("Best per-class thresholds (%s-optimized): %s",
-  #                     metric_for_tuning, paste0(sprintf("%.3f", best_thresholds), collapse = ", ")))
-  #   }
-  # }
+  N <- if (!is.null(nrow(P))) nrow(P) else length(pred_ids)
+  P_for_acc <- one_hot_from_ids(pred_ids, K = K, N = N)
   
-  # --- Build predictions in the format your accuracy() expects ---
-  if (K == 1L) {
-    # Binary
-    labels_flat <- as.integer(ifelse(as.vector(L) > 0, 1L, 0L))
-    best_t <- as.numeric(best_thresholds)
-    binary_preds <- as.integer(as.vector(P) >= best_t)
-    P_for_acc <- matrix(binary_preds, ncol = 1L)
-    
-    # Accuracy via your main metric
-    acc_prop <- accuracy(SONN = SONN, Rdata = Rdata,
-                         labels = L, predicted_output = P_for_acc,
-                         verbose = FALSE)
-    acc_percent <- acc_prop * 100
-    
-    # if (verbose) {
-    #   message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
-    #   message(sprintf("Accuracy (binary @ tuned threshold): %.6f (%.3f%%)", acc_prop, acc_percent))
-    # }
-    
-    # Optional: precision/recall/F1 (only if you have this helper)
-    metrics <- tryCatch(
-      evaluate_classification_metrics(binary_preds, labels_flat),
-      error = function(e) { if (verbose) message("metrics error: ", e$message); NULL }
-    )
-    
-    return(list(
-      accuracy          = as.numeric(acc_prop),
-      accuracy_percent  = as.numeric(acc_percent),
-      best_threshold    = best_t,          # scalar for binary
-      best_thresholds   = best_thresholds, # length-1 vector (kept for consistency)
-      y_pred_class      = binary_preds,    # 0/1
-      metrics           = metrics,
-      grid_used         = grid
-    ))
-    
-  } else {
-    # Multiclass
-    pred_ids <- thr_res$y_pred_class  # class ids (1..K), already thresholded OVR with fallback
-    
-    # one-hot for your accuracy()
-    N <- nrow(P)
-    if (N == 0L) N <- length(pred_ids)
-    P_for_acc <- matrix(0, nrow = N, ncol = K)
-    P_for_acc[cbind(seq_len(N), pred_ids)] <- 1
-    
-    # Accuracy via your main metric
-    acc_prop <- accuracy(SONN = SONN, Rdata = Rdata,
-                         labels = L, predicted_output = P_for_acc,
-                         verbose = FALSE)
-    acc_percent <- acc_prop * 100
-    
-    # if (verbose) {
-    #   message(sprintf("Accuracy (multiclass @ tuned thresholds): %.6f (%.3f%%)", acc_prop, acc_percent))
-    # }
-    
-    return(list(
-      accuracy          = as.numeric(acc_prop),
-      accuracy_percent  = as.numeric(acc_percent),
-      best_threshold    = NA_real_,        # no single scalar in multiclass
-      best_thresholds   = best_thresholds, # length-K vector
-      y_pred_class      = pred_ids,        # 1..K
-      metrics           = NULL,            # keep simple; compute macro metrics elsewhere if needed
-      grid_used         = grid
-    ))
+  acc_prop <- accuracy(
+    SONN = SONN, Rdata = Rdata,
+    labels = L,
+    predicted_output = P_for_acc,
+    verbose = FALSE
+  )
+  acc_percent <- as.numeric(acc_prop) * 100
+  
+  if (verbose) {
+    message(sprintf("[Multiclass] acc = %.6f (%.2f%%)", as.numeric(acc_prop), acc_percent))
   }
+  
+  list(
+    accuracy         = as.numeric(acc_prop),
+    accuracy_percent = acc_percent,
+    best_threshold   = NA_real_,
+    best_thresholds  = best_thresholds,
+    y_pred_class     = pred_ids,   # integers 1..K
+    metrics          = NULL,       # compute macro metrics elsewhere if desired
+    grid_used        = grid
+  )
 }
+
 
 
 MAE <- function(SONN, Rdata, labels, predicted_output, verbose) {

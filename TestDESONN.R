@@ -82,8 +82,11 @@ is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slig1htly lower for better adaptabilit
 lr <- .121
+lr_decay_rate  <- 0.5
+lr_decay_epoch <- 20
+lr_min <- 1e-6
 lambda <- 0.0003
-num_epochs <- 3
+num_epochs <- 117
 validation_metrics <- TRUE
 custom_scale <- .05
 
@@ -376,9 +379,9 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 # num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
-do_ensemble         <- FALSE
-num_networks        <- 3L          # e.g., run 5 models in one DESONN instance
-num_temp_iterations <- 0L
+# do_ensemble         <- FALSE
+# num_networks        <- 3L          # e.g., run 5 models in one DESONN instance
+# num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
 # do_ensemble         <- TRUE
@@ -386,9 +389,9 @@ num_temp_iterations <- 0L
 # num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
-# do_ensemble         <- TRUE
-# num_networks        <- 2L          # example main size
-# num_temp_iterations <- 1L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
+do_ensemble         <- TRUE
+num_networks        <- 5L          # example main size
+num_temp_iterations <- 2L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
 #
 ## You can set the above variables BEFORE sourcing this file. The defaults below are fallbacks.
 
@@ -621,7 +624,7 @@ if (!train) {
       output_size     = output_size,
       N               = N,
       lambda          = lambda,
-      ensemble_number = 1L,
+      ensemble_number = 0L,
       ensembles       = NULL,      # single run: no ensembles tracking
       ML_NN           = ML_NN,
       method          = init_method,
@@ -656,7 +659,8 @@ if (!train) {
     }
     # R defaults to doubles for numbers unless you explicitly add the L.
     invisible(main_model$train(
-      Rdata=X, labels=y, lr=lr, ensemble_number=0L, num_epochs=num_epochs,
+      Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
+      lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs,
       threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
       activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
       dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
@@ -1016,7 +1020,8 @@ if (!train) {
       }
       
       invisible(main_model$train(
-        Rdata=X, labels=y, lr=lr, ensemble_number=1L, num_epochs=num_epochs,
+        Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
+        lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
         activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
         dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
