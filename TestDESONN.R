@@ -411,7 +411,7 @@ firstRun <- TRUE
 j <- 1L
 ensembles <- list(main_ensemble = vector("list"), temp_ensemble = vector("list"))
 
-metric_name <- "MSE"
+metric_name <- "accuracy"
 viewTables  <- FALSE
 
 
@@ -439,15 +439,18 @@ relevance_low_mean_plots    <- FALSE
 
 # Toggle — set TRUE to export RDS metadata and (optionally) clear env, then stop.
 # prepare_disk_only <- TRUE
+# prepare_disk_only <- TRUE
+prepare_disk_only <- FALSE
 prepare_disk_only <- get0("prepare_disk_only", ifnotfound = FALSE)  # one-shot RDS export helper
 
 # Flag specific to disk-only prepare / selection
-prepare_disk_only_FROM_RDS <- TRUE
+prepare_disk_only_FROM_RDS <- FALSE
 prepare_disk_only_FROM_RDS <- get0("prepare_disk_only_FROM_RDS", ifnotfound = FALSE)
 # Modes:
 # "train"
 #   "predict:stateless"
-#   "predict:stateful"
+  # "predict:stateful"
+# MODE <- "train"
 MODE <- "predict:stateless"
 MODE <- get0("MODE", ifnotfound = "train")
 
@@ -471,20 +474,37 @@ BM_PREFER_MODEL <- get0("BM_PREFER_MODEL", ifnotfound = 1L)   # legacy keeps you
 # ---- NEW: prepare-disk choice flags (adds 3-choice behavior) ----------
 # Choices: "first" | "all" | "pick"
 PREPARE_DISK_CHOICE <- get0("PREPARE_DISK_CHOICE", ifnotfound = "all")
+
 # Clear environment after saving (matches prior behavior of bm_prepare_disk_only):
+PREPARE_CLEAR_ENV <- FALSE
 PREPARE_CLEAR_ENV   <- get0("PREPARE_CLEAR_ENV",   ifnotfound = TRUE)
+
+# ---- NEW FLAG: clear environment after saving EXCEPT the models (keep models in env) ----
+# If this is TRUE, PREPARE_CLEAR_ENV is forced FALSE (mutually exclusive).
+PREPARE_CLEAR_ENV_EXCEPT_MODELS <- TRUE
+PREPARE_CLEAR_ENV_EXCEPT_MODELS <- get0("PREPARE_CLEAR_ENV_EXCEPT_MODELS", ifnotfound = FALSE)
+
+# Enforce mutual exclusion at runtime
+if (isTRUE(PREPARE_CLEAR_ENV_EXCEPT_MODELS)) {
+  PREPARE_CLEAR_ENV <- FALSE
+}
 
 # Default metadata dir (if not already set elsewhere)
 .BM_DIR <- get0(".BM_DIR", ifnotfound = "artifacts")
+
+# Helper: strip trailing _YYYYMMDD_HHMMSS from a base name
+.strip_ts <- function(x) sub("_(\\d{8}_\\d{6})$", "", x)
 
 # =========================================
 # Phase 1 — one-shot export & (optional) clean
 # =========================================
 if (isTRUE(prepare_disk_only)) {
   
-  # Snapshot the clear flag BEFORE any helper that might wipe env
-  .CLEAR_AFTER <- isTRUE(get0("PREPARE_CLEAR_ENV", ifnotfound = TRUE))
-  saved_names  <- character(0)  # will hold names of models we want to keep in env
+  # Snapshot the clear flags BEFORE any helper that might wipe env
+  .CLEAR_EXCEPT <- isTRUE(PREPARE_CLEAR_ENV_EXCEPT_MODELS)  # strong override branch
+  .CLEAR_AFTER  <- isTRUE(PREPARE_CLEAR_ENV)                # only used if .CLEAR_EXCEPT is FALSE
+  saved_names   <- character(0)  # will hold names of models we want to keep in env (if needed)
+  ts_tag        <- format(Sys.time(), "%Y%m%d_%H%M%S")  # timestamp for filenames
   
   # -------------------------------
   # A) Legacy exact-name path (BM_NAME_HINT)
@@ -497,10 +517,17 @@ if (isTRUE(prepare_disk_only)) {
       prefer_model = BM_PREFER_MODEL,
       dir          = .BM_DIR
     )
+    # rename file with timestamp
+    if (file.exists(rds_path)) {
+      rds_new <- sub("\\.rds$", sprintf("_%s.rds", ts_tag), rds_path)
+      file.rename(rds_path, rds_new)
+      rds_path <- rds_new
+    }
     cat(sprintf("[prepare_disk_only] Saved metadata to: %s\n", rds_path))
     
-    # record the object name so we can keep it in env after clearing
-    saved_names <- unique(c(saved_names, sub("\\.rds$", "", basename(rds_path))))
+    # record the object name (strip timestamp) so we can keep it in env after clearing
+    base_no_ext <- sub("\\.rds$", "", basename(rds_path))
+    saved_names <- unique(c(saved_names, .strip_ts(base_no_ext)))
     
   } else {
     
@@ -524,21 +551,50 @@ if (isTRUE(prepare_disk_only)) {
       }
     )
     
-    if (!length(rds_paths)) {
-      cat("[prepare_disk_only] No candidates saved (zero-length result).\n")
-    } else {
+    # rename each file with timestamp
+    rds_new_paths <- character(0)
+    if (length(rds_paths)) {
+      for (p in unique(rds_paths)) {
+        if (file.exists(p)) {
+          p_new <- sub("\\.rds$", sprintf("_%s.rds", ts_tag), p)
+          file.rename(p, p_new)
+          rds_new_paths <- c(rds_new_paths, p_new)
+        }
+      }
       cat("[prepare_disk_only] Saved metadata files:\n")
-      for (p in unique(rds_paths)) cat("  - ", p, "\n", sep = "")
+      for (p in rds_new_paths) cat("  - ", p, "\n", sep = "")
+    } else {
+      cat("[prepare_disk_only] No candidates saved (zero-length result).\n")
     }
     
-    # record all object names so we can keep them in env after clearing
-    saved_names <- unique(c(saved_names, sub("\\.rds$", "", basename(rds_paths))))
+    # record all object names (strip timestamp) so we can keep them in env after clearing
+    base_no_ext <- sub("\\.rds$", "", basename(rds_new_paths))
+    saved_names <- unique(c(saved_names, .strip_ts(base_no_ext)))
   }
   
   # -------------------------------
-  # C) Clear, but KEEP the saved models in the Environment
+  # C) Clear environment policy
   # -------------------------------
-  if (.CLEAR_AFTER) {
+  if (.CLEAR_EXCEPT) {
+    # Clear everything EXCEPT the saved models/metadata objects (by name)
+    if (length(saved_names)) {
+      if (exists("bm_clear_env_except", inherits = TRUE)) {
+        bm_clear_env_except(keep_names = saved_names)
+      } else {
+        all_objs <- ls(envir = .GlobalEnv, all.names = FALSE)
+        to_rm    <- setdiff(all_objs, saved_names)
+        if (length(to_rm)) rm(list = to_rm, envir = .GlobalEnv)
+      }
+      gc()
+      cat("[prepare_disk_only] Environment cleared EXCEPT saved models (kept in env). End of phase-1.\n")
+    } else {
+      # nothing saved? full clear fallback
+      rm(list = ls(envir = .GlobalEnv), envir = .GlobalEnv)
+      gc()
+      cat("[prepare_disk_only] Environment fully cleared (no saved models to keep). End of phase-1.\n")
+    }
+  } else if (.CLEAR_AFTER) {
+    # Legacy behavior: clear after saving; keep saved models/metadata in env
     if (length(saved_names)) {
       if (exists("bm_clear_env_except", inherits = TRUE)) {
         bm_clear_env_except(keep_names = saved_names)
@@ -555,11 +611,14 @@ if (isTRUE(prepare_disk_only)) {
       gc()
       cat("[prepare_disk_only] Environment cleared. End of phase-1.\n")
     }
+  } else {
+    cat("[prepare_disk_only] No environment clear requested. End of phase-1.\n")
   }
   
   # Final stop/quit
   if (exists(".hard_stop", mode = "function")) .hard_stop() else stop("prepare_disk_only done.")
 }
+
 
 # Derive boolean once from MODE (no redundancy)
 train <- identical(MODE, "train")
@@ -630,7 +689,9 @@ if (!train) {
   }
   df_ranked$._src_rank <- NULL
   
+  # -------------------------------
   # Scope mapping
+  # -------------------------------
   scope_rows <- switch(PREDICT_SCOPE,
                        "one"        = df_ranked[1, , drop = FALSE],
                        "group-best" = {
@@ -665,24 +726,39 @@ if (!train) {
   # -------------------------------
   # Helpers
   # -------------------------------
-  .digest_or <- function(obj) if (requireNamespace("digest", quietly=TRUE)) tryCatch(digest::digest(obj, algo="xxhash64"), error=function(e) "NA") else "digest_pkg_missing"
-  .weight_signature <- function(meta) {
+  .digest_or <- function(obj) {
+    if (requireNamespace("digest", quietly=TRUE)) {
+      tryCatch(digest::digest(obj, algo="xxhash64"), error=function(e) "NA")
+    } else "digest_pkg_missing"
+  }
+  # compute per-slot weight signature using the slot index
+  .slot_wsig <- function(meta, slot_index) {
+    if (exists("hash_meta_weights", mode = "function")) {
+      return(hash_meta_weights(meta, slot_index))
+    }
+    # fallback: hash the best_weights_record if present
     w <- tryCatch({
       if (!is.null(meta$best_model_metadata$best_weights_record))
         meta$best_model_metadata$best_weights_record else meta$best_weights_record
     }, error=function(e) NULL)
     if (!is.null(w)) return(.digest_or(w))
-    .digest_or(meta)
+    .digest_or(meta)  # worst-case fallback
   }
+  `%||%` <- function(x,y) if (is.null(x)) y else x
   
   # -------------------------------
   # Predict per model
   # -------------------------------
-  results <- vector("list", length = nrow(scope_rows))
+  results   <- vector("list", length = nrow(scope_rows))
   pred_sigs <- character(nrow(scope_rows))
+  P_list    <- vector("list", length = nrow(scope_rows))  # store predictions for saving
+  meta_list <- vector("list", length = nrow(scope_rows))  # store minimal meta refs
   
   for (i in seq_len(nrow(scope_rows))) {
-    kind  <- as.character(scope_rows$kind[i]); ens <- as.integer(scope_rows$ens[i]); model <- as.integer(scope_rows$model[i])
+    kind  <- as.character(scope_rows$kind[i])
+    ens   <- as.integer(scope_rows$ens[i])
+    model <- as.integer(scope_rows$model[i])    # ← slot index
+    
     varname <- sprintf("Ensemble_%s_%d_model_%d_metadata", kind, ens, model)
     meta <- if (exists(varname, envir=.GlobalEnv)) get(varname, envir=.GlobalEnv) else bm_select_exact(kind, ens, model)
     if (is.null(meta)) { warning(sprintf("Skipping %s/%d/%d: no metadata.", kind, ens, model)); next }
@@ -695,15 +771,21 @@ if (!train) {
     Xi <- .align_by_names_safe(Xi, X_common)
     Xi <- .apply_scaling_if_any(as.matrix(Xi), meta)
     
-    pred_raw <- .safe_run_predict(X=Xi, meta=meta, model_index=1L, ML_NN=TRUE)
+    # IMPORTANT: use the correct slot's record for prediction
+    pred_raw <- .safe_run_predict(X = Xi, meta = meta, model_index = model, ML_NN = TRUE)
     P <- .as_pred_matrix(pred_raw)
+    P_list[[i]] <- P
+    meta_list[[i]] <- list(kind=kind, ens=ens, model=model,
+                           serial=as.character(meta$model_serial_num %||% sprintf("%d.%d.%d", ens,0L,model)))
     
-    wsig <- .weight_signature(meta)
+    # per-slot signatures
+    wsig <- .slot_wsig(meta, model)  # ← per-slot weight signature
     psig <- .digest_or(round(P[seq_len(min(nrow(P),2000)),,drop=FALSE],6))
     pred_sigs[i] <- psig
     
     cat(sprintf("→ Model(kind=%s, ens=%d, model=%d) preds=%dx%d\n", kind, ens, model, nrow(P), ncol(P)))
-    cat(sprintf("   · serial=%s | w_sig=%s | pred_sig=%s\n", as.character(meta$model_serial_num %||% sprintf("%d.%d.%d", ens,0L,model)), wsig, psig))
+    cat(sprintf("   · serial=%s | w_sig=%s | pred_sig=%s\n",
+                as.character(meta$model_serial_num %||% sprintf("%d.%d.%d", ens,0L,model)), wsig, psig))
     
     # ---- Metrics
     acc_val <- prec_val <- rec_val <- f1_val <- NA_real_
@@ -712,7 +794,10 @@ if (!train) {
     
     if (!is.null(yi) && nrow(P)>0) {
       n <- min(nrow(P), length(yi))
-      if (nrow(P)!=length(yi)) { warning(sprintf("[%s/%d/%d] preds=%d labels=%d trunc→%d",kind,ens,model,nrow(P),length(yi),n)); P<-P[1:n,,drop=FALSE]; yi<-yi[1:n] }
+      if (nrow(P)!=length(yi)) {
+        warning(sprintf("[%s/%d/%d] preds=%d labels=%d trunc→%d",kind,ens,model,nrow(P),length(yi),n))
+        P <- P[1:n,,drop=FALSE]; P_list[[i]] <- P; yi <- yi[1:n]
+      }
       if (ncol(P)==1L) { y_pred <- as.integer(as.numeric(P[,1])>=0.5) } else { y_pred <- as.integer((max.col(P)-1L)>0L) }
       y_true01 <- as.integer(yi>0)
       acc_val <- mean(y_pred==y_true01); tp<-sum(y_pred==1&y_true01==1); fp<-sum(y_pred==1&y_true01==0); fn<-sum(y_pred==0&y_true01==1); tn<-sum(y_pred==0&y_true01==0)
@@ -720,7 +805,8 @@ if (!train) {
       
       if (is.function(get0("accuracy", inherits=TRUE))) {
         cat("   · accuracy(): baseline @0.5\n")
-        tryCatch(accuracy(SONN=NULL,Rdata=Xi,labels=yi,predicted_output=P,verbose=TRUE), error=function(e){cat("     (err) ");message(e)})
+        tryCatch(accuracy(SONN=NULL,Rdata=Xi,labels=yi,predicted_output=P,verbose=TRUE),
+                 error=function(e){cat("     (err) ");message(e)})
       }
       
       if (is.function(get0("accuracy_tuned", inherits=TRUE))) {
@@ -734,7 +820,6 @@ if (!train) {
           error=function(e){cat("     (err) ");message(e);NULL}
         )
         if (!is.null(tuned)) {
-          `%||%` <- function(x,y) if (is.null(x)) y else x
           tuned_acc  <- 100*as.numeric(tuned$accuracy %||% NA_real_)
           tuned_prec <- as.numeric(tuned$precision %||% NA_real_)
           tuned_rec  <- as.numeric(tuned$recall %||% NA_real_)
@@ -763,11 +848,61 @@ if (!train) {
     tuned_recall=z$tuned_recall, tuned_f1=z$tuned_f1,
     tp=z$tp, fp=z$fp, fn=z$fn, tn=z$tn, stringsAsFactors=FALSE))
   results_df <- do.call(rbind, rows); rownames(results_df)<-NULL
+  # Attach signatures to the results table for auditing
+  results_df$w_sig   <- vapply(seq_len(nrow(scope_rows)), function(i) {
+    kind  <- scope_rows$kind[i]; ens <- scope_rows$ens[i]; model <- scope_rows$model[i]
+    meta  <- bm_select_exact(kind, ens, model)
+    if (exists("hash_meta_weights", mode = "function")) hash_meta_weights(meta, model) else NA_character_
+  }, character(1))
+  
+  results_df$pred_sig <- pred_sigs
+  
   assign("PREDICT_RESULTS_TABLE", results_df, .GlobalEnv)
+  
   
   cat(sprintf("[predict] MODE=%s | SCOPE=%s | METRIC=%s | models=%d\n", predict_mode,PREDICT_SCOPE,TARGET_METRIC,nrow(results_df)))
   print(results_df, digits=6)
   if (length(pred_sigs)) { cat("Prediction signature counts:\n"); print(table(pred_sigs)) }
+  
+  # -------------------------------
+  # SAVE to artifacts/ with mode & scope in filename
+  # -------------------------------
+  artifacts_dir <- file.path(getwd(), "artifacts")
+  if (!dir.exists(artifacts_dir)) dir.create(artifacts_dir, recursive = TRUE, showWarnings = FALSE)
+  ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  # sanitize scope/mode just in case
+  scope_tag <- gsub("[^A-Za-z0-9_-]+", "-", tolower(PREDICT_SCOPE))
+  mode_tag  <- gsub("[^A-Za-z0-9_-]+", "-", tolower(predict_mode))
+  rds_path  <- file.path(artifacts_dir, sprintf("predictions_%s_scope-%s_%s.rds", mode_tag, scope_tag, ts_stamp))
+  
+  # compact list of predictions keyed by model tag
+  pred_named <- list()
+  for (i in seq_along(P_list)) {
+    if (is.null(P_list[[i]]) || is.null(meta_list[[i]])) next
+    tag <- sprintf("%s_%d_%d", meta_list[[i]]$kind, meta_list[[i]]$ens, meta_list[[i]]$model)
+    pred_named[[tag]] <- P_list[[i]]
+  }
+  
+  predict_pack <- list(
+    saved_at        = Sys.time(),
+    predict_mode    = predict_mode,
+    PREDICT_SCOPE   = PREDICT_SCOPE,
+    TARGET_METRIC   = TARGET_METRIC,
+    minimize_metric = minimize,
+    flags = list(
+      PREDICT_ONLY_FROM_RDS = PREDICT_ONLY_FROM_RDS,
+      KIND_FILTER = KIND_FILTER, ENS_FILTER = ENS_FILTER, MODEL_FILTER = MODEL_FILTER,
+      PICK_INDEX = PICK_INDEX
+    ),
+    candidates_ranked = df_ranked,
+    scope_rows        = scope_rows,
+    results_table     = results_df,
+    prediction_sigs   = pred_sigs,
+    predictions       = pred_named  # full prediction matrices, keyed by "kind_ens_model"
+  )
+  
+  saveRDS(predict_pack, rds_path)
+  cat(sprintf("[predict] Saved predictions to: %s\n", rds_path))
 } else {
   ## =========================================================================================
   ## SINGLE-RUN MODE (no logs, no lineage, no temp/prune/add) — covers Scenario A & Scenario B
@@ -856,8 +991,7 @@ if (!train) {
     }
     # If you want per-model metrics, iterate main_model$ensemble here as needed.
     
-  } 
-  else {
+  } else {
     ## ==========================================================
     ## SINGLE-RUN or ENSEMBLE MODE
     ## ==========================================================
@@ -866,7 +1000,7 @@ if (!train) {
     EMPTY_SLOT <- structure(list(.empty_slot = TRUE), class = "EMPTY_SLOT")
     
     # ---------- metadata compose helpers (for both modes) ----------
-    `%||%` <- get0("%||%", ifnotfound = function(x, y) if (is.null(x)) y else x)
+    '%||%' <- get0("%||%", ifnotfound = function(x, y) if (is.null(x)) y else x)
     
     main_meta_var <- function(i) sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(i))
     temp_meta_var <- function(e,i) sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(e), as.integer(i))
@@ -1583,8 +1717,10 @@ if (!train) {
   }
   
   
-
+  
 }
+
+
 
 
 

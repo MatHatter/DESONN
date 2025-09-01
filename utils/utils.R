@@ -69,48 +69,11 @@ make_fname_prefix <- function(do_ensemble,
 }
 
 
-# ---- helper for
 # =======================
-# PREDICT-ONLY SHORT-CIRCUIT
+# PREDICT-ONLY HELPERS (for !train)
 # =======================
-# if (!train) in TestDESONN.R
-# Auto-detect a saved metadata object in the workspace and return the OBJECT itself.
-# Pref order: Main_1, Main_0, any Main_*, then Temp_1, then any Temp_*.
-if (!exists(".auto_find_meta", inherits = TRUE)) {
-  # Auto-detect a saved metadata object in the workspace and return the OBJECT itself.
-  # Preference order: Main_1, Main_0, any Main_*, then Temp_1, then any Temp_*.
-  .auto_find_meta <- function() {
-    all_vars <- ls(.GlobalEnv)
-    hits <- grep("^Ensemble_(Main|Temp)_[0-9]+_model_[0-9]+_metadat?a$",
-                 all_vars, ignore.case = TRUE, value = TRUE)
-    if (!length(hits)) return(NULL)
-    
-    # Build integer scores with a simple loop (no vapply)
-    scores <- integer(length(hits))
-    for (i in seq_along(hits)) {
-      nm <- hits[i]
-      is_main <- grepl("^Ensemble_Main_", nm, ignore.case = TRUE)
-      ens_num <- suppressWarnings(as.integer(
-        sub("^Ensemble_(?:Main|Temp)_([0-9]+).*", "\\1", nm, perl = TRUE)
-      ))
-      
-      s <-
-        if (is_main && !is.na(ens_num) && ens_num == 1L) 1L
-      else if (is_main && !is.na(ens_num) && ens_num == 0L) 2L
-      else if (is_main)                                   3L
-      else if (!is_main && !is.na(ens_num) && ens_num == 1L) 4L
-      else 5L
-      
-      scores[i] <- as.integer(s)
-    }
-    
-    # Order by score and return the first object
-    hits <- hits[order(scores)]
-    get(hits[1], envir = .GlobalEnv)
-  }
-}
 
-
+# Needed: convert best_*_record to clean {weights,biases} for SL/ML prediction
 if (!exists("normalize_records", inherits = TRUE)) {
   normalize_records <- function(wrec, brec, ML_NN) {
     if (ML_NN) {
@@ -128,8 +91,8 @@ if (!exists("normalize_records", inherits = TRUE)) {
   }
 }
 
+# Needed: pulls best_*_record (supports nested best_model_metadata)
 if (!exists("extract_best_records", inherits = TRUE)) {
-  # Works with either top-level best_*_record or nested best_model_metadata
   extract_best_records <- function(meta, ML_NN, model_index = 1L) {
     src <- if (!is.null(meta$best_model_metadata) &&
                !is.null(meta$best_model_metadata$best_weights_record)) {
@@ -147,19 +110,7 @@ if (!exists("extract_best_records", inherits = TRUE)) {
   }
 }
 
-# Optional: only needed if you want to target a specific metadata explicitly
-if (!exists(".find_meta", inherits = TRUE)) {
-  .find_meta <- function(kind = c("Main","Temp"), ens, model) {
-    kind <- match.arg(kind)
-    base <- sprintf("Ensemble_%s_%d_model_%d_", kind, as.integer(ens), as.integer(model))
-    cands <- c(paste0(base,"metadata"), paste0(base,"metada"))  # tolerate typo
-    for (nm in cands) if (exists(nm, envir = .GlobalEnv)) return(get(nm, envir = .GlobalEnv))
-    NULL
-  }
-}
-
-####check if still need helpers above
-# ===== helpers for predict-only =====
+# ===== helpers used by predict-only flow =====
 `%||%` <- function(a,b) if (is.null(a) || length(a)==0) b else a
 
 .get_in <- function(x, path) {
@@ -265,17 +216,17 @@ if (!exists(".run_predict", inherits = TRUE)) {
     rec <- extract_best_records(meta, ML_NN = ML_NN, model_index = model_index)
     
     # Infer sizes
-    input_size  <- ncol(X)
+    input_size   <- ncol(X)
     hidden_sizes <- meta$hidden_sizes %||% meta$model$hidden_sizes %||% c(32L, 16L)
-    output_size <- as.integer(meta$output_size %||% 1L)
+    output_size  <- as.integer(meta$output_size %||% 1L)
     num_networks <- max(1L,
                         as.integer(meta$num_networks %||% length(meta$best_weights_record) %||% 1L),
                         model_index)
     
-    N        <- as.integer(meta$N        %||% nrow(X))
-    lambda   <- as.numeric(meta$lambda   %||% 0)
-    init_method   <- meta$init_method   %||% "xavier"
-    custom_scale  <- meta$custom_scale  %||% NULL
+    N            <- as.integer(meta$N        %||% nrow(X))
+    lambda       <- as.numeric(meta$lambda   %||% 0)
+    init_method  <- meta$init_method   %||% "xavier"
+    custom_scale <- meta$custom_scale  %||% NULL
     activation_functions <- get0("activation_functions",
                                  ifnotfound = meta$activation_functions %||% NULL,
                                  inherits = TRUE)
