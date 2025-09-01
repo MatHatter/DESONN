@@ -3447,37 +3447,24 @@ DESONN <- R6Class(
           verbose = verbose
         )
         
+        # =========================
+        # DESONN — Final perf/relevance lists (uses self$viewFinalUpdatePerformanceandRelevancePlots)
+        # =========================
+        
         `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
         
-        # Prints to RStudio Plots pane ONLY. Never saves. Handles ggplot, list, and nested list.
-        print_plotlist_verbose <- function(x, label = NULL, print_plots = TRUE) {
-          lab <- label %||% "Plot"
-          if (inherits(x, c("gg","ggplot"))) {
-            if (print_plots) print(x)
-            return(invisible(NULL))
-          }
-          if (is.list(x)) {
-            for (i in seq_along(x)) {
-              item <- x[[i]]
-              if (inherits(item, c("gg","ggplot")) && print_plots) print(item)
-              if (is.list(item)) {
-                for (j in seq_along(item)) {
-                  p <- item[[j]]
-                  if (inherits(p, c("gg","ggplot")) && print_plots) print(p)
-                }
-              }
-            }
-          }
-          invisible(NULL)
+        # Helper: ask your R6 toggle
+        .allow <- function(name) {
+          # name should match a field in self$FinalUpdatePerformanceandRelevanceViewPlotsConfig
+          # on_all = viewAllPlots || verbose
+          self$viewFinalUpdatePerformanceandRelevancePlots(name)
         }
         
-        # =========================
-        # DESONN — Final perf/relevance lists (always SAVE + VIEW, no dumps)
-        # =========================
+        # Optional: allow disabling saving too (defaults TRUE if unset)
+        .save_enabled <- isTRUE(self$FinalUpdatePerformanceandRelevanceViewPlotsConfig$saveAlso %||% TRUE)
         
-        `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
-        
-        if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+        # Prepare output dir only if we might save
+        if (.save_enabled && !dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
         
         ens <- as.integer(ensemble_number)
         tot <- if (!is.null(self$ensemble)) length(self$ensemble) else as.integer(get0("num_networks", ifnotfound = 1L))
@@ -3503,13 +3490,11 @@ DESONN <- R6Class(
         }
         
         .plot_label_slug <- function(p) {
-          # Safely coerce any ggplot label to a single string, or NULL
           .first_label <- function(obj) {
             if (is.null(obj)) return(NULL)
             s <- tryCatch(as.character(obj), error = function(e) NULL)
             if (is.null(s) || !length(s)) return(NULL)
-            s1 <- s[[1]]
-            if (is.null(s1) || !nzchar(s1)) return(NULL)
+            s1 <- s[[1]]; if (is.null(s1) || !nzchar(s1)) return(NULL)
             s1
           }
           t1 <- .first_label(tryCatch(p$labels$title, error = function(e) NULL))
@@ -3519,27 +3504,32 @@ DESONN <- R6Class(
           NULL
         }
         
-        
-        # Walk any mixture of ggplot / list / nested list; save PNG and view each ggplot
-        .walk_save_view <- function(x, base, idx_env) {
+        # Walk any mixture of ggplot / list / nested list; save/print only if allowed(name)
+        .walk_save_view <- function(x, base, idx_env, name_flag) {
           if (is.null(x) || !length(x)) return(invisible(NULL))
           
+          # Respect your config per group
+          do_action <- .allow(name_flag)
+          
           save_one <- function(p, nm_fallback) {
+            if (!do_action) return(invisible(NULL))   # neither save nor print if flag is off
+            
             nm <- .plot_label_slug(p) %||% .slug(nm_fallback)
             idx_env[[nm]] <- (idx_env[[nm]] %||% 0L) + 1L
             file_base <- sprintf("%s_%03d", nm, idx_env[[nm]])
             out <- file.path("plots", fname(sprintf("%s.png", file_base)))
             
-            # Save (quiet)
-            try(suppressWarnings(suppressMessages(
-              ggsave(out, p, width = 6, height = 4, dpi = 300)
-            )), silent = TRUE)
+            # Save only if global save is enabled
+            if (.save_enabled) {
+              try(suppressWarnings(suppressMessages(
+                ggsave(out, p, width = 6, height = 4, dpi = 300)
+              )), silent = TRUE)
+            }
             
-            # View (print only real ggplots)
+            # Print (view) — gated by same per-group flag
             try(print(p), silent = TRUE)
           }
           
-          # recurse
           if (inherits(x, c("gg","ggplot"))) {
             save_one(x, base)
           } else if (is.list(x)) {
@@ -3548,8 +3538,8 @@ DESONN <- R6Class(
               if (inherits(elem, c("gg","ggplot"))) {
                 save_one(elem, sprintf("%s_%02d", base, k))
               } else if (is.list(elem)) {
-                .walk_save_view(elem, sprintf("%s_%02d", base, k), idx_env)
-              } # non-gg, non-list: ignore silently
+                .walk_save_view(elem, sprintf("%s_%02d", base, k), idx_env, name_flag)
+              }
             }
           }
           invisible(NULL)
@@ -3558,13 +3548,17 @@ DESONN <- R6Class(
         # Independent counters per group to keep filenames stable
         .idx <- new.env(parent = emptyenv())
         
-        # Process all four holders (always save + view if plots exist)
-        .walk_save_view(performance_relevance_plots$performance_high_mean_plots, "performance_high_mean", .idx)
-        .walk_save_view(performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",  .idx)
-        .walk_save_view(performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",   .idx)
-        .walk_save_view(performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",    .idx)
+        # Map each holder to its config flag name (keys must match your config fields)
+        .walk_save_view(performance_relevance_plots$performance_high_mean_plots, "performance_high_mean",
+                        .idx, "performance_high_mean_plots")
+        .walk_save_view(performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",
+                        .idx, "performance_low_mean_plots")
+        .walk_save_view(performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",
+                        .idx, "relevance_high_mean_plots")
+        .walk_save_view(performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",
+                        .idx, "relevance_low_mean_plots")
         
-        invisible(NULL)  # prevent any accidental auto-print of return value
+        invisible(NULL)
         
         
         
@@ -3726,19 +3720,27 @@ DESONN <- R6Class(
         # Exclude noisy/derived metrics from plotting (keep interface the same)
         EXCLUDE_METRICS_REGEX <- paste(
           c(
-            "^accuracy_tuned_accuracy_percent$",   # drop percent plots
-            "^accuracy_percent$",                  # generic percent (if present)
-            "^accuracy_tuned_y_pred_class\\d+$",   # per-class 0/1 series
-            "^y_pred_class\\d+$",                  # safety w/out prefix
-            "^accuracy_tuned_best_thresholds?$",   # thresholds (optional)
-            "^best_thresholds?$",                  # thresholds (generic)
+            # AccuracyTuned details (handles both "accuracy_tuned.details.*" and "accuracy_tuned_*")
+            "^accuracy_tuned([_.]details)?[_.]best[_.]threshold$",
+            "^accuracy_tuned([_.]details)?[_.]best[_.]thresholds$",
+            "^accuracy_tuned([_.]details)?[_.]y[_.]pred[_.]class(\\d+)?$",
+            "^accuracy_tuned([_.]details)?[_.]grid[_.]used.*$",
             
-            # >>> NEW: drop grid-used meta fields <<<
-            "^accuracy_tuned_grid_used",           # e.g., accuracy_tuned_grid_used1
-            "^grid_used"                           # any plain grid_used*
+            # Generic details fallbacks (if the prefix isn't carried through)
+            "^details[_.]best[_.]threshold$",
+            "^details[_.]best[_.]thresholds$",
+            "^details[_.]y[_.]pred[_.]class(\\d+)?$",
+            "^details[_.]grid[_.]used.*$",
+            
+            # Legacy flat names without 'details' or prefix
+            "^best[_.]threshold$",
+            "^best[_.]thresholds$",
+            "^y[_.]pred[_.]class(\\d+)?$",
+            "^grid[_.]used.*$"
           ),
           collapse = "|"
         )
+        
         
         # Initialize variables to store results
         high_mean_df <- NULL
@@ -5794,32 +5796,83 @@ f1_score <- function(SONN, Rdata, labels, predicted_output, verbose) {
 
 accuracy_tuned <- function(
     SONN, Rdata, labels, predicted_output,
-    metric_for_tuning = c("accuracy", "f1", "precision", "recall", "macro_f1", "macro_precision", "macro_recall"),
+    metric_for_tuning = c("accuracy", "f1", "precision", "recall",
+                          "macro_f1", "macro_precision", "macro_recall"),
     threshold_grid = seq(0.05, 0.95, by = 0.01),
     verbose = FALSE
 ) {
   metric_for_tuning <- match.arg(metric_for_tuning)
   grid <- sanitize_grid(threshold_grid)
   
-  # Coerce to numeric matrices
-  L <- as.matrix(labels);           storage.mode(L) <- "double"
-  P <- as.matrix(predicted_output); storage.mode(P) <- "double"
+  # --- helpers (local, no deps) ---
+  .to_matrix <- function(x) { x <- as.matrix(x); storage.mode(x) <- "double"; x }
+  .labels_to_ids <- function(L) {
+    # If already a vector of class ids (1..K), return as-is (numeric/integer).
+    if (is.null(dim(L))) return(as.integer(L))
+    # Otherwise assume one-hot / probability matrix → argmax
+    max.col(L, ties.method = "first")
+  }
+  .binary_metrics <- function(y_true01, y_pred01) {
+    y_true01 <- as.integer(y_true01); y_pred01 <- as.integer(y_pred01)
+    TP <- sum(y_true01 == 1L & y_pred01 == 1L, na.rm = TRUE)
+    FP <- sum(y_true01 == 0L & y_pred01 == 1L, na.rm = TRUE)
+    FN <- sum(y_true01 == 1L & y_pred01 == 0L, na.rm = TRUE)
+    denom_p <- TP + FP; denom_r <- TP + FN
+    precision <- if (denom_p > 0) TP / denom_p else 0
+    recall    <- if (denom_r > 0) TP / denom_r else 0
+    F1        <- if ((precision + recall) > 0) 2 * precision * recall / (precision + recall) else 0
+    list(precision = as.numeric(precision),
+         recall = as.numeric(recall),
+         F1 = as.numeric(F1))
+  }
+  .macro_metrics <- function(y_true_ids, y_pred_ids, K = NULL) {
+    y_true_ids <- as.integer(y_true_ids)
+    y_pred_ids <- as.integer(y_pred_ids)
+    if (is.null(K)) K <- max(c(y_true_ids, y_pred_ids), na.rm = TRUE)
+    prec <- rec <- f1 <- numeric(K)
+    for (k in seq_len(K)) {
+      TP <- sum(y_true_ids == k & y_pred_ids == k, na.rm = TRUE)
+      FP <- sum(y_true_ids != k & y_pred_ids == k, na.rm = TRUE)
+      FN <- sum(y_true_ids == k & y_pred_ids != k, na.rm = TRUE)
+      p  <- if (TP + FP > 0) TP / (TP + FP) else 0
+      r  <- if (TP + FN > 0) TP / (TP + FN) else 0
+      f  <- if ((p + r) > 0) 2 * p * r / (p + r) else 0
+      prec[k] <- p; rec[k] <- r; f1[k] <- f
+    }
+    list(precision = mean(prec), recall = mean(rec), F1 = mean(f1))
+  }
   
-  # Decide binary vs multiclass
-  bin_info <- infer_is_binary(L, P)
-  is_binary <- isTRUE(bin_info$is_binary)
+  # --- coerce to matrices for existing utilities you have ---
+  L <- .to_matrix(labels)
+  P <- .to_matrix(predicted_output)
+  
+  # --- binary vs multiclass inference (use your existing inferer if available) ---
+  is_binary <- FALSE
+  if (exists("infer_is_binary", mode = "function")) {
+    bin_info <- infer_is_binary(L, P); is_binary <- isTRUE(bin_info$is_binary)
+  } else {
+    is_binary <- (max(ncol(L), ncol(P)) <= 1L)
+  }
   
   if (is_binary) {
-    # Labels: 0/1 vector -> Nx1 matrix
-    Lb <- if (!is.null(bin_info$Lb)) bin_info$Lb else labels_to_binary_vec(L)
+    # Labels → 0/1 vector
+    if (exists("labels_to_binary_vec", mode = "function")) {
+      Lb <- labels_to_binary_vec(L)
+    } else {
+      # fallback: if matrix with one col, assume 0/1 already
+      Lb <- as.integer(L[, 1] > 0.5)
+    }
     if (is.null(Lb)) stop("Binary inferred, but labels cannot be coerced to {0,1}.")
-    L_for_acc <- matrix(Lb, ncol = 1L)
     
-    # Predictions: positive-class probability vector
-    Ppos <- preds_to_pos_prob(P)
+    # Predictions → positive-class probability
+    if (exists("preds_to_pos_prob", mode = "function")) {
+      Ppos <- preds_to_pos_prob(P)
+    } else {
+      Ppos <- as.numeric(P)  # assume already a prob col
+    }
     if (is.null(Ppos)) stop("Binary inferred, but predictions cannot be coerced to a single probability column.")
     
-    # Tune threshold using your existing tuner
+    # Tune threshold
     thr_res <- tune_threshold_accuracy(
       predicted_output = matrix(Ppos, ncol = 1L),
       labels           = matrix(Lb,   ncol = 1L),
@@ -5829,39 +5882,36 @@ accuracy_tuned <- function(
     )
     best_t <- as.numeric(thr_res$thresholds[1])
     
-    # Apply threshold -> 0/1 classes
+    # Classify
     y_pred_class <- as.integer(Ppos >= best_t)
     
-    # Shape for your accuracy(): Nx1 0/1
-    P_for_acc <- matrix(y_pred_class, ncol = 1L)
-    
+    # Accuracy (use your accuracy() to keep semantics)
     acc_prop <- accuracy(
       SONN = SONN, Rdata = Rdata,
-      labels = L_for_acc,
-      predicted_output = P_for_acc,
+      labels = matrix(Lb, ncol = 1L),
+      predicted_output = matrix(y_pred_class, ncol = 1L),
       verbose = FALSE
     )
-    acc_percent <- as.numeric(acc_prop) * 100
+    acc_prop <- as.numeric(acc_prop)
     
-    metrics <- safe_eval_metrics(y_pred_class, Lb, verbose = verbose)
-    
-    if (verbose) {
-      message(sprintf("[Binary] tuned threshold = %.3f | acc = %.6f (%.2f%%)",
-                      best_t, as.numeric(acc_prop), acc_percent))
-    }
+    # Binary metrics
+    m <- .binary_metrics(Lb, y_pred_class)
     
     return(list(
-      accuracy         = as.numeric(acc_prop),
-      accuracy_percent = acc_percent,
-      best_threshold   = best_t,
-      best_thresholds  = as.numeric(best_t),  # kept for API compatibility
-      y_pred_class     = y_pred_class,
-      metrics          = metrics,
-      grid_used        = grid
+      accuracy  = acc_prop,
+      precision = m$precision,
+      recall    = m$recall,
+      F1        = m$F1,
+      details   = list(
+        best_threshold  = best_t,
+        best_thresholds = thr_res$thresholds,  # keep vector (best first)
+        y_pred_class    = y_pred_class,
+        grid_used       = grid
+      )
     ))
   }
   
-  ## -------- Multiclass path --------
+  # ---------------- Multiclass ----------------
   K <- max(ncol(L), ncol(P)); if (K < 1L) K <- 1L
   
   thr_res <- tune_threshold_accuracy(
@@ -5874,6 +5924,7 @@ accuracy_tuned <- function(
   best_thresholds <- thr_res$thresholds
   pred_ids        <- thr_res$y_pred_class  # 1..K
   
+  # One-hot for your existing accuracy()
   N <- if (!is.null(nrow(P))) nrow(P) else length(pred_ids)
   P_for_acc <- one_hot_from_ids(pred_ids, K = K, N = N)
   
@@ -5883,22 +5934,31 @@ accuracy_tuned <- function(
     predicted_output = P_for_acc,
     verbose = FALSE
   )
-  acc_percent <- as.numeric(acc_prop) * 100
+  acc_prop <- as.numeric(acc_prop)
+  
+  # Macro metrics at the tuned thresholds
+  true_ids <- .labels_to_ids(L)
+  mm <- .macro_metrics(true_ids, pred_ids, K = K)
   
   if (verbose) {
-    message(sprintf("[Multiclass] acc = %.6f (%.2f%%)", as.numeric(acc_prop), acc_percent))
+    message(sprintf("[Multiclass] acc = %.6f | macro P=%.6f R=%.6f F1=%.6f",
+                    acc_prop, mm$precision, mm$recall, mm$F1))
   }
   
   list(
-    accuracy         = as.numeric(acc_prop),
-    accuracy_percent = acc_percent,
-    best_threshold   = NA_real_,
-    best_thresholds  = best_thresholds,
-    y_pred_class     = pred_ids,   # integers 1..K
-    metrics          = NULL,       # compute macro metrics elsewhere if desired
-    grid_used        = grid
+    accuracy  = acc_prop,
+    precision = mm$precision,
+    recall    = mm$recall,
+    F1        = mm$F1,
+    details   = list(
+      best_threshold  = NA_real_,         # per-class thresholds provided below
+      best_thresholds = best_thresholds,  # length K
+      y_pred_class    = pred_ids,         # integers 1..K
+      grid_used       = grid
+    )
   )
 }
+
 
 
 

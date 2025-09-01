@@ -158,6 +158,171 @@ if (!exists(".find_meta", inherits = TRUE)) {
   }
 }
 
+####check if still need helpers above
+# ===== helpers for predict-only =====
+`%||%` <- function(a,b) if (is.null(a) || length(a)==0) b else a
+
+.get_in <- function(x, path) {
+  cur <- x
+  for (p in path) {
+    if (is.null(cur)) return(NULL)
+    if (is.list(cur) && !is.null(cur[[p]])) cur <- cur[[p]] else return(NULL)
+  }
+  cur
+}
+
+.choose_X_from_meta <- function(meta) {
+  cands <- list(
+    c("datasets","X_validation"), c("datasets","X_val"), c("datasets","X_test"),
+    c("X_validation"), c("X_val"), c("X_test"),
+    c("datasets","X_validation_scaled"), c("X_validation_scaled"),
+    c("datasets","X_train"), c("X")
+  )
+  for (cand in cands) {
+    v <- .get_in(meta, cand); if (!is.null(v)) return(list(X=v, tag=paste(cand, collapse="/")))
+  }
+  NULL
+}
+
+.choose_y_from_meta <- function(meta) {
+  cands <- list(
+    c("datasets","y_validation"), c("datasets","y_val"), c("datasets","y_test"),
+    c("y_validation"), c("y_val"), c("y_test"),
+    c("datasets","y_train"), c("y")
+  )
+  for (cand in cands) {
+    v <- .get_in(meta, cand); if (!is.null(v)) return(list(y=v, tag=paste(cand, collapse="/")))
+  }
+  NULL
+}
+
+.normalize_y <- function(y) {
+  if (is.null(y)) return(NULL)
+  if (is.list(y) && length(y) == 1L) y <- y[[1]]
+  if (is.data.frame(y)) y <- y[[1]]
+  if (is.matrix(y) && ncol(y) == 1L) y <- y[,1]
+  if (is.factor(y)) y <- as.integer(y) - 1L
+  as.numeric(y)
+}
+
+.align_by_names_safe <- function(Xi, Xref) {
+  Xi <- as.matrix(Xi)
+  if (is.null(Xref)) return(Xi)
+  Xref <- as.matrix(Xref)
+  if (is.null(colnames(Xi)) || is.null(colnames(Xref))) return(Xi)
+  keep <- intersect(colnames(Xref), colnames(Xi))
+  if (!length(keep)) return(Xi)
+  as.matrix(Xi[, keep, drop = FALSE])
+}
+
+.apply_scaling_if_any <- function(Xi, meta) {
+  center <- try(meta$preprocess$center, silent = TRUE)
+  scale_ <- try(meta$preprocess$scale,  silent = TRUE)
+  if (!inherits(center, "try-error") && !is.null(center) &&
+      !inherits(scale_,  "try-error") && !is.null(scale_)) {
+    if (!is.null(names(center)) && !is.null(colnames(Xi))) {
+      common <- intersect(names(center), colnames(Xi))
+      if (length(common)) {
+        Xi[, common] <- sweep(Xi[, common, drop = FALSE], 2, center[common], "-")
+        Xi[, common] <- sweep(Xi[, common, drop = FALSE], 2, scale_[common],  "/")
+      }
+    } else {
+      Xi <- scale(Xi, center = center, scale = scale_)
+    }
+  }
+  Xi
+}
+
+.as_pred_matrix <- function(pred) {
+  if (is.list(pred) && !is.null(pred$predicted_output)) pred <- pred$predicted_output
+  if (is.list(pred) && length(pred) == 1L && !is.matrix(pred)) pred <- pred[[1]]
+  if (is.null(pred) || length(pred) == 0) return(matrix(numeric(0), nrow = 0, ncol = 1))
+  if (is.data.frame(pred)) pred <- as.matrix(pred)
+  if (is.vector(pred)) pred <- matrix(as.numeric(pred), ncol = 1)
+  pred <- as.matrix(pred); storage.mode(pred) <- "double"; pred
+}
+
+.safe_run_predict <- function(X, meta, model_index = 1L, ML_NN = TRUE, ...) {
+  tryCatch(
+    .run_predict(X = X, meta = meta, model_index = model_index, ML_NN = ML_NN, ...),
+    error = function(e) { 
+      message(sprintf("  ! predict failed for %s: %s",
+                      as.character(meta$model_serial_num %||% "unknown"), conditionMessage(e)))
+      NULL
+    }
+  )
+}
+
+## PREDICT SHIM: .run_predict
+## Only defined if your pipeline hasn’t provided it.
+if (!exists(".run_predict", inherits = TRUE)) {
+  .run_predict <- function(X, meta, model_index = 1L, ML_NN = TRUE, ...) {
+    if (is.null(meta)) stop(".run_predict: 'meta' is NULL")
+    X <- as.matrix(X); storage.mode(X) <- "double"
+    if (nrow(X) == 0) return(list(predicted_output = matrix(numeric(0), nrow = 0, ncol = 1)))
+    
+    # Pull best records (weights/biases)
+    rec <- extract_best_records(meta, ML_NN = ML_NN, model_index = model_index)
+    
+    # Infer sizes
+    input_size  <- ncol(X)
+    hidden_sizes <- meta$hidden_sizes %||% meta$model$hidden_sizes %||% c(32L, 16L)
+    output_size <- as.integer(meta$output_size %||% 1L)
+    num_networks <- max(1L,
+                        as.integer(meta$num_networks %||% length(meta$best_weights_record) %||% 1L),
+                        model_index)
+    
+    N        <- as.integer(meta$N        %||% nrow(X))
+    lambda   <- as.numeric(meta$lambda   %||% 0)
+    init_method   <- meta$init_method   %||% "xavier"
+    custom_scale  <- meta$custom_scale  %||% NULL
+    activation_functions <- get0("activation_functions",
+                                 ifnotfound = meta$activation_functions %||% NULL,
+                                 inherits = TRUE)
+    ML_NN <- isTRUE(meta$ML_NN) || isTRUE(ML_NN)
+    
+    # Build a minimal DESONN and select SONN
+    main_model <- DESONN$new(
+      num_networks    = num_networks,
+      input_size      = input_size,
+      hidden_sizes    = hidden_sizes,
+      output_size     = output_size,
+      N               = N,
+      lambda          = lambda,
+      ensemble_number = 1L,
+      ensembles       = NULL,
+      ML_NN           = ML_NN,
+      method          = init_method,
+      custom_scale    = custom_scale
+    )
+    sonn_idx  <- min(model_index, length(main_model$ensemble))
+    model_obj <- main_model$ensemble[[sonn_idx]]
+    
+    # Stateless prediction (pass weights/biases directly)
+    out <- model_obj$predict(
+      Rdata   = X,
+      weights = rec$weights,
+      biases  = rec$biases,
+      activation_functions = activation_functions
+    )
+    
+    # Normalize return
+    pred <- out$predicted_output %||% out
+    if (is.list(pred) && length(pred) == 1L && !is.matrix(pred)) pred <- pred[[1]]
+    if (is.data.frame(pred)) pred <- as.matrix(pred)
+    if (is.vector(pred))     pred <- matrix(as.numeric(pred), ncol = 1)
+    pred <- as.matrix(pred); storage.mode(pred) <- "double"
+    
+    # If values look like logits, squash
+    if (any(pred < 0, na.rm = TRUE) || any(pred > 1, na.rm = TRUE)) {
+      pred <- plogis(pred)
+    }
+    
+    list(predicted_output = pred)
+  }
+}
+
+
 ##helpers for
 ## if (!isTRUE(do_ensemble)) else {} in TestDESONN.R
 
@@ -339,6 +504,9 @@ print_ensembles_summary <- function(ensembles_container,
 
 
 
+## helper for prune and add
+EMPTY_SLOT <- structure(list(.empty_slot = TRUE), class = "EMPTY_SLOT")
+is_empty_slot <- function(x) is.list(x) && inherits(x, "EMPTY_SLOT")
 
 
 
@@ -422,7 +590,8 @@ tune_threshold_accuracy <- function(predicted_output, labels,
     y_true_ids <- max.col(L, ties.method = "first")
   } else {
     cls <- as.integer(L[, 1]); if (min(cls, na.rm = TRUE) == 0L) cls <- cls + 1L
-    cls[cls < 1L] <- 1L; cls[cls > K] <- K
+    cls[cls < 1L] <- 1L
+    cls[cls > K] <- K
     y_true_ids <- cls
   }
   
@@ -490,7 +659,6 @@ tune_threshold_accuracy <- function(predicted_output, labels,
     metric_used    = metric
   ))
 }
-
 
 
 
@@ -649,7 +817,7 @@ summarize_grouped <- function(long_df) {
 
 # Sanitize a numeric threshold grid
 sanitize_grid <- function(grid, default = seq(0.05, 0.95, by = 0.01)) {
-  if (missing(grid) || is.null(grid) || is.function(grid) || is.environment(grid) || is.list(grid)) {
+  if (is.null(grid) || is.function(grid) || is.environment(grid) || is.list(grid)) {
     return(default)
   }
   g <- suppressWarnings(as.numeric(grid))
@@ -718,4 +886,174 @@ safe_eval_metrics <- function(y_pred_class, y_true01, verbose = FALSE) {
 }
 
 
+# =========================
+# Metric helpers (general)
+# =========================
 
+.metric_minimize <- get0(".metric_minimize", ifnotfound = function(metric_name) {
+  m <- tolower(metric_name)
+  
+  # metrics that should be minimized
+  minimize_patterns <- "(loss|mse|mae|rmse|logloss|cross.?entropy|error|nll)"
+  if (grepl(minimize_patterns, m)) return(TRUE)
+  
+  # explicit maximize overrides (always higher is better)
+  maximize_set <- c("accuracy", "precision", "recall", "f1", "ndcg", "clustering_quality_db")
+  if (m %in% maximize_set) return(FALSE)
+  
+  # default: maximize
+  FALSE
+})
+
+
+# Robust metric fetcher: searches performance_* and relevance_* (incl. nested)
+.get_metric_from_meta <- function(meta, metric_name) {
+  if (is.null(meta)) return(NA_real_)
+  # --- normalizer helpers ---
+  .norm <- function(x) tolower(gsub("[^a-z0-9]+", "", trimws(as.character(x))))
+  .is_num <- function(x) is.numeric(x) && length(x) == 1L && is.finite(x)
+  
+  # --- gather candidate maps (shallow + useful nested) ---
+  maps <- list()
+  if (!is.null(meta$performance_metric))    maps <- c(maps, list(performance_metric = meta$performance_metric))
+  if (!is.null(meta$performance_metrics))   maps <- c(maps, list(performance_metrics = meta$performance_metrics))
+  if (!is.null(meta$metrics))               maps <- c(maps, list(metrics = meta$metrics))
+  if (!is.null(meta$relevance_metric))      maps <- c(maps, list(relevance_metric = meta$relevance_metric))
+  if (!is.null(meta$relevance_metrics))     maps <- c(maps, list(relevance_metrics = meta$relevance_metrics))
+  
+  # specific nested commonly used in your structure
+  acc_tuned <- tryCatch(meta$performance_metric$accuracy_tuned, error = function(e) NULL)
+  if (!is.null(acc_tuned)) {
+    maps <- c(maps, list(accuracy_tuned = acc_tuned))
+    if (!is.null(acc_tuned$metrics)) maps <- c(maps, list(accuracy_tuned_metrics = acc_tuned$metrics))
+  }
+  
+  if (!length(maps)) return(NA_real_)
+  
+  # --- flatten maps into a single name -> value registry (depth <= 2–3) ---
+  key_norm   <- character()
+  key_raw    <- character()
+  val_store  <- list()
+  
+  .collect <- function(x, prefix = "") {
+    if (is.list(x)) {
+      for (nm in names(x)) {
+        child <- x[[nm]]
+        pfx <- if (nzchar(prefix)) paste0(prefix, ".", nm) else nm
+        if (is.list(child)) {
+          # one more level
+          .collect(child, pfx)
+        } else {
+          # atomic leaf
+          key_norm <<- c(key_norm, .norm(nm))
+          key_raw  <<- c(key_raw,  pfx)
+          val_store[[length(val_store) + 1L]] <<- child
+        }
+      }
+    } else {
+      # unnamed atomic (rare)
+      key_norm <<- c(key_norm, .norm(prefix))
+      key_raw  <<- c(key_raw, prefix)
+      val_store[[length(val_store) + 1L]] <<- x
+    }
+  }
+  
+  for (m in maps) .collect(m)
+  
+  # coerce to numeric where possible
+  vals_num <- suppressWarnings(as.numeric(unlist(val_store, use.names = FALSE)))
+  # keep only those that are actually numeric scalars
+  ok_num <- is.finite(vals_num)
+  key_norm <- key_norm[ok_num]
+  key_raw  <- key_raw[ok_num]
+  vals_num <- vals_num[ok_num]
+  if (!length(vals_num)) return(NA_real_)
+  
+  # --- aliasing for common names / variants ---
+  req <- .norm(metric_name)
+  alias <- list(
+    "accuracy"  = c("accuracy", "accuracypercent", "acc"),
+    "precision" = c("precision", "prec"),
+    "recall"    = c("recall", "tpr", "sensitivity"),
+    "f1"        = c("f1", "f1score", "f1_macro", "macrof1", "f1macro"),
+    "macro_f1"  = c("macrof1", "f1macro", "f1_macro"),
+    "micro_f1"  = c("microf1", "f1micro", "f1_micro"),
+    "ndcg"      = c("ndcg", "ndcg@5", "ndcg@10", "ndcg@k"),
+    "mse"       = c("mse"),
+    "mae"       = c("mae"),
+    "rmse"      = c("rmse"),
+    "top1"      = c("top1", "top_1", "top-1")
+  )
+  cand <- unique(c(alias[[req]] %||% character(0), req))
+  
+  # 1) exact (normalized) match
+  hit <- which(key_norm %in% cand)
+  # 2) fallback: contains match
+  if (!length(hit)) {
+    hit <- unlist(lapply(cand, function(k) which(grepl(k, key_norm, fixed = TRUE))))
+    hit <- unique(hit)
+  }
+  if (!length(hit)) return(NA_real_)
+  
+  # choose first finite numeric
+  vals <- vals_num[hit]
+  idx  <- which(is.finite(vals))[1L]
+  if (is.na(idx)) return(NA_real_)
+  vals[idx]
+}
+
+
+# utils.R
+# -------------------------------------------------------
+# Best-model finder by TARGET_METRIC (general, any kind)
+# Depends on: bm_list_all(), bm_select_exact(), .metric_minimize(), .get_metric_from_meta()
+# -------------------------------------------------------
+find_best_model <- function(target_metric_name_best,
+                            kind_filter  = c("Main","Temp"),
+                            ens_filter   = NULL,
+                            model_filter = NULL,
+                            dir = .BM_DIR) {
+  minimize <- .metric_minimize(target_metric_name_best)
+  
+  df <- bm_list_all(dir)
+  if (!nrow(df)) {
+    cat("\n==== FIND_BEST_MODEL ====\nNo candidates in env/RDS.\n")
+    return(list(best_row=NULL, meta=NULL, tbl=data.frame(), minimize=minimize))
+  }
+  
+  if (length(kind_filter))    df <- df[df$kind  %in% kind_filter, , drop = FALSE]
+  if (!is.null(ens_filter))   df <- df[df$ens   %in% ens_filter,  , drop = FALSE]
+  if (!is.null(model_filter)) df <- df[df$model %in% model_filter,, drop = FALSE]
+  if (!nrow(df)) {
+    cat("\n==== FIND_BEST_MODEL ====\nNo candidates after filters.\n")
+    return(list(best_row=NULL, meta=NULL, tbl=df, minimize=minimize))
+  }
+  
+  df$metric_value <- vapply(seq_len(nrow(df)), function(i) {
+    meta_i <- tryCatch(bm_select_exact(df$kind[i], df$ens[i], df$model[i], dir = dir), error = function(e) NULL)
+    if (is.null(meta_i)) return(NA_real_)
+    .get_metric_from_meta(meta_i, target_metric_name_best)
+  }, numeric(1))
+  
+  cat("\n==== FIND_BEST_MODEL (ANY KIND) ====\n")
+  ok <- is.finite(df$metric_value)
+  if (!any(ok)) {
+    print(df[, c("name","kind","ens","model","source")], row.names = FALSE)
+    cat("All metric values are NA/Inf for", target_metric_name_best, "\n")
+    return(list(best_row=NULL, meta=NULL, tbl=df, minimize=minimize))
+  }
+  
+  df_ok <- df[ok, , drop = FALSE]
+  ord   <- if (minimize) order(df_ok$metric_value) else order(df_ok$metric_value, decreasing = TRUE)
+  df_ok <- df_ok[ord, , drop = FALSE]
+  
+  top  <- df_ok[1, , drop = FALSE]
+  meta <- bm_select_exact(top$kind, top$ens, top$model, dir = dir)
+  
+  print(head(df_ok[, c("name","kind","ens","model","metric_value")], 10), row.names = FALSE)
+  cat(sprintf("→ Selected: %s | %s=%.6f (%s better)\n",
+              top$name, target_metric_name_best, top$metric_value,
+              if (minimize) "lower" else "higher"))
+  
+  list(best_row = top, meta = meta, tbl = df_ok, minimize = minimize)
+}
