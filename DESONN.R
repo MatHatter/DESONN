@@ -1,7 +1,7 @@
+source("utils/utils.R")
 source("optimizers.R")
 source("activation_functions.R")
 source("reports/evaluate_predictions_report.R")
-source("utils/utils.R")
 function(showlibraries){
   # Fake function for collapse feature.
   ## ====== REQUIRED PACKAGES (only if not already loaded) ======
@@ -3386,7 +3386,7 @@ DESONN <- R6Class(
         
         # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
 
-        performance_relevance_plots <- self$update_performance_and_relevance(
+        performance_relevance_data <- self$update_performance_and_relevance(
           Rdata                        = Rdata,
           labels                       = labels,
           X_validation                 = X_validation,
@@ -3537,13 +3537,13 @@ DESONN <- R6Class(
         .idx <- new.env(parent = emptyenv())
         
         # Map each holder to its config flag name (keys must match your config fields)
-        .walk_save_view(performance_relevance_plots$performance_high_mean_plots, "performance_high_mean",
+        .walk_save_view(performance_relevance_data$performance_high_mean_plots, "performance_high_mean",
                         .idx, "performance_high_mean_plots")
-        .walk_save_view(performance_relevance_plots$performance_low_mean_plots,  "performance_low_mean",
+        .walk_save_view(performance_relevance_data$performance_low_mean_plots,  "performance_low_mean",
                         .idx, "performance_low_mean_plots")
-        .walk_save_view(performance_relevance_plots$relevance_high_mean_plots,   "relevance_high_mean",
+        .walk_save_view(performance_relevance_data$relevance_high_mean_plots,   "relevance_high_mean",
                         .idx, "relevance_high_mean_plots")
-        .walk_save_view(performance_relevance_plots$relevance_low_mean_plots,    "relevance_low_mean",
+        .walk_save_view(performance_relevance_data$relevance_low_mean_plots,    "relevance_low_mean",
                         .idx, "relevance_low_mean_plots")
         
         invisible(NULL)
@@ -3567,7 +3567,7 @@ DESONN <- R6Class(
         
       }
       
-      return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, threshold = threshold_used, thresholds = thresholds_used, accuracy = eval_result$accuracy, accuracy_percent = eval_result$accuracy_percent, metrics = if (!is.null(eval_result$metrics)) eval_result$metrics else NULL, misclassified = if (!is.null(eval_result$misclassified)) eval_result$misclassified else NULL))
+      return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, threshold = threshold_used, thresholds = thresholds_used, accuracy = eval_result$accuracy, accuracy_percent = eval_result$accuracy_percent, metrics = if (!is.null(eval_result$metrics)) eval_result$metrics else NULL, misclassified = if (!is.null(eval_result$misclassified)) eval_result$misclassified else NULL, performance_relevance_data  = performance_relevance_data))
     }
     , # Method for updating performance and relevance metrics
     
@@ -4687,84 +4687,6 @@ lamb_update <- function(params, grads, lr, beta1, beta2, eps, lambda) {
   ))
 }
 
-lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, lookahead_step, base_optimizer, epoch, lambda) {
-  updated_params_list <- list()
-  
-  cat(">> Lookahead optimizer running\n")
-  
-  # grads_list is just the matrix for this layer
-  grad_matrix <- if (is.list(grads_list)) grads_list[[1]] else grads_list
-  
-  if (is.null(grad_matrix)) stop("Missing gradient matrix")
-  
-  # ✅ FIXED: Don't double-index
-  param_list <- params
-  
-  param <- param_list$param
-  m <- param_list$m
-  v <- param_list$v
-  r <- param_list$r
-  slow_param <- param_list$slow_weights
-  lookahead_counter <- param_list$lookahead_counter
-  lookahead_step_layer <- param_list$lookahead_step
-  
-  if (is.null(lookahead_counter)) {
-    lookahead_counter <- 0
-    cat("Initialized lookahead_counter = 0\n")
-  }
-  
-  if (is.null(lookahead_step_layer)) {
-    lookahead_step_layer <- lookahead_step
-  }
-  
-  if (base_optimizer == "adam_update") {
-    m <- beta1 * m + (1 - beta1) * grad_matrix
-    v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
-    
-    m_hat <- m / (1 - beta1^epoch)
-    v_hat <- v / (1 - beta2^epoch)
-    
-    update <- lr * m_hat / (sqrt(v_hat) + epsilon)
-    param <- param - update
-    
-  } else if (base_optimizer == "lamb_update") {
-    m <- beta1 * m + (1 - beta1) * grad_matrix
-    v <- beta2 * v + (1 - beta2) * (grad_matrix^2)
-    
-    m_hat <- m / (1 - beta1^epoch)
-    v_hat <- v / (1 - beta2^epoch)
-    
-    r1 <- sqrt(sum(param^2))
-    r2 <- sqrt(sum((m_hat / (sqrt(v_hat) + epsilon))^2))
-    ratio <- ifelse(r1 == 0 | r2 == 0, 1, r1 / r2)
-    
-    update <- lr * ratio * m_hat / (sqrt(v_hat) + epsilon)
-    param <- param - update
-    
-  } else {
-    stop("Unsupported base optimizer in lookahead_update()")
-  }
-  
-  lookahead_counter <- lookahead_counter + 1
-  if (lookahead_counter >= lookahead_step_layer) {
-    cat(">> Lookahead sync\n")
-    slow_param <- param
-    lookahead_counter <- 0
-  }
-  
-  updated_params_list <- list(
-    param = param,
-    m = m,
-    v = v,
-    r = r,
-    slow_weights = slow_param,
-    lookahead_counter = lookahead_counter,
-    lookahead_step = lookahead_step_layer,
-    weights_update = update
-  )
-  
-  return(updated_params_list)
-}
 
 clip_gradient_norm <- function(gradient, min_norm = 1e-3, max_norm = 5) {
   if (any(is.na(gradient)) || all(gradient == 0)) return(gradient)
@@ -5147,23 +5069,60 @@ topographic_error <- function(SONN, Rdata, threshold, verbose = FALSE) {
   X <- as.matrix(Rdata)
   storage.mode(W) <- "double"; storage.mode(X) <- "double"
   
+  # ---------- ALIGN W to X (prevents sweep() length warnings) ----------
+  align_to_X <- function(W, X) {
+    # Name-aware alignment if both have colnames
+    if (!is.null(colnames(W)) && !is.null(colnames(X))) {
+      wanted <- colnames(X)
+      miss <- setdiff(wanted, colnames(W))
+      if (length(miss)) {
+        W <- cbind(W, matrix(0, nrow = nrow(W), ncol = length(miss),
+                             dimnames = list(NULL, miss)))
+      }
+      # drop extras and reorder to X's order
+      W <- W[, wanted, drop = FALSE]
+      return(W)
+    }
+    # Fallback: align by width only
+    kx <- ncol(X); kw <- ncol(W)
+    if (kw > kx) {
+      W[, seq_len(kx), drop = FALSE]
+    } else if (kw < kx) {
+      cbind(W, matrix(0, nrow = nrow(W), ncol = kx - kw))
+    } else {
+      W
+    }
+  }
+  W <- align_to_X(W, X)
+  
   m <- nrow(W); n <- nrow(X)
   if (m < 2L || n < 1L) return(NA_real_)
   
-  # if map size doesn't match units, rebuild a compact grid
+  # If map size doesn't match units, rebuild a compact grid
   if (length(M) != m) {
     r <- max(1L, floor(sqrt(m))); while (m %% r && r > 1L) r <- r - 1L
     c <- max(1L, m %/% r)
     M <- matrix(seq_len(m), nrow = r, ncol = c, byrow = TRUE)
   }
   
-  # distances X -> each unit
-  D <- matrix(0, n, m)
-  for (j in 1:m) {
-    diffj <- sweep(X, 2, W[j, ], "-")
-    D[, j] <- rowSums(diffj * diffj)
+  if (isTRUE(verbose)) {
+    cat(sprintf("[topo] dim(X)=%dx%d | dim(W)=%dx%d | units=%d\n",
+                nrow(X), ncol(X), nrow(W), ncol(W), m))
+    if (!is.null(colnames(X)) && !is.null(colnames(W))) {
+      same_names <- identical(colnames(X), colnames(W))
+      cat("[topo] colnames(X)==colnames(W): ", same_names, "\n", sep = "")
+    }
   }
-  bmu  <- max.col(-D, ties.method = "first")
+  
+  # ---------- Fast pairwise squared distances: no sweep(), no warnings ----------
+  # D_ij = ||X_i||^2 + ||W_j||^2 - 2 * X_i · W_j
+  X2 <- rowSums(X * X)                  # n x 1
+  W2 <- rowSums(W * W)                  # m x 1
+  G  <- X %*% t(W)                      # n x m
+  D  <- matrix(X2, n, m) + matrix(W2, n, m, byrow = TRUE) - 2 * G
+  
+  # BMU / second-BMU
+  bmu <- max.col(-D, ties.method = "first")
   D[cbind(seq_len(n), bmu)] <- Inf
   sbmu <- max.col(-D, ties.method = "first")
   
@@ -5176,7 +5135,8 @@ topographic_error <- function(SONN, Rdata, threshold, verbose = FALSE) {
   
   dgrid <- sqrt(rowSums((coords[bmu, , drop = FALSE] - coords[sbmu, , drop = FALSE])^2))
   err <- mean(dgrid > 1)
-  # if (isTRUE(verbose)) { print("topographic error"); print(err) }
+  
+  if (isTRUE(verbose)) cat("[topo] error =", err, "\n")
   err
 }
 
@@ -5773,32 +5733,126 @@ f1_score <- function(SONN, Rdata, labels, predicted_output, verbose) {
   # if (verbose) { print("F1 Score complete") }
 }
 
-accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
-                           metric_for_tuning = c("accuracy", "f1", "precision", "recall",
-                                                 "macro_f1", "macro_precision", "macro_recall"),
-                           threshold_grid = seq(0.05, 0.95, by = 0.01),
-                           verbose = FALSE) {
-  grid <- threshold_grid
+accuracy_tuned <- function(
+    SONN, Rdata, labels, predicted_output,
+    metric_for_tuning = c("accuracy", "f1", "precision", "recall",
+                          "macro_f1", "macro_precision", "macro_recall"),
+    threshold_grid = seq(0.05, 0.95, by = 0.01),
+    verbose = FALSE
+) {
   metric_for_tuning <- match.arg(metric_for_tuning)
+  grid <- sanitize_grid(threshold_grid)
   
-  # --- Sanitize 'grid' (avoid NULL, package env 'grid', lists, NAs, unsorted) ---
-  if (missing(grid) || is.null(grid) || is.function(grid) ||
-      is.environment(grid) || is.list(grid)) {
-    grid <- seq(0.05, 0.95, by = 0.01)
-  } else {
-    grid <- suppressWarnings(as.numeric(grid))
-    grid <- unique(grid[is.finite(grid)])
-    if (!length(grid)) grid <- seq(0.05, 0.95, by = 0.01)
+  # --- helpers (local, no deps) ---
+  .to_matrix <- function(x) { x <- as.matrix(x); storage.mode(x) <- "double"; x }
+  .labels_to_ids <- function(L) {
+    # If already a vector of class ids (1..K), return as-is (numeric/integer).
+    if (is.null(dim(L))) return(as.integer(L))
+    # Otherwise assume one-hot / probability matrix → argmax
+    max.col(L, ties.method = "first")
+  }
+  .binary_metrics <- function(y_true01, y_pred01) {
+    y_true01 <- as.integer(y_true01); y_pred01 <- as.integer(y_pred01)
+    TP <- sum(y_true01 == 1L & y_pred01 == 1L, na.rm = TRUE)
+    FP <- sum(y_true01 == 0L & y_pred01 == 1L, na.rm = TRUE)
+    FN <- sum(y_true01 == 1L & y_pred01 == 0L, na.rm = TRUE)
+    denom_p <- TP + FP; denom_r <- TP + FN
+    precision <- if (denom_p > 0) TP / denom_p else 0
+    recall    <- if (denom_r > 0) TP / denom_r else 0
+    F1        <- if ((precision + recall) > 0) 2 * precision * recall / (precision + recall) else 0
+    list(precision = as.numeric(precision),
+         recall = as.numeric(recall),
+         F1 = as.numeric(F1))
+  }
+  .macro_metrics <- function(y_true_ids, y_pred_ids, K = NULL) {
+    y_true_ids <- as.integer(y_true_ids)
+    y_pred_ids <- as.integer(y_pred_ids)
+    if (is.null(K)) K <- max(c(y_true_ids, y_pred_ids), na.rm = TRUE)
+    prec <- rec <- f1 <- numeric(K)
+    for (k in seq_len(K)) {
+      TP <- sum(y_true_ids == k & y_pred_ids == k, na.rm = TRUE)
+      FP <- sum(y_true_ids != k & y_pred_ids == k, na.rm = TRUE)
+      FN <- sum(y_true_ids == k & y_pred_ids != k, na.rm = TRUE)
+      p  <- if (TP + FP > 0) TP / (TP + FP) else 0
+      r  <- if (TP + FN > 0) TP / (TP + FN) else 0
+      f  <- if ((p + r) > 0) 2 * p * r / (p + r) else 0
+      prec[k] <- p; rec[k] <- r; f1[k] <- f
+    }
+    list(precision = mean(prec), recall = mean(rec), F1 = mean(f1))
   }
   
+  # --- coerce to matrices for existing utilities you have ---
+  L <- .to_matrix(labels)
+  P <- .to_matrix(predicted_output)
   
-  # --- Shapes ---
-  L <- as.matrix(labels); storage.mode(L) <- "double"
-  P <- as.matrix(predicted_output); storage.mode(P) <- "double"
-  K <- max(ncol(L), ncol(P))
-  if (K < 1L) K <- 1L
+  # --- binary vs multiclass inference (use your existing inferer if available) ---
+  is_binary <- FALSE
+  if (exists("infer_is_binary", mode = "function")) {
+    bin_info <- infer_is_binary(L, P); is_binary <- isTRUE(bin_info$is_binary)
+  } else {
+    is_binary <- (max(ncol(L), ncol(P)) <= 1L)
+  }
   
-  # --- Tune thresholds (single source of truth) ---
+  if (is_binary) {
+    # Labels → 0/1 vector
+    if (exists("labels_to_binary_vec", mode = "function")) {
+      Lb <- labels_to_binary_vec(L)
+    } else {
+      # fallback: if matrix with one col, assume 0/1 already
+      Lb <- as.integer(L[, 1] > 0.5)
+    }
+    if (is.null(Lb)) stop("Binary inferred, but labels cannot be coerced to {0,1}.")
+    
+    # Predictions → positive-class probability
+    if (exists("preds_to_pos_prob", mode = "function")) {
+      Ppos <- preds_to_pos_prob(P)
+    } else {
+      Ppos <- as.numeric(P)  # assume already a prob col
+    }
+    if (is.null(Ppos)) stop("Binary inferred, but predictions cannot be coerced to a single probability column.")
+    
+    # Tune threshold
+    thr_res <- tune_threshold_accuracy(
+      predicted_output = matrix(Ppos, ncol = 1L),
+      labels           = matrix(Lb,   ncol = 1L),
+      metric           = metric_for_tuning,
+      threshold_grid   = grid,
+      verbose          = FALSE
+    )
+    best_t <- as.numeric(thr_res$thresholds[1])
+    
+    # Classify
+    y_pred_class <- as.integer(Ppos >= best_t)
+    
+    # Accuracy (use your accuracy() to keep semantics)
+    acc_prop <- accuracy(
+      SONN = SONN, Rdata = Rdata,
+      labels = matrix(Lb, ncol = 1L),
+      predicted_output = matrix(y_pred_class, ncol = 1L),
+      verbose = FALSE
+    )
+    acc_prop <- as.numeric(acc_prop)
+    
+    # Binary metrics
+    m <- .binary_metrics(Lb, y_pred_class)
+    
+    return(list(
+      accuracy  = acc_prop,
+      precision = m$precision,
+      recall    = m$recall,
+      F1        = m$F1,
+      details   = list(
+        best_threshold  = best_t,
+        best_thresholds = thr_res$thresholds,  # keep vector (best first)
+        y_pred_class    = y_pred_class,
+        grid_used       = grid
+      )
+    ))
+  }
+  
+  # ---------------- Multiclass ----------------
+  K <- max(ncol(L), ncol(P)); if (K < 1L) K <- 1L
+  
   thr_res <- tune_threshold_accuracy(
     predicted_output = P,
     labels           = L,
@@ -5806,83 +5860,42 @@ accuracy_tuned <- function(SONN, Rdata, labels, predicted_output,
     threshold_grid   = grid,
     verbose          = FALSE
   )
-  best_thresholds <- thr_res$thresholds  # len 1 (binary) or len K (multiclass)
+  best_thresholds <- thr_res$thresholds
+  pred_ids        <- thr_res$y_pred_class  # 1..K
   
-  # if (verbose) {
-  #   if (length(best_thresholds) == 1L) {
-  #     message(sprintf("Best threshold (%s-optimized): %.3f",
-  #                     metric_for_tuning, as.numeric(best_thresholds)))
-  #   } else {
-  #     message(sprintf("Best per-class thresholds (%s-optimized): %s",
-  #                     metric_for_tuning, paste0(sprintf("%.3f", best_thresholds), collapse = ", ")))
-  #   }
-  # }
+  # One-hot for your existing accuracy()
+  N <- if (!is.null(nrow(P))) nrow(P) else length(pred_ids)
+  P_for_acc <- one_hot_from_ids(pred_ids, K = K, N = N)
   
-  # --- Build predictions in the format your accuracy() expects ---
-  if (K == 1L) {
-    # Binary
-    labels_flat <- as.integer(ifelse(as.vector(L) > 0, 1L, 0L))
-    best_t <- as.numeric(best_thresholds)
-    binary_preds <- as.integer(as.vector(P) >= best_t)
-    P_for_acc <- matrix(binary_preds, ncol = 1L)
-    
-    # Accuracy via your main metric
-    acc_prop <- accuracy(SONN = SONN, Rdata = Rdata,
-                         labels = L, predicted_output = P_for_acc,
-                         verbose = FALSE)
-    acc_percent <- acc_prop * 100
-    
-    # if (verbose) {
-    #   message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
-    #   message(sprintf("Accuracy (binary @ tuned threshold): %.6f (%.3f%%)", acc_prop, acc_percent))
-    # }
-    
-    # Optional: precision/recall/F1 (only if you have this helper)
-    metrics <- tryCatch(
-      evaluate_classification_metrics(binary_preds, labels_flat),
-      error = function(e) { if (verbose) message("metrics error: ", e$message); NULL }
-    )
-    
-    return(list(
-      accuracy          = as.numeric(acc_prop),
-      accuracy_percent  = as.numeric(acc_percent),
-      best_threshold    = best_t,          # scalar for binary
-      best_thresholds   = best_thresholds, # length-1 vector (kept for consistency)
-      y_pred_class      = binary_preds,    # 0/1
-      metrics           = metrics,
-      grid_used         = grid
-    ))
-    
-  } else {
-    # Multiclass
-    pred_ids <- thr_res$y_pred_class  # class ids (1..K), already thresholded OVR with fallback
-    
-    # one-hot for your accuracy()
-    N <- nrow(P)
-    if (N == 0L) N <- length(pred_ids)
-    P_for_acc <- matrix(0, nrow = N, ncol = K)
-    P_for_acc[cbind(seq_len(N), pred_ids)] <- 1
-    
-    # Accuracy via your main metric
-    acc_prop <- accuracy(SONN = SONN, Rdata = Rdata,
-                         labels = L, predicted_output = P_for_acc,
-                         verbose = FALSE)
-    acc_percent <- acc_prop * 100
-    
-    # if (verbose) {
-    #   message(sprintf("Accuracy (multiclass @ tuned thresholds): %.6f (%.3f%%)", acc_prop, acc_percent))
-    # }
-    
-    return(list(
-      accuracy          = as.numeric(acc_prop),
-      accuracy_percent  = as.numeric(acc_percent),
-      best_threshold    = NA_real_,        # no single scalar in multiclass
-      best_thresholds   = best_thresholds, # length-K vector
-      y_pred_class      = pred_ids,        # 1..K
-      metrics           = NULL,            # keep simple; compute macro metrics elsewhere if needed
-      grid_used         = grid
-    ))
+  acc_prop <- accuracy(
+    SONN = SONN, Rdata = Rdata,
+    labels = L,
+    predicted_output = P_for_acc,
+    verbose = FALSE
+  )
+  acc_prop <- as.numeric(acc_prop)
+  
+  # Macro metrics at the tuned thresholds
+  true_ids <- .labels_to_ids(L)
+  mm <- .macro_metrics(true_ids, pred_ids, K = K)
+  
+  if (verbose) {
+    message(sprintf("[Multiclass] acc = %.6f | macro P=%.6f R=%.6f F1=%.6f",
+                    acc_prop, mm$precision, mm$recall, mm$F1))
   }
+  
+  list(
+    accuracy  = acc_prop,
+    precision = mm$precision,
+    recall    = mm$recall,
+    F1        = mm$F1,
+    details   = list(
+      best_threshold  = NA_real_,         # per-class thresholds provided below
+      best_thresholds = best_thresholds,  # length K
+      y_pred_class    = pred_ids,         # integers 1..K
+      grid_used       = grid
+    )
+  )
 }
 
 
