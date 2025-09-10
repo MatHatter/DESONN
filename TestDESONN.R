@@ -21,7 +21,7 @@ lr_decay_rate  <- 0.5
 lr_decay_epoch <- 20
 lr_min <- 1e-6
 lambda <- 0.0003
-num_epochs <- 117
+num_epochs <- 3
 validation_metrics <- TRUE
 test_metrics <- TRUE
 custom_scale <- .05
@@ -34,8 +34,10 @@ update_biases <- TRUE
 # hidden_sizes <- NULL
 hidden_sizes <- c(64, 32)
 
+
 # Activation functions applied in forward pass during prediction | predict(). # hidden layers + output layer
-activation_functions <- list(relu, relu, sigmoid)  
+# activation_functions <- list(relu, relu, sigmoid)  
+activation_functions <- list(relu, relu, softmax)  
 
 # Activation functions applied in forward pass during training | learn() # You can keep them the same as predict() or customize, e.g. list(relu, selu, sigmoid) 
 activation_functions_learn <- activation_functions
@@ -44,158 +46,428 @@ loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'Categorical
 
 dropout_rates <- list(0.1) # NULL for output layer
 
-
+# =========================
+# Settings & Mode
+# =========================
 threshold_function <- tune_threshold_accuracy
 # threshold <- .98  # Classification threshold (not directly used in Random Forest)
 
 dropout_rates_learn <- dropout_rates
 
 num_layers <- length(hidden_sizes) + 1
-output_size <- 1  # For binary classification
-# Load the dataset
-data <- read.csv("C:/Users/wfky1/Downloads/heart_failure_clinical_records.csv")
 
-# Check for missing values
-sum(is.na(data))
+## =========================
+## Classification mode
+## =========================
+CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "auto"
 
-
-# Assuming there are no missing values, or handle them if they exist
-# Convert categorical variables to factors if any
-data <- data %>%
-  mutate(across(where(is.character), as.factor))
-
-input_columns <- setdiff(colnames(data), "DEATH_EVENT")
-Rdata <- data[, input_columns]
-labels <- data$DEATH_EVENT
-input_size <- ncol(Rdata)
-
-if(!ML_NN) {
-  N <- input_size + output_size  # Multiplier for data generation (not directly applicable here)
+## -------------------------
+## Load the dataset
+## -------------------------
+if (CLASSIFICATION_MODE == "binary") {
+  data <- read.csv("data/heart_failure_clinical_records.csv")
+  dependent_variable <- "DEATH_EVENT"
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  data <- read.csv("data/train_multiclass_customer_segmentation.csv")
+  dependent_variable <- "Segmentation"
 } else {
-  N <- input_size + sum(hidden_sizes) + output_size
+  stop("CLASSIFICATION_MODE must be 'binary' or 'multiclass'")
 }
 
+## Quick NA check
+na_count <- sum(is.na(data))
+cat("[split] NA count:", na_count, "\n")
+# Handle NAs if you have to, e.g.:
+# data <- tidyr::drop_na(data)
 
-library(readxl)
+## Ensure character columns become factors (for y in multiclass, etc.)
+data <- data %>% dplyr::mutate(dplyr::across(where(is.character), as.factor))
 
+## -------------------------
+## Features/labels (full)
+## -------------------------
+input_columns <- setdiff(colnames(data), dependent_variable)
+Rdata  <- data[, input_columns, drop = FALSE]
+labels <- data[, dependent_variable, drop = FALSE]  # keep as data.frame (1 col)
 
+## Optional: numeric columns (unused below but preserved)
+if (CLASSIFICATION_MODE == "binary") {
+  numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction',
+                       'platelets', 'serum_creatinine', 'serum_sodium', 'time')
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  numeric_columns <- c("Age", "Work_Experience", "Family_Size")
+}
 
-# Split the data into features (X) and target (y)
-X <- data %>% dplyr::select(-DEATH_EVENT)
-y <- data %>% dplyr::select(DEATH_EVENT)
+## -------------------------
+## Finalize sizes BEFORE SONN$new
+## -------------------------
+input_size  <- ncol(Rdata)
+if (CLASSIFICATION_MODE == "binary") {
+  output_size <- 1L
+} else {
+  # we'll infer K later from factor levels at training time
+  output_size <- NA_integer_
+}
 
-# cols_to_remove <- names(p_values)[p_values > 0.05]
-#
-# # Remove those columns from the dataset
-# X_reduced <- X %>% select(-all_of(cols_to_remove))
+if (!ML_NN) {
+  N <- input_size + ifelse(is.na(output_size), 0L, output_size)
+} else {
+  N <- input_size + sum(hidden_sizes) + ifelse(is.na(output_size), 0L, output_size)
+}
 
-# columns_to_remove <- c("anaemia", "diabetes", "high_blood_pressure", "platelets", "serum_sodium", "sex", "smoking", "time")
-
-# Remove specified columns
-# data_reduced <- data %>% select(-all_of(columns_to_remove))
-numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction', 'platelets',  'serum_creatinine', 'serum_sodium', 'time')
-
-# Split the data into features (X) and target (y)
-# X <- data_reduced %>% select(-DEATH_EVENT)
-y <- data %>% dplyr::select(DEATH_EVENT)
+## ------------------------------------------------------------
+## Split the data into features (X) and target (y)
+## ------------------------------------------------------------
+X <- data %>% dplyr::select(-dplyr::all_of(dependent_variable))
+y <- data %>% dplyr::select(dplyr::all_of(dependent_variable))
 colname_y <- colnames(y)
-# Define the number of samples for each set
+
+## -------------------------
+## Robust split
+## -------------------------
 
 total_num_samples <- nrow(data)
-# Define num_samples
-num_samples <- if (!missing(total_num_samples)) total_num_samples else num_samples
-num_validation_samples <- 800
-num_test_samples <- 800
-num_training_samples <- total_num_samples - num_validation_samples - num_test_samples
 
-# Create a random permutation of row indices
-indices <- sample(1:total_num_samples)
+# Choose desired sizes (guarded)
+desired_val  <- 800L
+desired_test <- 800L
 
-# Split the indices into training, validation, and test sets
-train_indices <- indices[1:num_training_samples]
-validation_indices <- indices[(num_training_samples + 1):(num_training_samples + num_validation_samples)]
-test_indices <- indices[(num_training_samples + num_validation_samples + 1):total_num_samples]
+# Cap them so they never exceed data size
+num_validation_samples <- min(desired_val,  floor(total_num_samples / 3))
+num_test_samples       <- min(desired_test, floor((total_num_samples - num_validation_samples) / 2))
+num_training_samples   <- total_num_samples - num_validation_samples - num_test_samples
 
-# Create training, validation, and test sets
-X_train <- X[train_indices, ]
-y_train <- y[train_indices, ]
+if (num_training_samples <= 0) {
+  stop(sprintf("[split] Not enough samples: total=%d, would yield train=%d, val=%d, test=%d",
+               total_num_samples, num_training_samples, num_validation_samples, num_test_samples))
+}
 
-X_validation <- X[validation_indices, ]
-y_validation <- y[validation_indices, ]
+cat(sprintf("[split] total=%d | train=%d | val=%d | test=%d\n",
+            total_num_samples, num_training_samples, num_validation_samples, num_test_samples))
 
-X_test <- X[test_indices, ]
-y_test <- y[test_indices, ]
+# Indices (no overlap)
+indices <- sample.int(total_num_samples)
+train_indices      <- indices[seq_len(num_training_samples)]
+validation_indices <- indices[seq(from = num_training_samples + 1,
+                                  length.out = num_validation_samples)]
+test_indices       <- indices[seq(from = num_training_samples + num_validation_samples + 1,
+                                  length.out = num_test_samples)]
 
-# ===== APPLY LOG TRANSFORMATION =====
-# Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
-# X_train$creatinine_phosphokinase <- pmin(X_train$creatinine_phosphokinase, 3000)
+# Sanity: check disjointness
+stopifnot(length(intersect(train_indices, validation_indices)) == 0)
+stopifnot(length(intersect(train_indices, test_indices)) == 0)
+stopifnot(length(intersect(validation_indices, test_indices)) == 0)
+
+## ------------------------------------------------------------
+## Create training, validation, and test sets (RAW, prior to scaling)
+## ------------------------------------------------------------
+X_train <- X[train_indices, , drop = FALSE]
+y_train <- y[train_indices, , drop = FALSE]
+
+X_validation <- X[validation_indices, , drop = FALSE]
+y_validation <- y[validation_indices, , drop = FALSE]
+
+X_test <- X[test_indices, , drop = FALSE]
+y_test <- y[test_indices, , drop = FALSE]
+
+## Post-split assertions/prints
+cat(sprintf("[split] dims: X_train=%d×%d | y_train=%d×%d\n",
+            nrow(X_train), ncol(X_train), nrow(y_train), ncol(y_train)))
+cat(sprintf("[split] dims: X_val  =%d×%d | y_val  =%d×%d\n",
+            nrow(X_validation), ncol(X_validation), nrow(y_validation), ncol(y_validation)))
+cat(sprintf("[split] dims: X_test =%d×%d | y_test =%d×%d\n",
+            nrow(X_test), ncol(X_test), nrow(y_test), ncol(y_test)))
+
+# Extra guard: for multiclass, ensure factor levels are consistent across splits
+if (CLASSIFICATION_MODE == "multiclass") {
+  # Force y to factor with global levels from the full dataset
+  all_levels <- levels(as.factor(unlist(y)))
+  y_train[[1]]      <- factor(y_train[[1]], levels = all_levels)
+  y_validation[[1]] <- factor(y_validation[[1]], levels = all_levels)
+  y_test[[1]]       <- factor(y_test[[1]], levels = all_levels)
+  # Optionally drop unused levels in each split if your code expects it
+  # y_train[[1]]      <- droplevels(y_train[[1]])
+  # y_validation[[1]] <- droplevels(y_validation[[1]])
+  # y_test[[1]]       <- droplevels(y_test[[1]])
+}
+
+## IMPORTANT:
+## When you train, pass X_train / y_train — NOT the full Rdata/labels.
+## Likewise, for validation, forward X_validation and compare with y_validation.
+
+# ===== OPTIONAL LOG TRANSFORMATION (example commented) =====
+# X_train$creatinine_phosphokinase      <- pmin(X_train$creatinine_phosphokinase, 3000)
 # X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
-# X_test$creatinine_phosphokinase <- pmin(X_test$creatinine_phosphokinase, 3000)
+# X_test$creatinine_phosphokinase       <- pmin(X_test$creatinine_phosphokinase, 3000)
 
-
-
-# $$$$$$$$$$$$$ Feature scaling without leakage (standardization first)
-X_train_scaled <- scale(X_train)
-center <- attr(X_train_scaled, "scaled:center")
-scale_ <- attr(X_train_scaled, "scaled:scale")
-
-X_validation_scaled <- scale(X_validation, center = center, scale = scale_)
-X_test_scaled <- scale(X_test, center = center, scale = scale_)
-
-# $$$$$$$$$$$$$ Further rescale to prevent exploding activations
-max_val <- max(abs(X_train_scaled))
-if (max_val > 1) {
-  # Rdata <- Rdata / max_val  # range will be roughly [-1, 1]  (Rdata not defined here)
+# ------------------------------------------------------------
+# BINARY PATH (untouched)  vs  MULTICLASS PATH (make numeric + labels)
+# ------------------------------------------------------------
+if (CLASSIFICATION_MODE == "binary") {
+  
+  # $$$$$$$$$$$$$ Feature scaling without leakage (standardization first)
+  X_train_scaled <- scale(X_train)
+  center <- attr(X_train_scaled, "scaled:center")
+  scale_ <- attr(X_train_scaled, "scaled:scale")
+  
+  X_validation_scaled <- scale(X_validation, center = center, scale = scale_)
+  X_test_scaled       <- scale(X_test,       center = center, scale = scale_)
+  
+  # $$$$$$$$$$$$$ Further rescale to prevent exploding activations (keep parity)
+  max_val <- suppressWarnings(max(abs(X_train_scaled)))
+  if (!is.finite(max_val) || is.na(max_val) || max_val == 0) max_val <- 1
+  
+  X_train_scaled      <- X_train_scaled      / max_val
+  X_validation_scaled <- X_validation_scaled / max_val
+  X_test_scaled       <- X_test_scaled       / max_val
+  
+  # ==============================================================
+  # Choose whether to use scaled or raw data for NN training
+  # ==============================================================
+  scaledData <- TRUE   # <<<<<< set to FALSE to use raw data
+  
+  if (isTRUE(scaledData)) {
+    X <- as.matrix(X_train_scaled)
+    y <- as.matrix(y_train)
+    
+    X_validation <- as.matrix(X_validation_scaled)
+    y_validation <- as.matrix(y_validation)
+    
+    X_test <- as.matrix(X_test_scaled)
+    y_test <- as.matrix(y_test)
+  } else {
+    X <- as.matrix(X_train)
+    y <- as.matrix(y_train)
+    
+    X_validation <- as.matrix(X_validation)
+    y_validation <- as.matrix(y_validation)
+    
+    X_test <- as.matrix(X_test)
+    y_test <- as.matrix(y_test)
+  }
+  
+  colnames(y) <- colname_y
+  
+  # ----- diagnostics (binary has no one-hot by design) -----
+  cat("=== Unscaled Rdata summary (X_train) ===\n")
+  print(summary(as.vector(as.matrix(X_train))))
+  cat("First 5 rows of unscaled X_train:\n")
+  print(as.matrix(X_train)[1:5, 1:min(5, ncol(X_train)), drop = FALSE])
+  
+  cat("=== Scaled Rdata summary (X_train_scaled) ===\n")
+  print(summary(as.vector(as.matrix(X_train_scaled))))
+  cat("First 5 rows of scaled X_train_scaled:\n")
+  print(as.matrix(X_train_scaled)[1:5, 1:min(5, ncol(X_train_scaled)), drop = FALSE])
+  
+  cat("Dimensions of scaled sets:\n")
+  cat("Training:",   dim(X), "\n")
+  cat("Validation:", dim(X_validation), "\n")
+  cat("Test:",       dim(X_test), "\n")
+  
+  cat("Any NAs in scaled sets:\n")
+  cat("Training:",   anyNA(X), "\n")
+  cat("Validation:", anyNA(X_validation), "\n")
+  cat("Test:",       anyNA(X_test), "\n")
+  
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  
+  cat("\n==================== [MC] START ====================\n")
+  
+  # ---------- A) Row-ID setup so we can align y to X ----------
+  # Ensure row names on split frames reflect original row indices
+  if (is.null(rownames(X_train)))      rownames(X_train)      <- as.character(train_indices)
+  if (is.null(rownames(X_validation))) rownames(X_validation) <- as.character(validation_indices)
+  if (is.null(rownames(X_test)))       rownames(X_test)       <- as.character(test_indices)
+  
+  # ---------- A0) Numeric imputation with TRAIN medians (prevents NA drops downstream) ----------
+  impute_with_train_median <- function(df_train, df_other) {
+    num_cols <- names(df_train)[vapply(df_train, is.numeric, TRUE)]
+    for (nm in num_cols) {
+      med <- suppressWarnings(median(df_train[[nm]], na.rm = TRUE))
+      if (!is.finite(med) || is.na(med)) med <- 0
+      if (nm %in% names(df_train))   df_train[[nm]][is.na(df_train[[nm]])] <- med
+      if (nm %in% names(df_other))   df_other[[nm]][is.na(df_other[[nm]])] <- med
+    }
+    list(train = df_train, other = df_other)
+  }
+  tmp <- impute_with_train_median(X_train, X_validation); X_train <- tmp$train; X_validation <- tmp$other
+  tmp <- impute_with_train_median(X_train, X_test);       X_test  <- tmp$other
+  
+  # Quick predictor type scan
+  pred_types <- vapply(X_train, function(col) {
+    if (is.numeric(col)) "numeric"
+    else if (is.factor(col)) "factor"
+    else class(col)[1]
+  }, character(1))
+  n_num <- sum(pred_types == "numeric")
+  n_fac <- sum(pred_types == "factor")
+  cat("[mc] predictors summary: numeric =", n_num, " | factor =", n_fac, " | total =", length(pred_types), "\n")
+  if (n_fac > 0) {
+    cat("[mc] factor columns:\n"); print(names(which(pred_types == "factor")))
+  }
+  
+  all_numeric <- all(pred_types == "numeric")
+  cat("[mc] all_numeric predictors? ->", all_numeric, "\n")
+  
+  # ---------- B) Build X (features) ----------
+  if (all_numeric) {
+    cat("[mc] PATH A: numeric-only (no one-hot for X)\n")
+    
+    X_train_scaled <- scale(as.data.frame(X_train))
+    center <- attr(X_train_scaled, "scaled:center")
+    scale_ <- attr(X_train_scaled, "scaled:scale"); scale_[!is.finite(scale_) | scale_ == 0] <- 1
+    
+    X_validation_scaled <- sweep(sweep(as.matrix(as.data.frame(X_validation)), 2, center, "-"), 2, scale_, "/")
+    X_test_scaled       <- sweep(sweep(as.matrix(as.data.frame(X_test)),       2, center, "-"), 2, scale_, "/")
+    
+    X            <- as.matrix(X_train_scaled)
+    X_validation <- as.matrix(X_validation_scaled)
+    X_test       <- as.matrix(X_test_scaled)
+    
+  } else {
+    cat("[mc] PATH B: one-hot features with model.matrix() + consistent TRAIN terms + row alignment\n")
+    
+    # Make factor NAs explicit so rows are preserved as levels
+    X_train_f      <- dplyr::mutate(X_train,      dplyr::across(where(is.factor), ~forcats::fct_explicit_na(., "(Missing)")))
+    X_validation_f <- dplyr::mutate(X_validation, dplyr::across(where(is.factor), ~forcats::fct_explicit_na(., "(Missing)")))
+    X_test_f       <- dplyr::mutate(X_test,       dplyr::across(where(is.factor), ~forcats::fct_explicit_na(., "(Missing)")))
+    
+    # Build design on TRAIN ONLY to lock columns
+    mm_terms <- terms(~ . - 1, data = X_train_f)
+    X_train_mm      <- model.matrix(mm_terms, data = X_train_f)
+    X_validation_mm <- model.matrix(mm_terms, data = X_validation_f)
+    X_test_mm       <- model.matrix(mm_terms, data = X_test_f)
+    
+    cat("[mc] dim(X_train_mm)=", paste(dim(X_train_mm), collapse="×"),
+        " | dim(X_val_mm)=", paste(dim(X_validation_mm), collapse="×"),
+        " | dim(X_test_mm)=", paste(dim(X_test_mm), collapse="×"), "\n")
+    
+    # Scale with train stats
+    X_train_scaled <- scale(X_train_mm)
+    center <- attr(X_train_scaled, "scaled:center")
+    scale_ <- attr(X_train_scaled, "scaled:scale"); scale_[!is.finite(scale_) | scale_ == 0] <- 1
+    
+    X_validation_scaled <- sweep(sweep(X_validation_mm, 2, center, "-"), 2, scale_, "/")
+    X_test_scaled       <- sweep(sweep(X_test_mm,       2, center, "-"), 2, scale_, "/")
+    
+    X            <- as.matrix(X_train_scaled)
+    X_validation <- as.matrix(X_validation_scaled)
+    X_test       <- as.matrix(X_test_scaled)
+  }
+  
+  # Stabilize magnitude (parity with your binary path)
+  max_val <- suppressWarnings(max(abs(X)))
+  if (!is.finite(max_val) || is.na(max_val) || max_val == 0) max_val <- 1
+  X            <- X            / max_val
+  X_validation <- X_validation / max_val
+  X_test       <- X_test       / max_val
+  
+  cat("[mc] dim(X) train/val/test: ",
+      paste(dim(X), collapse="×"), " / ",
+      paste(dim(X_validation), collapse="×"), " / ",
+      paste(dim(X_test), collapse="×"), "\n")
+  
+  # ---------- C) Align y to X rows (train/val/test) ----------
+  pull_y_vec <- function(obj) {
+    if (is.matrix(obj)) as.vector(obj[, 1, drop = TRUE])
+    else if (is.data.frame(obj)) as.vector(obj[[1]])
+    else as.vector(obj)
+  }
+  align_y_to_X <- function(X_mat, y_df, idx_vec) {
+    kept_rn <- rownames(X_mat)
+    if (is.null(kept_rn)) kept_rn <- as.character(idx_vec[seq_len(nrow(X_mat))])
+    pos <- match(kept_rn, as.character(idx_vec))
+    if (anyNA(pos)) stop("[mc][align] Could not map X rownames to original indices.")
+    pull_y_vec(y_df)[pos]
+  }
+  
+  y_vec_tr <- align_y_to_X(X,            y_train,      train_indices)
+  y_vec_va <- align_y_to_X(X_validation, y_validation, validation_indices)
+  y_vec_te <- align_y_to_X(X_test,       y_test,       test_indices)
+  
+  cat("[mc] lens y_vec (aligned): train/val/test = ",
+      length(y_vec_tr), "/", length(y_vec_va), "/", length(y_vec_te), "\n")
+  
+  # ---------- D) One-hot labels (shared levels from full dataset) ----------
+  y_full_vec  <- pull_y_vec(y)
+  levels_y    <- levels(factor(y_full_vec))
+  output_size <- length(levels_y)
+  cat("[mc] class levels (", output_size, "): ", paste(levels_y, collapse=", "), "\n", sep="")
+  
+  to_one_hot <- function(v, lvls) {
+    idx <- match(v, lvls)
+    m <- matrix(0L, nrow = length(v), ncol = length(lvls))
+    m[cbind(seq_along(idx), idx)] <- 1L
+    colnames(m) <- lvls
+    m
+  }
+  
+  y_train_one_hot_aligned <- to_one_hot(y_vec_tr, levels_y)
+  y_validation_one_hot    <- to_one_hot(y_vec_va, levels_y)
+  y_test_one_hot          <- to_one_hot(y_vec_te, levels_y)
+  
+  # Back-compat alias if other code references y_train_one_hot
+  y_train_one_hot <- y_train_one_hot_aligned
+  
+  cat("[mc] dim(y one-hot) train/val/test: ",
+      paste(dim(y_train_one_hot_aligned), collapse="×"), " / ",
+      paste(dim(y_validation_one_hot), collapse="×"), " / ",
+      paste(dim(y_test_one_hot), collapse="×"), "\n")
+  
+  # Keep original y matrices too
+  y            <- as.matrix(y_train); colnames(y) <- colname_y
+  y_validation <- as.matrix(y_validation)
+  y_test       <- as.matrix(y_test)
+  
+  # ---------- E) Single source of truth for training ----------
+  Rdata       <- X                               # training features
+  labels      <- y_train_one_hot_aligned         # training labels aligned to X
+  input_size  <- ncol(Rdata)
+  output_size <- ncol(labels)
+  
+  cat("[mc] FINAL dim(Rdata)=", paste(dim(Rdata), collapse="×"),
+      " | dim(labels)=", paste(dim(labels), collapse="×"),
+      " | input_size=", input_size, " | output_size=", output_size, "\n")
+  
+  if (nrow(Rdata) != nrow(labels)) {
+    stop(sprintf("[mc][FATAL] Row mismatch persists: nrow(Rdata)=%d vs nrow(labels)=%d.\nCheck alignment prints above.",
+                 nrow(Rdata), nrow(labels)))
+  }
+  
+  # ---------- F) Recompute N now that sizes are final ----------
+  if (!ML_NN) {
+    N <- input_size + output_size
+  } else {
+    N <- input_size + sum(hidden_sizes) + output_size
+  }
+  cat("[mc] N =", N, "\n")
+  
+  cat("===================== [MC] END =====================\n\n")
 }
 
-X_train_scaled <- X_train_scaled / max_val
-X_validation_scaled <- X_validation_scaled / max_val
-X_test_scaled <- X_test_scaled / max_val
-
-# $$$$$$$$$$$$$ Sanity check of unscaled and scaled data
-cat("=== Unscaled Rdata summary (X_train) ===\n")
-print(summary(as.vector(X_train)))
-cat("First 5 rows of unscaled X_train:\n")
-print(X_train[1:5, 1:min(5, ncol(X_train))])
-
-cat("=== Scaled Rdata summary (X_train_scaled) ===\n")
-print(summary(as.vector(X_train_scaled)))
-cat("First 5 rows of scaled X_train_scaled:\n")
-print(X_train_scaled[1:5, 1:min(5, ncol(X_train_scaled))])
-
-# ==============================================================
-# Choose whether to use scaled or raw data for NN training
-# ==============================================================
-
-scaledData <- TRUE   # <<<<<< set to FALSE to use raw data
-
-if (isTRUE(scaledData)) {
-  # $$$$$$$$$$$$$ Overwrite training matrix with scaled data
-  X <- as.matrix(X_train_scaled)
-  y <- as.matrix(y_train)
-  
-  X_validation <- as.matrix(X_validation_scaled)
-  y_validation <- as.matrix(y_validation)
-  
-  X_test <- as.matrix(X_test_scaled)
-  y_test <- as.matrix(y_test)
-  
-} else {
-  # $$$$$$$$$$$$$ Overwrite training matrix with raw (unscaled) data
-  X <- as.matrix(X_train)
-  y <- as.matrix(y_train)
-  
-  X_validation <- as.matrix(X_validation)
-  y_validation <- as.matrix(y_validation)
-  
-  X_test <- as.matrix(X_test)
-  y_test <- as.matrix(y_test)
+# Keep compatibility block (corrected variable name)
+if (CLASSIFICATION_MODE == "multiclass") {
+  input_size  <- ncol(Rdata)                    # after model.matrix/processing
+  output_size <- ncol(y_train_one_hot_aligned)  # number of classes (fixed name)
 }
 
-colnames(y) <- colname_y
-
+# ------------------------------------------------------------
+# Binary flag helper + flag (works with your legacy y matrix)
+# ------------------------------------------------------------
+is_binary <- function(obj) {
+  if (is.matrix(obj) && ncol(obj) == 1) {
+    u <- unique(na.omit(as.vector(obj)))
+    return(length(u) <= 2)
+  }
+  if (is.data.frame(obj) && ncol(obj) == 1) {
+    u <- unique(na.omit(as.vector(obj[[1]])))
+    return(length(u) <= 2)
+  }
+  # Fallback
+  u <- unique(na.omit(as.vector(obj)))
+  length(u) <= 2
+}
 binary_flag <- is_binary(y)
-
 
 # ==============================================================
 # Optional Random Forest-based feature selection (default OFF)
@@ -433,10 +705,10 @@ prepare_disk_only_FROM_RDS <- FALSE
 prepare_disk_only_FROM_RDS <- get0("prepare_disk_only_FROM_RDS", ifnotfound = FALSE)
 # Modes:
 # "train"
-  # "predict:stateless"
+# "predict:stateless"
 # "predict:stateful"
-# MODE <- "train"
-MODE <- "predict:stateless"
+MODE <- "train"
+# MODE <- "predict:stateless"
 MODE <- get0("MODE", ifnotfound = "train")
 
 PREDICT_ONLY_FROM_RDS  <- isTRUE(get0("PREDICT_ONLY_FROM_RDS", inherits=TRUE, ifnotfound=FALSE))
@@ -1292,7 +1564,7 @@ if (!train) {
     invisible(main_model$train(
       Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
       lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs,
-      threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
+      threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE, 
       activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
       dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
       beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
@@ -1642,7 +1914,7 @@ if (!train) {
       invisible(main_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
         lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs,
-        threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
+        threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE, 
         activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
         dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
         beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
@@ -2042,7 +2314,7 @@ if (!train) {
         invisible(main_model$train(
           Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
           lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs,
-          threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
+          threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
           activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
           dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
           beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
@@ -2123,7 +2395,7 @@ if (!train) {
           
           invisible(temp_model$train(
             Rdata=X, labels=y, lr=lr, ensemble_number=j+1L, num_epochs=num_epochs,
-            threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
+            threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
             activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
             dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
             beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
@@ -2307,10 +2579,10 @@ if (!train) {
       
     }
     
-
-
-
-
+    
+    
+    
+    
     
   }
   

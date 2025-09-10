@@ -16,7 +16,8 @@ suppressPackageStartupMessages({
 })
 
 EvaluatePredictionsReport <- function(
-    X_validation, y_validation, probs,
+    X_validation, y_validation, CLASSIFICATION_MODE,
+    probs,
     predicted_outputAndTime,
     threshold_function,           # kept for signature compatibility (not used)
     best_val_probs, best_val_labels,
@@ -83,7 +84,7 @@ EvaluatePredictionsReport <- function(
     }
   }
   
-  # ------------------------- Tune on validation or current ------------
+  # ------------------------- Select data for evaluation ----------------
   if (isTRUE(train)) {
     probs_use  <- best_val_probs
     labels_use <- best_val_labels
@@ -92,58 +93,123 @@ EvaluatePredictionsReport <- function(
     labels_use <- y_validation
   }
   
-  # DO NOT flatten upfront; keep shapes to detect K correctly
+  # Shapes (do not flatten yet)
   labels_mat <- as.matrix(labels_use)
   probs_mat  <- if (is.matrix(probs_use)) probs_use else matrix(probs_use, ncol = 1L)
-  K <- max(ncol(labels_mat), ncol(probs_mat))
   
-  # ------------------------- Threshold tuning -------------------------
-  metric_for_tuning <- if (K == 1L) "accuracy" else "macro_f1"  # sensible default
-  thr_res <- tune_threshold_accuracy(
-    predicted_output = probs_mat,   # vector (binary) or matrix (multiclass)
-    labels           = labels_mat,  # 0/1 or class ids, or one-hot matrix
-    metric           = metric_for_tuning,
-    threshold_grid             = seq(0.05, 0.95, by = 0.01),
-    verbose          = FALSE
-  )
-  
-  best_thresholds <- thr_res$thresholds   # length 1 (binary) or length K (multiclass)
-  if (verbose) {
-    if (length(best_thresholds) == 1L) {
-      message(sprintf("Best threshold (%s-optimized): %.3f", metric_for_tuning, as.numeric(best_thresholds)))
-    } else {
-      message(sprintf("Best per-class thresholds (%s-optimized): %s",
-                      metric_for_tuning, paste0(sprintf("%.3f", best_thresholds), collapse = ", ")))
+  # If labels are a single non-numeric column (e.g., "A","B","C"), coerce to one-hot
+  need_one_hot <- (ncol(labels_mat) == 1L) &&
+    all(is.na(suppressWarnings(as.numeric(labels_mat[, 1]))))
+  if (need_one_hot) {
+    f <- factor(labels_mat[, 1], levels = sort(unique(labels_mat[, 1])))
+    y_ids <- as.integer(f)                          # 1..K
+    K_from_labels <- length(levels(f))
+    oh <- matrix(0L, nrow = length(y_ids), ncol = K_from_labels)
+    oh[cbind(seq_along(y_ids), y_ids)] <- 1L
+    colnames(oh) <- levels(f)
+    labels_mat <- oh
+    if (verbose) {
+      cat("[INFO] Coerced character labels to one-hot.\n")
+      cat("[INFO] Class level → column mapping:\n")
+      print(setNames(seq_len(K_from_labels), levels(f)))
     }
   }
   
-  # ------------------------- Build predictions for accuracy() ---------
+  # Align rows (trim only)
+  N_eff <- min(nrow(probs_mat), nrow(labels_mat))
+  if (N_eff <= 0) stop("No overlapping rows between probs and labels.")
+  probs_mat  <- probs_mat [seq_len(N_eff), , drop = FALSE]
+  labels_mat <- labels_mat[seq_len(N_eff), , drop = FALSE]
+  
+  # Infer binary vs multiclass using helpers from utils
+  inf <- infer_is_binary(labels_mat, probs_mat)
+  is_binary <- isTRUE(inf$is_binary)
+  K <- max(1L, ncol(labels_mat), ncol(probs_mat))
+  
+  # ------------------------- DEBUG DIAGNOSTICS -------------------------
+  cat("\n[DBG] --- threshold tuning inputs ---\n")
+  
+  dbg_shape <- function(x) {
+    nr <- if (!is.null(dim(x))) nrow(x) else length(x)
+    nc <- if (!is.null(dim(x))) ncol(x) else 1L
+    tp <- paste(class(x), collapse = "/")
+    c(nrow = nr, ncol = nc, type = tp)
+  }
+  
+  dbg_count_nonfinite <- function(x) {
+    if (is.null(dim(x))) x <- matrix(x, ncol = 1L)
+    nf  <- sum(!is.finite(x))
+    na_ <- sum(is.na(x))
+    nan <- sum(is.nan(x))
+    infv <- sum(is.infinite(x))
+    setNames(c(nf, na_, nan, infv), c("nonfinite", "NA", "NaN", "Inf"))
+  }
+  
+  cat("[DBG] probs_mat shape/type: ", paste(dbg_shape(probs_mat), collapse = " | "), "\n", sep = "")
+  cat("[DBG] labels_mat shape/type: ", paste(dbg_shape(labels_mat), collapse = " | "), "\n", sep = "")
+  cat("[DBG] probs non-finite: ", paste(dbg_count_nonfinite(probs_mat), collapse = " | "), "\n", sep = "")
+  cat("[DBG] labels non-finite: ", paste(dbg_count_nonfinite(labels_mat), collapse = " | "), "\n", sep = "")
+  
+  head_n <- min(5L, nrow(probs_mat))
+  cat("[DBG] head(probs_mat):\n"); print(utils::head(as.data.frame(probs_mat), head_n))
+  cat("[DBG] head(labels_mat):\n"); print(utils::head(as.data.frame(labels_mat), head_n))
+  
+  cat("[DBG] inferred is_binary: ", is_binary, " | K: ", K, " (1=binary, >1=multiclass)\n", sep = "")
+  cat("[DBG] --- end threshold tuning inputs ---\n\n")
+  
+  # ------------------------- Build predictions & metrics --------------
   heatmap_path <- NULL
-  if (K == 1L) {
-    # ===== Binary =====
-    labels_flat <- as.integer(ifelse(as.vector(labels_mat) > 0, 1L, 0L))
-    best_threshold <- as.numeric(best_thresholds)  # back-compat scalar
+  metrics <- NULL
+  best_thresholds <- NA_real_
+  best_threshold  <- NA_real_
+  
+  if (is_binary) {
+    # Labels → 0/1 via util; Predictions → positive-class prob via util
+    labels_flat <- labels_to_binary_vec(labels_mat)
+    p_pos       <- preds_to_pos_prob(probs_mat)
     
-    binary_preds <- as.integer(as.vector(probs_mat) >= best_threshold)
+    if (is.null(labels_flat) || is.null(p_pos)) {
+      stop("Binary inference succeeded, but could not derive binary labels/probabilities.")
+    }
+    
+    # Tune threshold safely (use util to sanitize grid)
+    metric_for_tuning <- "accuracy"
+    thr_grid <- sanitize_grid(seq(0.05, 0.95, by = 0.01))
+    
+    thr_res <- tryCatch(
+      tune_threshold_accuracy(
+        predicted_output = matrix(p_pos, ncol = 1L),
+        labels           = matrix(labels_flat, ncol = 1L),
+        metric           = metric_for_tuning,
+        threshold_grid   = thr_grid,
+        verbose          = FALSE
+      ),
+      error = function(e) {
+        message("tune_threshold_accuracy failed: ", e$message, " — using 0.5.")
+        list(thresholds = 0.5, y_pred_class = NULL)
+      }
+    )
+    
+    best_thresholds <- thr_res$thresholds
+    best_threshold  <- as.numeric(best_thresholds)
+    
+    binary_preds <- as.integer(p_pos >= best_threshold)
     predicted_output_for_acc <- matrix(binary_preds, ncol = 1L)
     
     if (verbose) message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
     
-    # accuracy() must be called BEFORE shadowing the name with a variable
     acc_prop <- accuracy(
       SONN = NULL, Rdata = NULL,
-      labels = labels_mat,
+      labels = matrix(labels_flat, ncol = 1L),
       predicted_output = predicted_output_for_acc,
       verbose = FALSE
     )
-    accuracy <- acc_prop                 # keep your variable names
+    accuracy <- acc_prop
     accuracy_percent <- accuracy * 100
-    
     if (verbose) message(sprintf("Accuracy (binary @ tuned threshold): %.6f (%.3f%%)", accuracy, accuracy_percent))
     
-    # Precision/Recall/F1 via your helper
-    metrics <- tryCatch(evaluate_classification_metrics(binary_preds, labels_flat),
-                        error = function(e) { if (verbose) message("metrics error: ", e$message); list() })
+    # Precision/Recall/F1 via helper
+    metrics <- safe_eval_metrics(binary_preds, labels_flat, verbose = verbose)
     
     # Confusion matrix (counts)
     TP <- sum(binary_preds == 1 & labels_flat == 1)
@@ -156,7 +222,10 @@ EvaluatePredictionsReport <- function(
       Predicted = c("0","1","0","1"),
       Count     = c(TN, FP, FN, TP)
     )
-    if (verbose) { message("Confusion matrix (TN, FP, FN, TP): ", paste(c(TN, FP, FN, TP), collapse = ", ")); print(conf_matrix_df) }
+    if (verbose) {
+      message("Confusion matrix (TN, FP, FN, TP): ", paste(c(TN, FP, FN, TP), collapse = ", "))
+      print(conf_matrix_df)
+    }
     
     # Heatmap (binary)
     heatmap_path <- "confusion_matrix_heatmap.png"
@@ -173,45 +242,44 @@ EvaluatePredictionsReport <- function(
       if (verbose) print(plot_conf_matrix)
     }, error = function(e) message("❌ Failed to generate confusion matrix heatmap: ", e$message))
     
-    # Combine features + labels + predictions (binary)
+    # Combined DF (binary)
     Rdata_df <- as.data.frame(X_validation)
     combined_df <- cbind(
       Rdata_df,
       label = labels_flat,
       pred  = binary_preds,
-      prob  = as.vector(probs_mat),
+      prob  = p_pos,
       threshold_used = best_threshold
     )
     
   } else {
-    # ===== Multiclass =====
-    best_threshold <- NA_real_          # no single scalar threshold
-    pred_ids <- thr_res$y_pred_class    # class ids (1..K)
+    # ===== Multiclass: no threshold tuning — use argmax =====
+    pred_ids <- max.col(probs_mat, ties.method = "first")
     
-    # one-hot predictions for accuracy()
-    N <- length(pred_ids)
-    predicted_output_for_acc <- matrix(0, nrow = N, ncol = K)
-    predicted_output_for_acc[cbind(seq_len(N), pred_ids)] <- 1
-    
-    # true class ids from labels (one-hot or class-id vector)
+    # True class ids
     if (ncol(labels_mat) > 1L) {
       y_true_ids <- max.col(labels_mat, ties.method = "first")
     } else {
-      cls <- as.integer(labels_mat[, 1])
+      cls <- suppressWarnings(as.integer(labels_mat[, 1]))
       if (min(cls, na.rm = TRUE) == 0L) cls <- cls + 1L
+      cls[!is.finite(cls)] <- 1L
       cls[cls < 1L] <- 1L; cls[cls > K] <- K
       y_true_ids <- cls
     }
     
+    # Build one-hot predictions for accuracy() using util
+    predicted_output_for_acc <- one_hot_from_ids(pred_ids, K, N_eff)
+    
     acc_prop <- accuracy(
       SONN = NULL, Rdata = NULL,
       labels = labels_mat,
+      CLASSIFICATION_MODE = CLASSIFICATION_MODE,
       predicted_output = predicted_output_for_acc,
       verbose = FALSE
     )
     accuracy <- acc_prop
     accuracy_percent <- accuracy * 100
-    if (verbose) message(sprintf("Accuracy (multiclass @ tuned thresholds): %.6f (%.3f%%)", accuracy, accuracy_percent))
+    if (verbose) message(sprintf("Accuracy (multiclass, argmax): %.6f (%.3f%%)", accuracy, accuracy_percent))
     
     # Confusion matrix (counts)
     conf_tab <- table(
@@ -238,24 +306,21 @@ EvaluatePredictionsReport <- function(
       if (verbose) print(plot_conf_matrix_mc)
     }, error = function(e) message("❌ Failed to generate multiclass heatmap: ", e$message))
     
-    # Combine features + labels + predictions (multiclass)
+    # Combined DF (multiclass)
     Rdata_df <- as.data.frame(X_validation)
     combined_df <- cbind(
       Rdata_df,
       label = y_true_ids,
       pred  = pred_ids
     )
-    
-    # No binary metrics in multiclass
-    metrics <- NULL
   }
   
-  # ------------------------- Probability-separation & calibration -----
-  # (Binary only — skip for multiclass)
-  if (K == 1L) {
+  # ------------------------- Probability separation / calibration -----
+  # (Binary only)
+  if (is_binary) {
     Rdata_with_labels <- cbind(as.data.frame(X_validation), Label = labels_flat)
     Rdata_predictions <- Rdata_with_labels %>%
-      mutate(Predicted_Prob = as.vector(probs_mat),
+      mutate(Predicted_Prob = as.numeric(p_pos),
              Predictions    = binary_preds)
     
     # Mean predicted probability by class
@@ -289,7 +354,7 @@ EvaluatePredictionsReport <- function(
     
     # ROC & PR curves (binary only)
     labels_numeric <- suppressWarnings(as.numeric(labels_flat))
-    probs_numeric  <- suppressWarnings(as.numeric(as.vector(probs_mat)))
+    probs_numeric  <- suppressWarnings(as.numeric(p_pos))
     
     # ROC
     tryCatch({
@@ -388,30 +453,11 @@ EvaluatePredictionsReport <- function(
       if (verbose) print(plot_overlay)
     }, error = function(e) message("❌ Failed to generate overlay plot: ", e$message))
     
-    # Calibration table PNG
-    tryCatch({
-      calibration_table <- Rdata_predictions_cal %>%
-        transmute(
-          Bin = prob_bin,
-          `Avg Predicted Prob` = round(bin_mid, 4),
-          `Observed Rate`      = round(actual_death_rate, 4),
-          `Difference (Obs - Pred)` = round(actual_death_rate - bin_mid, 4),
-          `Calibration Quality` = case_when(
-            abs(actual_death_rate - bin_mid) < 0.02 ~ "✅ Well Calibrated",
-            actual_death_rate > bin_mid ~ "⚠️ Underconfident",
-            TRUE ~ "⚠️ Overconfident"
-          )
-        )
-      table_plot <- tableGrob(calibration_table, rows = NULL)
-      ggsave("calibration_table.png", table_plot, width = 8, height = 4, dpi = 300)
-      while (!is.null(dev.list())) dev.off()
-    }, error = function(e) message("❌ Failed to generate calibration table PNG: ", e$message))
-    
     # Misclassified samples (binary)
     wrong <- which(binary_preds != labels_flat)
     misclassified <- if (length(wrong)) {
       cbind(
-        predicted_prob  = as.vector(probs_mat)[wrong],
+        predicted_prob  = p_pos[wrong],
         predicted_label = binary_preds[wrong],
         actual_label    = labels_flat[wrong],
         as.data.frame(X_validation)[wrong, , drop = FALSE]
@@ -420,7 +466,7 @@ EvaluatePredictionsReport <- function(
       data.frame()
     }
     
-    # Sorted misclassified + summary (robust to missing columns)
+    # Sorted misclassified + summary
     misclassified_sorted <- if (nrow(misclassified) > 0) {
       misclassified %>%
         mutate(
@@ -461,10 +507,16 @@ EvaluatePredictionsReport <- function(
   }
   
   # ------------------------- Metrics summary table (for PNG) ----------
-  if (K == 1L) {
+  if (is_binary) {
     total    <- length(labels_flat)
     support0 <- sum(labels_flat == 0)
     support1 <- sum(labels_flat == 1)
+    
+    # If TP/TN/FP/FN not defined (should be, but guard)
+    if (!exists("TP")) TP <- sum(binary_preds == 1 & labels_flat == 1)
+    if (!exists("TN")) TN <- sum(binary_preds == 0 & labels_flat == 0)
+    if (!exists("FP")) FP <- sum(binary_preds == 1 & labels_flat == 0)
+    if (!exists("FN")) FN <- sum(binary_preds == 0 & labels_flat == 1)
     
     precision0 <- if ((TN + FN) > 0) TN / (TN + FN) else 0
     recall0    <- if ((TN + FP) > 0) TN / (TN + FP) else 0
@@ -489,8 +541,8 @@ EvaluatePredictionsReport <- function(
       F1_Score   = c(f1_0,       f1_1,       macro_f1,        weighted_f1),
       Support    = c(support0,   support1,   total,           total),
       Accuracy   = rep(accuracy, 4),
-      TP         = rep(TP, 4),
-      TN         = rep(TN, 4),
+      TP         = c(TN, TP, NA_real_, NA_real_),  # keep TN/TP visible in first two rows
+      TN         = c(TN, TP, NA_real_, NA_real_),  # (note: columns kept for compatibility)
       FP         = rep(FP, 4),
       FN         = rep(FN, 4)
     )
@@ -562,7 +614,7 @@ EvaluatePredictionsReport <- function(
     if (!is.na(rec))  txt <- c(txt, paste("Recall:", round(rec, 4)))
     
     if (is.finite(prec) && is.finite(rec)) {
-      if (prec > rec + 0.05)   txt <- c(txt, "⚠️ Precision-dominant: conservative, may miss TPs.")
+      if (prec > rec + 0.05)      txt <- c(txt, "⚠️ Precision-dominant: conservative, may miss TPs.")
       else if (rec > prec + 0.05) txt <- c(txt, "⚠️ Recall-dominant: aggressive, may raise FPs.")
       else                        txt <- c(txt, "✅ Balanced precision and recall.")
     }
@@ -577,7 +629,9 @@ EvaluatePredictionsReport <- function(
   addWorksheet(wb, "Metrics_Summary")
   suppressWarnings(writeData(wb, "Metrics_Summary", metrics_summary))
   suppressWarnings(writeData(wb, "Metrics_Summary", commentary_df_metrics, startRow = nrow(metrics_summary) + 3))
-  suppressWarnings(writeData(wb, "Metrics_Summary", conf_matrix_df, startRow = nrow(metrics_summary) + 6, rowNames = FALSE))
+  if (exists("conf_matrix_df")) {
+    suppressWarnings(writeData(wb, "Metrics_Summary", conf_matrix_df, startRow = nrow(metrics_summary) + 6, rowNames = FALSE))
+  }
   
   if (!is.null(heatmap_path) && file.exists(heatmap_path)) {
     tryCatch(insertImage(wb, "Metrics_Summary", heatmap_path, startRow = nrow(metrics_summary) + 12, startCol = 1, width = 6, height = 4),
@@ -585,10 +639,10 @@ EvaluatePredictionsReport <- function(
   }
   
   # Optional: additional sheets if binary artifacts exist
-  if (K == 1L) {
+  if (is_binary) {
     addWorksheet(wb, "Prediction_Means")
-    suppressWarnings(writeData(wb, "Prediction_Means", prediction_means))
-    suppressWarnings(writeData(wb, "Prediction_Means", commentary_df_means, startRow = nrow(prediction_means) + 3))
+    if (exists("prediction_means")) suppressWarnings(writeData(wb, "Prediction_Means", prediction_means))
+    if (exists("commentary_df_means")) suppressWarnings(writeData(wb, "Prediction_Means", commentary_df_means, startRow = if (exists("prediction_means")) nrow(prediction_means) + 3 else 3))
     if (file.exists("plot1_bar_actual_rate.png"))
       tryCatch(insertImage(wb, "Prediction_Means", "plot1_bar_actual_rate.png", startRow = 20, startCol = 1, width = 6, height = 4), error = function(e) {})
     if (file.exists("plot2_calibration_curve.png"))
@@ -597,27 +651,27 @@ EvaluatePredictionsReport <- function(
       tryCatch(insertImage(wb, "Prediction_Means", "plot_overlay_with_legend_below.png", startRow = 48, startCol = 1, width = 6, height = 4), error = function(e) {})
     
     addWorksheet(wb, "Misclassified")
-    suppressWarnings(writeData(wb, "Misclassified", misclassified_sorted))
+    if (exists("misclassified_sorted")) suppressWarnings(writeData(wb, "Misclassified", misclassified_sorted))
   }
   
   saveWorkbook(wb, "Rdata_predictions.xlsx", overwrite = TRUE)
   
   # ------------------------- Debug lines ------------------------------
   if (length(best_thresholds) == 1L) {
-    cat(sprintf("DEBUG >>> Final best_threshold (scalar): %.3f\n", as.numeric(best_thresholds)))
+    cat(sprintf("DEBUG >>> Final best_threshold (scalar): %s\n", if (is.finite(best_thresholds)) sprintf("%.3f", as.numeric(best_thresholds)) else "NA"))
   } else {
     cat("DEBUG >>> Final best_thresholds (per-class): ",
-        paste0(sprintf("%.3f", best_thresholds), collapse = ", "), "\n", sep = "")
+        paste0(ifelse(is.finite(best_thresholds), sprintf("%.3f", best_thresholds), "NA"), collapse = ", "), "\n", sep = "")
   }
-  cat("DEBUG >>> Tuned accuracy at best threshold(s):", round(accuracy, 5), "\n")
+  cat("DEBUG >>> Final accuracy:", round(accuracy, 5), "\n")
   
   # ------------------------- Return (back-compat + new) ---------------
   return(list(
     best_threshold   = best_threshold,       # scalar for binary, NA for multiclass
-    best_thresholds  = best_thresholds,      # vector (len 1 for binary; K for multiclass)
+    best_thresholds  = best_thresholds,      # vector (len 1 for binary; K for multiclass - NA)
     accuracy         = accuracy,
     accuracy_percent = accuracy * 100,
-    metrics          = if (exists("metrics")) metrics else NULL,
+    metrics          = metrics,
     misclassified    = if (exists("misclassified")) misclassified else data.frame()
   ))
 }

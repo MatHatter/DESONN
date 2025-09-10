@@ -710,37 +710,78 @@ evaluate_classification_metrics <- function(preds, labels) {
 
 ##helpers for calculate_performance_grouped 
 
-aggregate_predictions <- function(predicted_output_list, method = c("mean","median","vote"), weights = NULL) {
-  stopifnot(length(predicted_output_list) >= 1)
+aggregate_predictions <- function(predicted_output_list,
+                                  method = c("mean","median","vote"),
+                                  weights = NULL) {
   method <- match.arg(method)
-  P <- do.call(cbind, lapply(predicted_output_list, as.numeric))
-  if (!is.null(weights)) {
-    stopifnot(length(weights) == ncol(P))
-    w <- weights / sum(weights)
-  } else {
-    w <- rep(1/ncol(P), ncol(P))
+  mats <- lapply(predicted_output_list, function(x) { x <- as.matrix(x); storage.mode(x) <- "double"; x })
+  
+  N <- nrow(mats[[1]]); K <- ncol(mats[[1]]); M <- length(mats)
+  stopifnot(all(vapply(mats, nrow, 1L) == N),
+            all(vapply(mats, ncol, 1L) == K))
+  
+  if (is.null(weights)) weights <- rep(1/M, M) else {
+    stopifnot(length(weights) == M); weights <- weights / sum(weights)
   }
-  if (method == "mean")   as.matrix(drop(P %*% w))
-  else if (method == "median") as.matrix(apply(P, 1, stats::median))
-  else { # vote → probability = mean; you can threshold later if you want hard labels
-    as.matrix(rowMeans(P))
+  
+  if (method == "median") {
+    arr <- simplify2array(mats)        # N × K × M
+    return(apply(arr, c(1,2), stats::median, na.rm = TRUE))
   }
+  
+  # mean / vote → elementwise weighted mean, keeps N × K
+  X <- do.call(cbind, lapply(mats, function(m) as.vector(m)))  # (N*K) × M
+  out <- as.numeric(X %*% weights)                             # (N*K)
+  matrix(out, nrow = N, ncol = K)
 }
 
+# Full replacement (compact + multiclass-safe)
+# Full replacement — compact, NA-safe, binary/multiclass
 pick_representative_sonn <- function(SONN_list, predicted_output_list, labels) {
-  # Pick the model with best F1 (at 0.5) on the provided labels
-  f1_at_05 <- function(p, y) {
-    yhat <- as.integer(p >= 0.5)
-    tp <- sum(yhat==1 & y==1); fp <- sum(yhat==1 & y==0); fn <- sum(yhat==0 & y==1)
-    prec <- if ((tp+fp)==0) 0 else tp/(tp+fp)
-    rec  <- if ((tp+fn)==0) 0 else tp/(tp+fn)
-    if ((prec+rec)==0) 0 else 2*prec*rec/(prec+rec)
+  to_class <- function(y) {
+    if (is.matrix(y)) {
+      # Argmax per row; keep NA if an entire row is NA
+      apply(y, 1L, function(r) if (all(is.na(r))) NA_integer_ else which.max(r))
+    } else if (is.factor(y)) {
+      as.integer(y)
+    } else if (is.character(y)) {
+      as.integer(factor(y))
+    } else {
+      as.integer(y)
+    }
   }
+  
+  f1_macro <- function(P, Y) {
+    yt <- to_class(Y)
+    yp <- if (is.matrix(P) && ncol(P) > 1L) {
+      apply(P, 1L, function(r) if (all(is.na(r))) NA_integer_ else which.max(r))
+    } else {
+      p1 <- if (is.matrix(P)) P[, 1L, drop = TRUE] else P
+      as.integer(as.numeric(p1) >= 0.5)
+    }
+    n <- min(length(yt), length(yp)); if (!n) return(0)
+    yt <- yt[seq_len(n)]; yp <- yp[seq_len(n)]
+    cls <- sort(unique(c(yt, yp))); if (!length(cls)) return(0)
+    
+    f1s <- sapply(cls, function(k) {
+      tp <- sum(yp == k & yt == k, na.rm = TRUE)
+      fp <- sum(yp == k & yt != k, na.rm = TRUE)
+      fn <- sum(yp != k & yt == k, na.rm = TRUE)
+      if (tp == 0 && fp == 0 && fn == 0) return(0)
+      pr <- if ((tp + fp) == 0) 0 else tp / (tp + fp)
+      rc <- if ((tp + fn) == 0) 0 else tp / (tp + fn)
+      if ((pr + rc) == 0) 0 else 2 * pr * rc / (pr + rc)
+    })
+    mean(f1s, na.rm = TRUE)
+  }
+  
+  if (!length(predicted_output_list)) return(SONN_list[[1L]])
   scores <- vapply(seq_along(predicted_output_list),
-                   function(i) f1_at_05(predicted_output_list[[i]], labels),
+                   function(i) f1_macro(predicted_output_list[[i]], labels),
                    numeric(1))
-  SONN_list[[ which.max(scores) ]]
+  SONN_list[[which.max(scores)]]
 }
+
 
 # -------------------------------
 # Helpers (keep top-level in file)
@@ -1087,4 +1128,105 @@ find_best_model <- function(target_metric_name_best,
               if (minimize) "lower" else "higher"))
   
   list(best_row = top, meta = meta, tbl = df_ok, minimize = minimize)
+}
+
+#used to calc error in predict() in legacy, but now use helper and used in train()
+
+# if (!is.null(predicted_outputAndTime$predicted_output_l2)) {
+#   
+#   all_predicted_outputs[[i]]       <- predicted_outputAndTime$predicted_output_l2$predicted_output
+#   all_prediction_times[[i]]        <- predicted_outputAndTime$train_reg_prediction_time
+#   all_errors[[i]]                  <- compute_error(predicted_outputAndTime$predicted_output_l2$predicted_output, y, CLASSIFICATION_MODE)
+
+
+compute_error <- function(
+    predicted_output,
+    labels,
+    CLASSIFICATION_MODE = c("binary","multiclass")
+) {
+  CLASSIFICATION_MODE <- match.arg(CLASSIFICATION_MODE)
+  if (is.null(labels)) return(NULL)
+  
+  P <- as.matrix(predicted_output)
+  n <- nrow(P); k <- ncol(P)
+  
+  as_mat <- function(x) {
+    if (is.data.frame(x)) return(as.matrix(x))
+    if (is.vector(x))     return(matrix(x, ncol = 1L))
+    as.matrix(x)
+  }
+  align_rows <- function(M, rows) {
+    if (nrow(M) == rows) return(M)
+    if (nrow(M) > rows)  return(M[seq_len(rows), , drop = FALSE])
+    pad <- matrix(rep(M[nrow(M), , drop = FALSE], length.out = (rows - nrow(M)) * ncol(M)),
+                  nrow = rows - nrow(M), byrow = TRUE)
+    rbind(M, pad)
+  }
+  pad_or_trim_cols <- function(M, cols, pad = 0) {
+    if (ncol(M) == cols) return(M)
+    if (ncol(M) > cols)  return(M[, seq_len(cols), drop = FALSE])
+    cbind(M, matrix(pad, nrow = nrow(M), ncol = cols - ncol(M)))
+  }
+  
+  # ---------- BINARY ----------
+  if (CLASSIFICATION_MODE == "binary") {
+    pred <- if (k == 1L) P else matrix(P[, k], ncol = 1L)
+    L <- labels
+    
+    if (is.factor(L))    L <- as.integer(L) - 1L
+    else if (is.character(L)) {
+      lu <- sort(unique(L))
+      L  <- as.integer(factor(L, levels = lu)) - 1L
+    } else {
+      L <- suppressWarnings(as.numeric(L))
+      if (all(is.na(L))) {
+        lu <- sort(unique(as.character(labels)))
+        L  <- as.integer(factor(as.character(labels), levels = lu)) - 1L
+      }
+    }
+    
+    L <- as_mat(L)
+    if (ncol(L) > 1L) L <- matrix(L[, ncol(L)], ncol = 1L)
+    L <- align_rows(L, n)
+    L <- pad_or_trim_cols(L, 1L, pad = 0)
+    
+    return(abs(L - pred))
+  }
+  
+  # ---------- MULTICLASS ----------
+  L <- labels
+  if (is.data.frame(L)) L <- as.matrix(L)
+  
+  if (!is.null(dim(L)) && ncol(L) > 1L) {
+    Y <- align_rows(as.matrix(L), n)
+    Y <- pad_or_trim_cols(Y, k, pad = 0)
+    return(abs(Y - P))
+  }
+  
+  class_order <- if (!is.null(colnames(P))) colnames(P) else sort(unique(as.character(L)))
+  
+  if (is.factor(L)) {
+    L_idx <- as.integer(factor(L, levels = class_order))
+  } else if (is.character(L)) {
+    L_idx <- as.integer(factor(L, levels = class_order))
+  } else {
+    L_num <- suppressWarnings(as.numeric(L))
+    if (!all(is.na(L_num))) {
+      if (min(L_num, na.rm = TRUE) == 0 && max(L_num, na.rm = TRUE) <= (k - 1)) {
+        L_idx <- as.integer(L_num + 1L)
+      } else {
+        L_idx <- as.integer(L_num)
+      }
+    } else {
+      L_idx <- as.integer(factor(as.character(L), levels = class_order))
+    }
+  }
+  
+  if (anyNA(L_idx)) L_idx[is.na(L_idx)] <- 1L
+  L_idx <- rep(L_idx, length.out = n)
+  
+  Y <- matrix(0, nrow = n, ncol = k)
+  Y[cbind(seq_len(n), pmax(1L, pmin(k, L_idx)))] <- 1L
+  
+  abs(Y - P)
 }
