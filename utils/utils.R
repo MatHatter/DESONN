@@ -940,13 +940,37 @@ infer_is_binary <- function(L, P) {
 }
 
 # Build one-hot matrix (N x K) from class ids (1..K)
-one_hot_from_ids <- function(ids, K, N = NULL) {
+one_hot_from_ids <- function(ids, K, N = NULL, strict = TRUE) {
+  # rows = N or length(ids) by default
   if (is.null(N)) N <- length(ids)
-  M <- matrix(0, nrow = N, ncol = K)
-  ok <- ids >= 1 & ids <= K & is.finite(ids)
-  if (any(ok)) M[cbind(seq_len(N)[ok], ids[ok])] <- 1L
+  
+  # initialize integer matrix
+  M <- matrix(0L, nrow = N, ncol = K)
+  
+  # finiteness check on numeric-ish values (handles NA/NaN/Inf)
+  ids_num <- suppressWarnings(as.numeric(ids))
+  ok_finite <- is.finite(ids_num)
+  
+  # optional strict check: used ids must be whole numbers (e.g., 3.0 is fine, 3.2 is not)
+  if (strict) {
+    non_whole <- ok_finite & (abs(ids_num - round(ids_num)) > .Machine$double.eps^0.5)
+    if (any(non_whole, na.rm = TRUE)) {
+      stop("one_hot_from_ids: non-integer class ids detected among finite values.")
+    }
+  }
+  
+  # coerce to integer indices (after checks)
+  ids_int <- suppressWarnings(as.integer(round(ids_num)))
+  
+  # valid positions: finite, in range [1, K]
+  ok <- ok_finite & !is.na(ids_int) & ids_int >= 1L & ids_int <= K
+  
+  if (any(ok)) {
+    M[cbind(seq_len(N)[ok], ids_int[ok])] <- 1L
+  }
   M
 }
+
 
 # Safe call to a user-provided metrics helper (optional)
 safe_eval_metrics <- function(y_pred_class, y_true01, verbose = FALSE) {

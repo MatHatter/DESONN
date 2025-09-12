@@ -1,9 +1,15 @@
 source("DESONN.R")
 source("utils/utils.R")
 source("utils/bootstrap_metadata.R")
-
+library(readxl)
 set.seed(111)
 # # Define parameters
+## =========================
+## Classification mode
+## =========================
+CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "auto"
+# CLASSIFICATION_MODE <- "binary"
+
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
 lookahead_step <- 20
@@ -21,7 +27,7 @@ lr_decay_rate  <- 0.5
 lr_decay_epoch <- 20
 lr_min <- 1e-6
 lambda <- 0.0003
-num_epochs <- 3
+num_epochs <- 117
 validation_metrics <- TRUE
 test_metrics <- TRUE
 custom_scale <- .05
@@ -34,10 +40,8 @@ update_biases <- TRUE
 # hidden_sizes <- NULL
 hidden_sizes <- c(64, 32)
 
-
 # Activation functions applied in forward pass during prediction | predict(). # hidden layers + output layer
-# activation_functions <- list(relu, relu, sigmoid)  
-activation_functions <- list(relu, relu, softmax)  
+activation_functions <- list(relu, relu, sigmoid)  
 
 # Activation functions applied in forward pass during training | learn() # You can keep them the same as predict() or customize, e.g. list(relu, selu, sigmoid) 
 activation_functions_learn <- activation_functions
@@ -46,21 +50,14 @@ loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'Categorical
 
 dropout_rates <- list(0.1) # NULL for output layer
 
-# =========================
-# Settings & Mode
-# =========================
+
 threshold_function <- tune_threshold_accuracy
 # threshold <- .98  # Classification threshold (not directly used in Random Forest)
 
 dropout_rates_learn <- dropout_rates
 
 num_layers <- length(hidden_sizes) + 1
-
-## =========================
-## Classification mode
-## =========================
-CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "auto"
-
+output_size <- 1  # For binary classification
 ## -------------------------
 ## Load the dataset
 ## -------------------------
@@ -73,15 +70,20 @@ if (CLASSIFICATION_MODE == "binary") {
 } else {
   stop("CLASSIFICATION_MODE must be 'binary' or 'multiclass'")
 }
-
 ## Quick NA check
 na_count <- sum(is.na(data))
 cat("[split] NA count:", na_count, "\n")
-# Handle NAs if you have to, e.g.:
-# data <- tidyr::drop_na(data)
 
-## Ensure character columns become factors (for y in multiclass, etc.)
-data <- data %>% dplyr::mutate(dplyr::across(where(is.character), as.factor))
+
+# Assuming there are no missing values, or handle them if they exist
+# Convert categorical variables to factors if any
+data <- data %>% mutate(across(where(is.character), as.factor))
+
+
+if (CLASSIFICATION_MODE == "binary") {
+  input_size  <- ncol(Rdata)   # after model.matrix/processing
+  output_size <- 1L            # single sigmoid/logit output
+}
 
 ## -------------------------
 ## Features/labels (full)
@@ -90,7 +92,15 @@ input_columns <- setdiff(colnames(data), dependent_variable)
 Rdata  <- data[, input_columns, drop = FALSE]
 labels <- data[, dependent_variable, drop = FALSE]  # keep as data.frame (1 col)
 
-## Optional: numeric columns (unused below but preserved)
+if(!ML_NN) {
+  N <- input_size + output_size  # Multiplier for data generation (not directly applicable here)
+} else {
+  N <- input_size + sum(hidden_sizes) + output_size
+}
+
+
+
+
 if (CLASSIFICATION_MODE == "binary") {
   numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction',
                        'platelets', 'serum_creatinine', 'serum_sodium', 'time')
@@ -98,41 +108,33 @@ if (CLASSIFICATION_MODE == "binary") {
   numeric_columns <- c("Age", "Work_Experience", "Family_Size")
 }
 
-## -------------------------
-## Finalize sizes BEFORE SONN$new
-## -------------------------
-input_size  <- ncol(Rdata)
-if (CLASSIFICATION_MODE == "binary") {
-  output_size <- 1L
-} else {
-  # we'll infer K later from factor levels at training time
-  output_size <- NA_integer_
-}
 
-if (!ML_NN) {
-  N <- input_size + ifelse(is.na(output_size), 0L, output_size)
-} else {
-  N <- input_size + sum(hidden_sizes) + ifelse(is.na(output_size), 0L, output_size)
-}
 
 ## ------------------------------------------------------------
 ## Split the data into features (X) and target (y)
+##   - If `data_reduced` exists, use it for X (minus DEATH_EVENT)
+##   - y is DEATH_EVENT from full `data` (to keep labels intact)
 ## ------------------------------------------------------------
-X <- data %>% dplyr::select(-dplyr::all_of(dependent_variable))
+if (exists("data_reduced") && is.data.frame(data_reduced)) {
+  # If data_reduced already excludes DEATH_EVENT, this is a no-op; otherwise it drops it.
+  X <- data_reduced %>% dplyr::select(-dplyr::all_of("DEATH_EVENT"))
+} else {
+  X <- data %>% dplyr::select(-dplyr::all_of(dependent_variable))
+}
+
 y <- data %>% dplyr::select(dplyr::all_of(dependent_variable))
+
 colname_y <- colnames(y)
 
 ## -------------------------
 ## Robust split
 ## -------------------------
-
 total_num_samples <- nrow(data)
 
-# Choose desired sizes (guarded)
+# Desired caps (guarded by dataset size)
 desired_val  <- 800L
 desired_test <- 800L
 
-# Cap them so they never exceed data size
 num_validation_samples <- min(desired_val,  floor(total_num_samples / 3))
 num_test_samples       <- min(desired_test, floor((total_num_samples - num_validation_samples) / 2))
 num_training_samples   <- total_num_samples - num_validation_samples - num_test_samples
@@ -148,15 +150,15 @@ cat(sprintf("[split] total=%d | train=%d | val=%d | test=%d\n",
 # Indices (no overlap)
 indices <- sample.int(total_num_samples)
 train_indices      <- indices[seq_len(num_training_samples)]
-validation_indices <- indices[seq(from = num_training_samples + 1,
+validation_indices <- indices[seq(from = num_training_samples + 1L,
                                   length.out = num_validation_samples)]
-test_indices       <- indices[seq(from = num_training_samples + num_validation_samples + 1,
+test_indices       <- indices[seq(from = num_training_samples + num_validation_samples + 1L,
                                   length.out = num_test_samples)]
 
 # Sanity: check disjointness
-stopifnot(length(intersect(train_indices, validation_indices)) == 0)
-stopifnot(length(intersect(train_indices, test_indices)) == 0)
-stopifnot(length(intersect(validation_indices, test_indices)) == 0)
+stopifnot(length(intersect(train_indices, validation_indices)) == 0L)
+stopifnot(length(intersect(train_indices, test_indices)) == 0L)
+stopifnot(length(intersect(validation_indices, test_indices)) == 0L)
 
 ## ------------------------------------------------------------
 ## Create training, validation, and test sets (RAW, prior to scaling)
@@ -180,12 +182,11 @@ cat(sprintf("[split] dims: X_test =%d×%d | y_test =%d×%d\n",
 
 # Extra guard: for multiclass, ensure factor levels are consistent across splits
 if (CLASSIFICATION_MODE == "multiclass") {
-  # Force y to factor with global levels from the full dataset
   all_levels <- levels(as.factor(unlist(y)))
   y_train[[1]]      <- factor(y_train[[1]], levels = all_levels)
   y_validation[[1]] <- factor(y_validation[[1]], levels = all_levels)
   y_test[[1]]       <- factor(y_test[[1]], levels = all_levels)
-  # Optionally drop unused levels in each split if your code expects it
+  # Optionally:
   # y_train[[1]]      <- droplevels(y_train[[1]])
   # y_validation[[1]] <- droplevels(y_validation[[1]])
   # y_test[[1]]       <- droplevels(y_test[[1]])
@@ -195,7 +196,8 @@ if (CLASSIFICATION_MODE == "multiclass") {
 ## When you train, pass X_train / y_train — NOT the full Rdata/labels.
 ## Likewise, for validation, forward X_validation and compare with y_validation.
 
-# ===== OPTIONAL LOG TRANSFORMATION (example commented) =====
+# ===== OPTIONAL LOG/CLIP TRANSFORMATION (kept from your "below" block; commented) =====
+# Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
 # X_train$creatinine_phosphokinase      <- pmin(X_train$creatinine_phosphokinase, 3000)
 # X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
 # X_test$creatinine_phosphokinase       <- pmin(X_test$creatinine_phosphokinase, 3000)
@@ -445,29 +447,12 @@ if (CLASSIFICATION_MODE == "binary") {
   cat("===================== [MC] END =====================\n\n")
 }
 
-# Keep compatibility block (corrected variable name)
+
 if (CLASSIFICATION_MODE == "multiclass") {
   input_size  <- ncol(Rdata)                    # after model.matrix/processing
   output_size <- ncol(y_train_one_hot_aligned)  # number of classes (fixed name)
 }
 
-# ------------------------------------------------------------
-# Binary flag helper + flag (works with your legacy y matrix)
-# ------------------------------------------------------------
-is_binary <- function(obj) {
-  if (is.matrix(obj) && ncol(obj) == 1) {
-    u <- unique(na.omit(as.vector(obj)))
-    return(length(u) <= 2)
-  }
-  if (is.data.frame(obj) && ncol(obj) == 1) {
-    u <- unique(na.omit(as.vector(obj[[1]])))
-    return(length(u) <= 2)
-  }
-  # Fallback
-  u <- unique(na.omit(as.vector(obj)))
-  length(u) <= 2
-}
-binary_flag <- is_binary(y)
 
 # ==============================================================
 # Optional Random Forest-based feature selection (default OFF)
@@ -631,9 +616,9 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-# do_ensemble         <- FALSE
-# num_networks        <- 1L
-# num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+do_ensemble         <- FALSE
+num_networks        <- 1L
+num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
 # do_ensemble         <- FALSE
@@ -641,9 +626,9 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 # num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
-do_ensemble         <- TRUE
-num_networks        <- 2L          # example main size
-num_temp_iterations <- 0L
+# do_ensemble         <- TRUE
+# num_networks        <- 2L          # example main size
+# num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
 # do_ensemble         <- TRUE
@@ -698,7 +683,7 @@ relevance_low_mean_plots    <- FALSE
 # prepare_disk_only <- TRUE
 # prepare_disk_only <- TRUE
 # prepare_disk_only <- TRUE
-PREPARE_DISK_ONLY <- get0("PREPARE_DISK_ONLY", ifnotfound = FALSE)  # one-shot RDS export helper
+prepare_disk_only <- get0("prepare_disk_only", ifnotfound = FALSE)  # one-shot RDS export helper
 
 # Flag specific to disk-only prepare / selection
 prepare_disk_only_FROM_RDS <- FALSE
@@ -1449,13 +1434,13 @@ if (!train) {
   }
   
   ## ---- NOTE about prepare_disk_only vs PREDICT_ONLY_FROM_RDS ----
-  if (PREPARE_DISK_ONLY && PREDICT_ONLY_FROM_RDS) {
+  if (prepare_disk_only && PREDICT_ONLY_FROM_RDS) {
     cat("\nNOTE: prepare_disk_only was run AND PREDICT_ONLY_FROM_RDS=TRUE.\n")
     cat("      Models’ .rds are loaded strictly from artifacts/ (see `model_rds` column).\n\n")
-  } else if (PREPARE_DISK_ONLY && !PREDICT_ONLY_FROM_RDS) {
+  } else if (prepare_disk_only && !PREDICT_ONLY_FROM_RDS) {
     cat("\nNOTE: prepare_disk_only was run, but PREDICT_ONLY_FROM_RDS=FALSE.\n")
     cat("      Artifacts exist, but env/metadata may be preferred depending on source priority.\n\n")
-  } else if (!PREPARE_DISK_ONLY && PREDICT_ONLY_FROM_RDS) {
+  } else if (!prepare_disk_only && PREDICT_ONLY_FROM_RDS) {
     cat("\nNOTE: PREDICT_ONLY_FROM_RDS=TRUE but prepare_disk_only not run.\n")
     cat("      No artifacts available; model_rds will likely be NA.\n\n")
   } else {
@@ -1564,7 +1549,7 @@ if (!train) {
     invisible(main_model$train(
       Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
       lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs,
-      threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE, 
+      threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
       activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
       dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
       beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
@@ -1914,7 +1899,7 @@ if (!train) {
       invisible(main_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
         lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs,
-        threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE, 
+        threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
         activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
         dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
         beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
@@ -2314,7 +2299,7 @@ if (!train) {
         invisible(main_model$train(
           Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
           lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs,
-          threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
+          threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
           activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
           dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
           beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,

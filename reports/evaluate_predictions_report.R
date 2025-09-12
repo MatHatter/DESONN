@@ -145,6 +145,7 @@ EvaluatePredictionsReport <- function(
     setNames(c(nf, na_, nan, infv), c("nonfinite", "NA", "NaN", "Inf"))
   }
   
+  if(verbose){
   cat("[DBG] probs_mat shape/type: ", paste(dbg_shape(probs_mat), collapse = " | "), "\n", sep = "")
   cat("[DBG] labels_mat shape/type: ", paste(dbg_shape(labels_mat), collapse = " | "), "\n", sep = "")
   cat("[DBG] probs non-finite: ", paste(dbg_count_nonfinite(probs_mat), collapse = " | "), "\n", sep = "")
@@ -156,7 +157,7 @@ EvaluatePredictionsReport <- function(
   
   cat("[DBG] inferred is_binary: ", is_binary, " | K: ", K, " (1=binary, >1=multiclass)\n", sep = "")
   cat("[DBG] --- end threshold tuning inputs ---\n\n")
-  
+  }
   # ------------------------- Build predictions & metrics --------------
   heatmap_path <- NULL
   metrics <- NULL
@@ -197,10 +198,9 @@ EvaluatePredictionsReport <- function(
     predicted_output_for_acc <- matrix(binary_preds, ncol = 1L)
     
     if (verbose) message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
-    
-    acc_prop <- accuracy(
-      SONN = NULL, Rdata = NULL,
-      labels = matrix(labels_flat, ncol = 1L),
+
+    acc_prop <- accuracy(SONN, Rdata, labels = matrix(labels_flat, ncol = 1L),
+      CLASSIFICATION_MODE,
       predicted_output = predicted_output_for_acc,
       verbose = FALSE
     )

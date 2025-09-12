@@ -267,79 +267,58 @@ SONN <- R6Class(
       isTRUE(cfg[[name]]) || on_all
     },
     self_organize = function(Rdata, labels, lr) {
-      # Ensure Rdata is a numeric matrix
-      if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
-      storage.mode(Rdata) <- "double"
+      print("------------------------self-organize-begin----------------------------------------")
       
-      # Ensure weights container shapes
-      if (is.list(self$weights)) {
-        if (is.null(self$weights[[1]])) stop("weights[[1]] is NULL — cannot proceed.")
-        if (!is.matrix(self$weights[[1]])) self$weights[[1]] <- as.matrix(self$weights[[1]])
-        storage.mode(self$weights[[1]]) <- "double"
-      } else {
-        if (!is.matrix(self$weights)) self$weights <- as.matrix(self$weights)
-        storage.mode(self$weights) <- "double"
-      }
       
-      # Expected first layer multiplication: Rdata [n×d] %*% W1 [d×h] = [n×h]
-      W1 <- if (self$ML_NN) self$weights[[1]] else self$weights
-      if (ncol(Rdata) != nrow(W1)) {
-        # If W1 was saved as [h×d] (neurons × features), transpose to [d×h]
-        if (ncol(Rdata) == ncol(W1)) {
-          W1 <- t(W1)
-          if (self$ML_NN) self$weights[[1]] <- W1 else self$weights <- W1
-        } else {
-          stop(sprintf("Layer-1 shape mismatch: dim(Rdata)=%s ; dim(W1)=%s",
-                       paste(dim(Rdata), collapse="×"), paste(dim(W1), collapse="×")))
-        }
-      }
       
-      # Bias init for layer 1 (length = h)
-      W1 <- if (self$ML_NN) self$weights[[1]] else self$weights
-      h  <- ncol(W1)
+      
+      
       if (self$ML_NN) {
-        if (is.null(self$biases[[1]]) || length(self$biases[[1]]) == 0) self$biases[[1]] <- rep(0, h)
-      } else {
-        if (is.null(self$biases) || length(self$biases) == 0) self$biases <- rep(0, h)
-      }
-      
-      # ------- FORWARD: LAYER 1 -------
-      if (self$ML_NN) {
-        input_rows  <- nrow(Rdata)
+        # Multi-layer mode: First layer
+        input_rows <- nrow(Rdata)
         output_cols <- ncol(self$weights[[1]])
-        b1 <- self$biases[[1]]
-        if (length(b1) == 1) {
-          bias_matrix <- matrix(b1, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-        } else if (length(b1) == output_cols) {
-          bias_matrix <- matrix(b1, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-        } else if (length(b1) < output_cols) {
-          bias_matrix <- matrix(rep(b1, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        
+        if (length(self$biases[[1]]) == 1) {
+          bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        } else if (length(self$biases[[1]]) == output_cols) {
+          bias_matrix <- matrix(self$biases[[1]], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        } else if (length(self$biases[[1]]) < output_cols) {
+          bias_matrix <- matrix(rep(self$biases[[1]], length.out = output_cols), 
+                                nrow = input_rows, ncol = output_cols, byrow = TRUE)
         } else {
-          bias_matrix <- matrix(b1[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+          bias_matrix <- matrix(self$biases[[1]][1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
         }
+        
         outputs <- Rdata %*% self$weights[[1]] + bias_matrix
+        
       } else {
-        input_rows  <- nrow(Rdata)
+        # Single-layer mode
+        input_rows <- nrow(Rdata)
         output_cols <- ncol(self$weights)
-        b1 <- self$biases
-        if (length(b1) == 1) {
-          bias_matrix <- matrix(b1, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-        } else if (length(b1) == output_cols) {
-          bias_matrix <- matrix(b1, nrow = input_rows, ncol = output_cols, byrow = TRUE)
-        } else if (length(b1) < output_cols) {
-          bias_matrix <- matrix(rep(b1, length.out = output_cols), nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        
+        if (length(self$biases) == 1) {
+          bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        } else if (length(self$biases) == output_cols) {
+          bias_matrix <- matrix(self$biases, nrow = input_rows, ncol = output_cols, byrow = TRUE)
+        } else if (length(self$biases) < output_cols) {
+          bias_matrix <- matrix(rep(self$biases, length.out = output_cols), 
+                                nrow = input_rows, ncol = output_cols, byrow = TRUE)
         } else {
-          bias_matrix <- matrix(b1[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
+          bias_matrix <- matrix(self$biases[1:output_cols], nrow = input_rows, ncol = output_cols, byrow = TRUE)
         }
-        outputs <- Rdata %*% self$weights + bias_matrix
+        
+        outputs <- Rdata %*% self$weights + bias_matrix 
       }
       
-      # ------- FORWARD: REMAINING LAYERS -------
+      
+      
+      
       if (self$ML_NN) {
         hidden_outputs <- list()
         hidden_outputs[[1]] <- outputs
-        outputs_list <- vector("list", self$num_layers)
-        outputs_list[[1]] <- hidden_outputs[[1]]
+        
+        outputs <- vector("list", self$num_layers)
+        outputs[[1]] <- hidden_outputs[[1]]
         
         broadcast_bias <- function(bias, nrow_out, ncol_out) {
           if (length(bias) == 1) {
@@ -348,86 +327,169 @@ SONN <- R6Class(
             matrix(bias, nrow_out, ncol_out, byrow = TRUE)
           } else if (length(bias) < ncol_out) {
             matrix(rep(bias, length.out = ncol_out), nrow_out, ncol_out, byrow = TRUE)
-          } else {
+          } else if (length(bias) > ncol_out) {
             matrix(bias[1:ncol_out], nrow_out, ncol_out, byrow = TRUE)
+          } else {
+            stop("Bias shape mismatch")
           }
         }
         
         for (layer in 2:self$num_layers) {
-          input   <- hidden_outputs[[layer - 1]]
+          input <- hidden_outputs[[layer - 1]]
           weights <- self$weights[[layer]]
+          biases <- broadcast_bias(self$biases[[layer]], nrow(input), ncol(weights))
+          
           if (ncol(input) != nrow(weights)) {
             if (ncol(input) == ncol(weights)) {
               weights <- t(weights)
             } else {
-              stop(sprintf("Non-conformable at layer %d: dim(input)=%s ; dim(W)=%s",
-                           layer, paste(dim(input), collapse="×"), paste(dim(weights), collapse="×")))
+              stop("Dimensions of hidden_outputs and weights are not conformable")
             }
           }
-          biases <- broadcast_bias(self$biases[[layer]], nrow(input), ncol(weights))
+          
           hidden_outputs[[layer]] <- input %*% weights + biases
-          outputs_list[[layer]]   <- hidden_outputs[[layer]]
+          outputs[[layer]] <- hidden_outputs[[layer]]
         }
       }
       
-      # ------- OUTPUT ERROR (unsupervised vs input) -------
+      print("str(outputs)")
+      str(outputs)
+      
+      
+      
+      
       if (self$ML_NN) {
-        expected_shape <- dim(outputs_list[[self$num_layers]])
-        input_shape    <- dim(Rdata)
+        print(paste("LAYER", self$num_layers))
+        
+        expected_shape <- dim(outputs[[self$num_layers]])
+        input_shape <- dim(Rdata)
+        
         if (!all(expected_shape == input_shape)) {
+          cat("Mismatch between Rdata and outputs[[num_layers]]: correcting...\n")
+          # Try to reshape outputs to match Rdata
           output_matrix <- matrix(
-            rep(outputs_list[[self$num_layers]], length.out = nrow(Rdata) * ncol(Rdata)),
-            nrow = nrow(Rdata), ncol = ncol(Rdata), byrow = FALSE
+            rep(outputs[[self$num_layers]], length.out = nrow(Rdata) * ncol(Rdata)),
+            nrow = nrow(Rdata),
+            ncol = ncol(Rdata),
+            byrow = FALSE
           )
         } else {
-          output_matrix <- outputs_list[[self$num_layers]]
+          output_matrix <- outputs[[self$num_layers]]
         }
+        
         error_1000x10 <- Rdata - output_matrix
+        
       } else {
         if (!all(dim(outputs) == dim(Rdata))) {
+          cat("Mismatch between Rdata and outputs (single-layer): correcting...\n")
           output_matrix <- matrix(
             rep(outputs, length.out = nrow(Rdata) * ncol(Rdata)),
-            nrow = nrow(Rdata), ncol = ncol(Rdata), byrow = FALSE
+            nrow = nrow(Rdata),
+            ncol = ncol(Rdata),
+            byrow = FALSE
           )
         } else {
           output_matrix <- outputs
         }
+        
         error_1000x10 <- Rdata - output_matrix
       }
       
       # Store output error
       errors <- vector("list", self$num_layers)
       errors[[self$num_layers]] <- as.matrix(error_1000x10)
+      str(errors[[self$num_layers]])
       
-      # ------- BACKPROP ERROR -------
+      
+      # Store output error
+      errors <- vector("list", self$num_layers)
+      errors[[self$num_layers]] <- as.matrix(error_1000x10)
+      str(errors[[self$num_layers]])
+      
+      
+      
+      
+      # Propagate the error backwards
       if (self$ML_NN) {
         for (layer in (self$num_layers - 1):1) {
+          cat("Layer:", layer, "\n")
+          
+          # Load weights and error from next layer
           weights_next <- self$weights[[layer + 1]]
           errors_next  <- errors[[layer + 1]]
-          if (is.null(weights_next) || is.null(errors_next)) next
           
+          # Check for NULLs
+          if (is.null(weights_next) || is.null(errors_next)) {
+            cat(paste("Skipping layer", layer, "- weights or errors are NULL\n"))
+            next
+          }
+          
+          # Print actual dimensions
+          weight_dims <- dim(weights_next)
+          error_dims  <- dim(errors_next)
+          cat("Weights dimensions:\n"); print(weight_dims)
+          cat("Errors dimensions:\n"); print(error_dims)
+          
+          # Sanity checks
+          if (is.null(weight_dims) || is.null(error_dims)) {
+            cat(paste("Skipping layer", layer, "- dimensions are NULL\n"))
+            next
+          }
+          
+          # Adjust shape dynamically
           expected_error_cols <- ncol(weights_next)
           actual_error_cols   <- ncol(errors_next)
           actual_error_rows   <- nrow(errors_next)
           
+          # Match error columns to weights' output dim
           if (actual_error_cols != expected_error_cols) {
             if (actual_error_cols > expected_error_cols) {
               errors_next <- errors_next[, 1:expected_error_cols, drop = FALSE]
             } else {
               errors_next <- matrix(
                 rep(errors_next, length.out = actual_error_rows * expected_error_cols),
-                nrow = actual_error_rows, ncol = expected_error_cols
+                nrow = actual_error_rows,
+                ncol = expected_error_cols
               )
             }
           }
+          
+          
+          # Propagate error
+          cat("Backpropagating errors for layer", layer, "\n")
           errors[[layer]] <- errors_next %*% t(weights_next)
         }
-      } else {
+      }
+      
+      else {
+        cat("Single Layer Backpropagation\n")
+        
+        # Check existence
         weights_sl <- self$weights[[1]]
         errors_sl  <- errors[[1]]
-        if (is.null(weights_sl) || is.null(errors_sl)) stop("Weights or errors for single layer do not exist.")
-        weights_sl <- as.matrix(weights_sl); errors_sl <- as.matrix(errors_sl)
         
+        if (is.null(weights_sl) || is.null(errors_sl)) {
+          stop("Error: Weights or errors for single layer do not exist.")
+        }
+        
+        # Ensure matrix form
+        weights_sl <- as.matrix(weights_sl)
+        errors_sl  <- as.matrix(errors_sl)
+        
+        # Print current dimensions
+        weight_dims <- dim(weights_sl)
+        error_dims  <- dim(errors_sl)
+        cat("Weights dimensions:\n"); print(weight_dims)
+        cat("Errors dimensions:\n"); print(error_dims)
+        
+        if (is.null(weight_dims) || is.null(error_dims)) {
+          stop("Error: Dimensions for weights or errors are NULL.")
+        }
+        
+        # Target: errors[[1]] = weights %*% errors
+        # Align shapes: [n_input, n_output] %*% [batch_size, n_output]^T
+        
+        # Ensure error has matching columns
         expected_cols <- ncol(weights_sl)
         actual_cols   <- ncol(errors_sl)
         actual_rows   <- nrow(errors_sl)
@@ -438,21 +500,46 @@ SONN <- R6Class(
           } else {
             errors_sl <- matrix(
               rep(errors_sl, length.out = actual_rows * expected_cols),
-              nrow = actual_rows, ncol = expected_cols
+              nrow = actual_rows,
+              ncol = expected_cols
             )
           }
         }
+        
+        # If error is still misaligned for matrix multiplication, transpose
         if (ncol(errors_sl) != ncol(weights_sl)) {
           if (ncol(errors_sl) == nrow(weights_sl)) {
             weights_sl <- t(weights_sl)
+          } else {
+            cat("Warning: shape mismatch persists in single-layer case\n")
           }
         }
+        
+        # Perform backpropagation step
+        cat("Performing matrix multiplication for single layer\n")
         errors[[1]] <- errors_sl %*% t(weights_sl)
       }
       
-      # ------- UPDATE LAYER 1 (and others if ML) -------
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      print("str(errors)")
+      str(errors)
+      
+      
       if (self$ML_NN) {
-        # Ensure row count aligns
+        
+        # Ensure errors[[1]] has same number of rows as Rdata
         if (nrow(errors[[1]]) != nrow(Rdata)) {
           if (nrow(errors[[1]]) > nrow(Rdata)) {
             errors[[1]] <- errors[[1]][1:nrow(Rdata), , drop = FALSE]
@@ -461,7 +548,7 @@ SONN <- R6Class(
           }
         }
         
-        # Update layer 1
+        # Update weights for the first layer
         if (ncol(errors[[1]]) == nrow(self$weights[[1]])) {
           self$weights[[1]] <- self$weights[[1]] - (lr * t(Rdata) %*% errors[[1]])
         } else if (nrow(t(errors[[1]])) == nrow(self$weights[[1]]) && ncol(t(errors[[1]])) < ncol(Rdata)) {
@@ -473,44 +560,20 @@ SONN <- R6Class(
           self$weights[[1]] <- self$weights[[1]] - (lr * apply(t(Rdata) %*% errors[[1]], 2, mean))
         }
         
-        cm1 <- colMeans(errors[[1]])
-        if (length(self$biases[[1]]) < length(cm1)) {
-          self$biases[[1]] <- self$biases[[1]] - (lr * cm1[1:length(self$biases[[1]])])
-        } else if (length(self$biases[[1]]) > length(cm1)) {
-          self$biases[[1]] <- self$biases[[1]] - (lr * rep(cm1, length.out = length(self$biases[[1]])))
+        # Update biases for the first layer
+        if (length(self$biases[[1]]) < length(colMeans(errors[[1]]))) {
+          colMeans_shortened <- colMeans(errors[[1]])[1:length(self$biases[[1]])]
+          self$biases[[1]] <- self$biases[[1]] - (lr * colMeans_shortened)
+        } else if (length(self$biases[[1]]) > length(colMeans(errors[[1]]))) {
+          colMeans_extended <- rep(colMeans(errors[[1]]), length.out = length(self$biases[[1]]))
+          self$biases[[1]] <- self$biases[[1]] - (lr * colMeans_extended)
         } else {
-          self$biases[[1]] <- self$biases[[1]] - (lr * cm1)
+          self$biases[[1]] <- self$biases[[1]] - (lr * colMeans(errors[[1]]))
         }
         
-        # Update remaining layers
-        for (layer in 2:self$num_layers) {
-          if (ncol(errors[[layer]]) != nrow(hidden_outputs[[layer - 1]])) {
-            if (ncol(errors[[layer]]) > nrow(hidden_outputs[[layer - 1]])) {
-              errors[[layer]] <- errors[[layer]][, 1:nrow(hidden_outputs[[layer - 1]]), drop = FALSE]
-            } else {
-              errors[[layer]] <- errors[[layer]][, rep(1:ncol(errors[[layer]]),
-                                                       length.out = nrow(hidden_outputs[[layer - 1]])), drop = FALSE]
-            }
-          }
-          
-          grad <- t(hidden_outputs[[layer - 1]]) %*% errors[[layer]]
-          wdim <- dim(self$weights[[layer]])
-          if (!all(dim(grad) == wdim)) {
-            grad <- grad[1:wdim[1], 1:wdim[2]]
-          }
-          self$weights[[layer]] <- self$weights[[layer]] - lr * grad
-          
-          cml <- colMeans(errors[[layer]])
-          if (length(self$biases[[layer]]) < length(cml)) {
-            self$biases[[layer]] <- self$biases[[layer]] - (lr * cml[1:length(self$biases[[layer]])])
-          } else if (length(self$biases[[layer]]) > length(cml)) {
-            self$biases[[layer]] <- self$biases[[layer]] - (lr * rep(cml, length.out = length(self$biases[[layer]])))
-          } else {
-            self$biases[[layer]] <- self$biases[[layer]] - (lr * cml)
-          }
-        }
-      } else {
-        # Single-layer updates
+      }
+      else {
+        # Robust single-layer weight update
         gradient <- tryCatch({
           grad <- t(Rdata) %*% error_1000x10
           if (all(dim(self$weights) == dim(grad))) {
@@ -520,8 +583,11 @@ SONN <- R6Class(
           } else if (ncol(self$weights) < ncol(grad)) {
             grad[, 1:ncol(self$weights), drop = FALSE]
           } else if (ncol(self$weights) > ncol(grad)) {
-            matrix(rep(grad, length.out = nrow(self$weights) * ncol(self$weights)),
-                   nrow = nrow(self$weights), ncol = ncol(self$weights))
+            matrix(
+              rep(grad, length.out = nrow(self$weights) * ncol(self$weights)),
+              nrow = nrow(self$weights),
+              ncol = ncol(self$weights)
+            )
           } else {
             apply(grad, 2, mean)
           }
@@ -529,36 +595,133 @@ SONN <- R6Class(
           apply(t(Rdata) %*% error_1000x10, 2, mean)
         })
         
+        # Update weights
         if (is.matrix(gradient)) {
           self$weights <- self$weights - (lr * gradient)
         } else {
           self$weights <- self$weights - (lr * matrix(gradient, nrow = nrow(self$weights), ncol = ncol(self$weights)))
         }
         
+        # Robust single-layer bias update
         if (length(self$biases) == ncol(error_1000x10)) {
           self$biases <- self$biases - (lr * colMeans(error_1000x10))
         } else if (length(self$biases) < ncol(error_1000x10)) {
           self$biases <- self$biases - (lr * colMeans(error_1000x10)[1:length(self$biases)])
         } else {
-          self$biases <- self$biases - (lr * rep(colMeans(error_1000x10), length.out = length(self$biases)))
+          extended <- rep(colMeans(error_1000x10), length.out = length(self$biases))
+          self$biases <- self$biases - (lr * extended)
         }
       }
       
-      # ------- SOM-BOOTSTRAP (ONLY IF MAP IS NULL) -------
-      if (is.null(self$map)) {
-        self$train_map(Rdata)
-        max_neurons_allowed <- 9
-        map_codes <- self$map$codes[[1]]    # [neurons × features]
-        map_size  <- nrow(map_codes)
-        actual_neurons <- min(map_size, max_neurons_allowed)
-        input_dim <- ncol(Rdata)
-        
-        truncated <- map_codes[1:actual_neurons, 1:input_dim, drop = FALSE]  # [neurons × features]
-        self$weights[[1]] <- t(truncated)  # [features × neurons]
-        self$biases[[1]]  <- rep(0, actual_neurons)
+      
+      if (self$ML_NN) {
+        for (layer in 2:self$num_layers) {
+          
+          # Ensure the number of columns in errors[[layer]] matches the number of rows in hidden_outputs[[layer - 1]]
+          if (ncol(errors[[layer]]) != nrow(hidden_outputs[[layer - 1]])) {
+            if (ncol(errors[[layer]]) > nrow(hidden_outputs[[layer - 1]])) {
+              # Truncate columns of errors[[layer]] to match the number of rows in hidden_outputs[[layer - 1]]
+              errors[[layer]] <- errors[[layer]][, 1:nrow(hidden_outputs[[layer - 1]]), drop = FALSE]
+            } else {
+              # Replicate columns of errors[[layer]] to match the number of rows in hidden_outputs[[layer - 1]]
+              errors[[layer]] <- errors[[layer]][, rep(1:ncol(errors[[layer]]), length.out = nrow(hidden_outputs[[layer - 1]])), drop = FALSE]
+            }
+          }
+          
+          
+          
+          
+          # Calculate dimensions
+          result_dim <- dim(errors[[layer]] %*% (hidden_outputs[[layer - 1]]))
+          weight_dim <- dim(self$weights[[layer]])
+          
+          print("results_dim")
+          print(dim(errors[[layer]]))
+          print("hidden_outputs[[layer - 1]])")
+          print(dim(hidden_outputs[[layer - 1]]))
+          
+          # Update weights for the layer
+          if (ncol(self$weights[[layer]]) == ncol(hidden_outputs[[layer - 1]])) {
+            if (all(weight_dim == result_dim)) {
+              grad <- t(hidden_outputs[[layer - 1]]) %*% errors[[layer]]
+              self$weights[[layer]] <- self$weights[[layer]] - lr * grad
+            } else {
+              cat("Dimensions mismatch, handling default case for weights.\n")
+              grad <- t(hidden_outputs[[layer - 1]]) %*% errors[[layer]]
+              grad <- grad[1:nrow(self$weights[[layer]]), 1:ncol(self$weights[[layer]])]
+              self$weights[[layer]] <- self$weights[[layer]] - lr * grad
+            }
+            
+          } else if (nrow(self$weights[[layer]]) == ncol(hidden_outputs[[layer - 1]]) &&
+                     ncol(self$weights[[layer]]) < ncol(hidden_outputs[[layer - 1]])) {
+            grad <- t(hidden_outputs[[layer - 1]]) %*% errors[[layer]]
+            grad <- grad[1:nrow(self$weights[[layer]]), 1:ncol(self$weights[[layer]])]
+            self$weights[[layer]] <- self$weights[[layer]] - lr * grad
+            
+          } else if (prod(weight_dim) == 1) {
+            grad <- t(hidden_outputs[[layer - 1]]) %*% errors[[layer]]
+            update_value <- lr * sum(grad)
+            self$weights[[layer]] <- self$weights[[layer]] - update_value
+            
+          } else {
+            grad <- t(hidden_outputs[[layer - 1]]) %*% errors[[layer]]
+            grad <- grad[1:nrow(self$weights[[layer]]), 1:ncol(self$weights[[layer]])]
+            self$weights[[layer]] <- self$weights[[layer]] - lr * grad
+          }
+          
+          
+          
+          # Update biases for the layer
+          if (length(self$biases[[layer]]) < length(colMeans(errors[[layer]]))) {
+            colMeans_shortened <- colMeans(errors[[layer]])[1:length(self$biases[[layer]])]
+            self$biases[[layer]] <- self$biases[[layer]] - (lr * colMeans_shortened)
+          } else if (length(self$biases[[layer]]) > length(colMeans(errors[[layer]]))) {
+            colMeans_extended <- rep(colMeans(errors[[layer]]), length.out = length(self$biases[[layer]]))
+            self$biases[[layer]] <- self$biases[[layer]] - (lr * colMeans_extended)
+          } else {
+            self$biases[[layer]] <- self$biases[[layer]] - (lr * colMeans(errors[[layer]]))
+          }
+          
+        }
       }
       
-      invisible(NULL)
+      
+      
+      if (is.null(self$map)) {
+        cat("[Debug] SOM not yet trained. Training now...\n")
+        self$train_map(Rdata)
+        
+        # Determine how many SOM neurons to keep based on max allowed
+        max_neurons_allowed <- 9  # e.g., for 3x3 SOM map
+        map_size <- prod(dim(self$map$codes[[1]]))  # total SOM neurons
+        actual_neurons <- min(map_size, max_neurons_allowed)
+        
+        input_dim <- ncol(Rdata)
+        
+        # Truncate weights to desired number of SOM neurons and match input dimension
+        truncated_weights <- self$map$codes[[1]][1:actual_neurons, 1:input_dim, drop = FALSE]
+        self$weights[[1]] <- matrix(truncated_weights, nrow = actual_neurons, ncol = input_dim)
+        
+        # Set bias to match output dimension of layer 1
+        output_dim_layer1 <- if (self$ML_NN && self$num_layers >= 1) {
+          ncol(self$weights[[1]])
+        } else {
+          1
+        }
+        self$biases[[1]] <- rep(0, output_dim_layer1)
+        
+        # Debug info
+        cat("[Debug] SOM-trained weights dim after truncation:\n")
+        print(dim(self$weights[[1]]))
+      }
+      
+      
+      
+      
+      
+      
+      print("------------------------self-organize-end------------------------------------------")
+      
     },
     
     # Method to perform learning
@@ -566,259 +729,298 @@ SONN <- R6Class(
     # learn(Rdata, labels, lr, CLASSIFICATION_MODE, activation_functions_learn, dropout_rates_learn, sample_weights)
     
     learn = function(Rdata, labels, lr, CLASSIFICATION_MODE, activation_functions_learn, dropout_rates_learn, sample_weights) {
-      cat("------------------------learn-begin-------------------------------------------------\n")
+      print("------------------------learn-begin-------------------------------------------------")
       start_time <- Sys.time()
       
-      # ---------- Basics ----------
-      if (!is.matrix(Rdata)) Rdata <- as.matrix(Rdata)
-      storage.mode(Rdata) <- "double"
-      n <- nrow(Rdata)
-      
-      # ---------- Layers / weights ----------
-      if (isTRUE(self$ML_NN)) {
-        stopifnot(is.list(self$weights), length(self$weights) >= 1L)
-        self$num_layers <- length(self$weights)
-      } else {
-        self$num_layers <- 1L
-        if (is.list(self$weights)) self$weights <- as.matrix(self$weights[[1]])
-        if (!is.matrix(self$weights)) self$weights <- as.matrix(self$weights)
-      }
-      K <- if (isTRUE(self$ML_NN)) ncol(as.matrix(self$weights[[self$num_layers]])) else ncol(as.matrix(self$weights))
-      
-      # ---------- Biases (pad to num_layers) ----------
-      if (isTRUE(self$ML_NN)) {
-        if (!is.list(self$biases)) self$biases <- as.list(self$biases)
-        if (length(self$biases) < self$num_layers) {
-          for (i in (length(self$biases) + 1L):self$num_layers) {
-            self$biases[[i]] <- rep(0, ncol(as.matrix(self$weights[[i]])))
-          }
+      ## ---------------------------
+      ## Labels & sample_weights prep
+      ## ---------------------------
+      if (identical(CLASSIFICATION_MODE, "binary")) {
+        # === Preserve your original binary behavior ===
+        if (!is.numeric(labels) || !is.matrix(labels) || ncol(labels) != 1) {
+          labels <- matrix(as.numeric(labels), ncol = 1)
         }
-      } else {
-        if (is.list(self$biases)) self$biases <- unlist(self$biases, use.names = FALSE)
-        if (length(self$biases) == 0) self$biases <- rep(0, K)
-      }
-      
-      # ---------- Activations & Dropout (recycle to num_layers) ----------
-      if (!is.list(activation_functions_learn)) activation_functions_learn <- list(activation_functions_learn)
-      if (length(activation_functions_learn) < self$num_layers) {
-        activation_functions_learn <- c(
-          activation_functions_learn,
-          rep(activation_functions_learn[[length(activation_functions_learn)]],
-              self$num_layers - length(activation_functions_learn))
-        )
-      }
-      if (is.null(dropout_rates_learn)) dropout_rates_learn <- list(0)
-      if (!is.list(dropout_rates_learn)) dropout_rates_learn <- list(dropout_rates_learn)
-      if (length(dropout_rates_learn) < self$num_layers) {
-        dropout_rates_learn <- c(
-          dropout_rates_learn,
-          rep(dropout_rates_learn[[length(dropout_rates_learn)]],
-              self$num_layers - length(dropout_rates_learn))
-        )
-      }
-      self$dropout_rates_learn <- dropout_rates_learn
-      
-      # ---------- Labels -> robust vector -> aligned one-hot ----------
-      extract_vec <- function(x) {
-        if (is.data.frame(x)) return(x[[1]])
-        if (is.matrix(x) || is.array(x)) {
-          if (ncol(x) == 1L) return(as.vector(x[,1]))
-          return(as.vector(x[,1]))
+        
+        pos_weight <- 2
+        neg_weight <- 1
+        
+        if (is.null(sample_weights)) {
+          sample_weights <- ifelse(labels == 1, pos_weight, neg_weight)
         }
-        x
-      }
-      labels_vec_raw <- extract_vec(labels)
-      if (length(labels_vec_raw) > n) {
-        labels_vec <- labels_vec_raw[seq_len(n)]
-      } else if (length(labels_vec_raw) < n) {
-        labels_vec <- c(labels_vec_raw, rep(NA, n - length(labels_vec_raw)))
-      } else {
-        labels_vec <- labels_vec_raw
-      }
-      
-      make_one_hot_aligned <- function(idx, n, K) {
-        if (length(idx) != n) stop(sprintf("one-hot: idx length %d != n %d", length(idx), n))
-        Y <- matrix(0, nrow = n, ncol = K)
-        valid <- !is.na(idx) & idx >= 1L & idx <= K
-        if (any(valid)) Y[cbind(which(valid), idx[valid])] <- 1
-        Y
-      }
-      
-      if (!missing(CLASSIFICATION_MODE) && identical(CLASSIFICATION_MODE, "multiclass")) {
-        f <- if (is.factor(labels_vec)) labels_vec else factor(labels_vec)
-        L <- nlevels(f); idx <- as.integer(f)          # 1..L or NA
-        if (L > K) idx[idx > K] <- K                   # truncate extra levels into K
-        Y <- make_one_hot_aligned(idx, n, K)
-      } else {
-        if (K == 1) {
-          if (is.factor(labels_vec)) {
-            yv <- as.integer(labels_vec) - 1L
+        sample_weights <- matrix(sample_weights, nrow = nrow(labels), ncol = 1)
+        
+        self$dropout_rates_learn <- dropout_rates_learn
+        
+        if (!is.matrix(labels)) labels <- as.matrix(labels)
+        if (length(dim(labels)) == 2 && nrow(labels) == ncol(labels)) {
+          labels <- matrix(diag(labels), ncol = 1)
+        }
+        labels <- matrix(as.numeric(labels), ncol = 1)
+        
+      } else if (identical(CLASSIFICATION_MODE, "multiclass")) {
+        # === Multiclass: make/align one-hot labels; default uniform weights ===
+        self$dropout_rates_learn <- dropout_rates_learn
+        
+        # Coerce labels into a matrix of one-hot if needed
+        if (is.matrix(labels) && ncol(labels) >= 2) {
+          # assume already one-hot
+          labels_mat <- labels
+        } else {
+          # vector/factor → one-hot via model.matrix
+          lbl_vec <- as.vector(labels)
+          # Use known levels if available
+          if (!is.null(self$class_levels) && length(self$class_levels) > 0) {
+            lbl_fac <- factor(lbl_vec, levels = self$class_levels)
           } else {
-            yv <- suppressWarnings(as.numeric(labels_vec))
-            if (all(is.na(yv))) { f <- factor(labels_vec); yv <- as.integer(f) - 1L }
+            lbl_fac <- factor(lbl_vec)
+            # cache for downstream consistency (optional)
+            self$class_levels <- levels(lbl_fac)
           }
-          yv[is.na(yv)] <- 0
-          Y <- matrix(as.numeric(yv), nrow = n, ncol = 1)
-        } else if (K == 2) {
-          f <- if (is.factor(labels_vec)) labels_vec else factor(labels_vec)
-          idx <- as.integer(f) - 1L
-          idx[is.na(idx)] <- 0L; idx[idx < 0L] <- 0L; idx[idx > 1L] <- 1L
-          Y <- cbind(1L - idx, idx)
-        } else {
-          f <- if (is.factor(labels_vec)) labels_vec else factor(labels_vec)
-          L <- nlevels(f); idx <- as.integer(f)
-          if (L > K) idx[idx > K] <- K
-          Y <- make_one_hot_aligned(idx, n, K)
+          labels_mat <- model.matrix(~ lbl_fac - 1)
+          colnames(labels_mat) <- as.character(self$class_levels)
         }
-      }
-      storage.mode(Y) <- "double"
-      
-      # ---------- Sample weights -> broadcast Wmat (n × K) ----------
-      if (is.null(sample_weights)) {
-        if (identical(CLASSIFICATION_MODE, "multiclass")) {
-          sample_weights <- rep(1, n)
-        } else if (K == 1) {
-          cls <- as.integer(Y >= 0.5); sample_weights <- ifelse(cls==1L, 2, 1)
-        } else if (K == 2) {
-          cls <- max.col(Y, ties.method = "first") - 1L
-          p1 <- mean(cls==1L); w1 <- ifelse(p1>0, 1/p1,1); w0 <- ifelse(1-p1>0, 1/(1-p1),1)
-          sample_weights <- ifelse(cls==1L, w1, w0)
-        } else {
-          sample_weights <- rep(1, n)
+        
+        labels <- as.matrix(labels_mat)
+        
+        # sample_weights: broadcast across K columns
+        if (is.null(sample_weights)) {
+          sample_weights <- rep(1, nrow(labels))
         }
+        sample_weights <- matrix(sample_weights, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
+        
+      } else {
+        stop(sprintf("Unknown CLASSIFICATION_MODE: %s", CLASSIFICATION_MODE))
       }
-      sample_weights <- as.numeric(sample_weights)
-      if (length(sample_weights) != n) stop("sample_weights length must equal n.")
-      Wmat <- matrix(sample_weights, nrow = n, ncol = K)
       
-      # ---------- Forward + Backprop ----------
       predicted_output_learn <- NULL
       error_learn <- NULL
-      dim_hidden_layers_learn <- vector("list", self$num_layers)
+      dim_hidden_layers_learn <- list()
       predicted_output_learn_hidden <- NULL
-      bias_gradients <- vector("list", self$num_layers)
-      grads_matrix <- vector("list", self$num_layers)
-      errors <- vector("list", self$num_layers)
+      bias_gradients <- list()
+      grads_matrix <- list()
+      weight_gradients <- list()
       
-      if (isTRUE(self$ML_NN)) {
+      errors <- list()  # $$$$$$$$$$$$$$$$ Added for per-layer error tracking
+      
+      if (self$ML_NN) {
         hidden_outputs <- vector("list", self$num_layers)
         activation_derivatives <- vector("list", self$num_layers)
-        input_matrix <- Rdata
+        dim_hidden_layers_learn <- vector("list", self$num_layers)
+        input_matrix <- as.matrix(Rdata)
         
-        for (layer in seq_len(self$num_layers)) {
+        for (layer in 1:self$num_layers) {
           weights_matrix <- as.matrix(self$weights[[layer]])
           bias_vec <- as.numeric(unlist(self$biases[[layer]]))
-          input_data <- if (layer == 1L) input_matrix else hidden_outputs[[layer - 1L]]
+          input_data <- if (layer == 1) input_matrix else hidden_outputs[[layer - 1]]
+          input_data <- as.matrix(input_data)
+          input_rows <- nrow(input_data)
+          weights_rows <- nrow(weights_matrix)
+          weights_cols <- ncol(weights_matrix)
           
-          # Bias broadcast
+          cat(sprintf("[Debug] Layer %d : input dim = %d x %d | weights dim = %d x %d\n",
+                      layer, input_rows, ncol(input_data), weights_rows, weights_cols))
+          cat(sprintf("[Debug] Layer %d : class = %s | dim = %s\n", layer, class(input_data), paste(dim(input_data), collapse = " x ")))
+          
+          if (ncol(input_data) != weights_rows) {
+            stop(sprintf("Layer %d: input cols (%d) do not match weights rows (%d)",
+                         layer, ncol(input_data), weights_rows))
+          }
+          
           if (length(bias_vec) == 1) {
-            bias_matrix <- matrix(bias_vec, nrow = nrow(input_data), ncol = ncol(weights_matrix))
-          } else if (length(bias_vec) == ncol(weights_matrix)) {
-            bias_matrix <- matrix(rep(bias_vec, each = nrow(input_data)), nrow = nrow(input_data))
-          } else if (length(bias_vec) == nrow(input_data) * ncol(weights_matrix)) {
-            bias_matrix <- matrix(bias_vec, nrow = nrow(input_data))
+            bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = weights_cols)
+          } else if (length(bias_vec) == weights_cols) {
+            bias_matrix <- matrix(rep(bias_vec, each = input_rows), nrow = input_rows)
+          } else if (length(bias_vec) == input_rows * weights_cols) {
+            bias_matrix <- matrix(bias_vec, nrow = input_rows)
           } else {
-            bias_matrix <- matrix(rep(bias_vec, length.out = nrow(input_data) * ncol(weights_matrix)),
-                                  nrow = nrow(input_data))
+            stop(sprintf("Layer %d: invalid bias shape: length = %d", layer, length(bias_vec)))
           }
           
           Z <- input_data %*% weights_matrix + bias_matrix
           
+          cat(sprintf("[Debug] Layer %d : Z summary BEFORE clipping:\n", layer))
+          print(summary(as.vector(Z)))
+          
           activation_function <- activation_functions_learn[[layer]]
           activation_name <- if (!is.null(activation_function)) attr(activation_function, "name") else "none"
-          clip_limit <- switch(activation_name, "sigmoid"=80, "tanh"=10, "softmax"=15, "relu"=100, "leaky_relu"=200, 90)
+          cat(sprintf("[Debug] Layer %d : Activation Function = %s\n", layer, activation_name))
+          
+          clip_limit <- switch(activation_name,
+                               "sigmoid" = 80,
+                               "tanh" = 10,
+                               "softmax" = 15,
+                               "relu" = 100,
+                               "leaky_relu" = 200,
+                               90)
+          
+          Z_max <- max(Z)
+          Z_min <- min(Z)
+          if (Z_max > clip_limit || Z_min < -clip_limit) {
+            cat(sprintf("[Debug] Layer %d : Z clipped. Pre-clip range: [%.2f, %.2f] | Clip limit: ±%g\n", layer, Z_min, Z_max, clip_limit))
+          }
           Z <- pmin(pmax(Z, -clip_limit), clip_limit)
           
+          cat(sprintf("[Debug] Layer %d : Z summary AFTER clipping:\n", layer))
+          print(summary(as.vector(Z)))
+          
           hidden_output <- if (!is.null(activation_function)) activation_function(Z) else Z
-          
-          # keep double-dropout
-          rate <- self$dropout_rates_learn[[layer]]
-          if (!is.null(rate) && is.finite(rate) && rate > 0 && rate < 1) {
-            hidden_output <- self$dropout(hidden_output, rate)
-            hidden_output <- self$dropout(hidden_output, rate)
-          }
-          
           hidden_outputs[[layer]] <- hidden_output
-          activation_derivatives[[layer]] <- if (!identical(activation_name, "none")) {
-            deriv_name <- paste0(activation_name, "_derivative")
-            if (!exists(deriv_name, mode = "function")) stop(sprintf("Missing derivative: %s", deriv_name))
-            get(deriv_name, mode = "function")(Z)
-          } else {
-            matrix(1, nrow = nrow(Z), ncol = ncol(Z))
+          
+          if (is.list(self$dropout_rates_learn) &&
+              length(self$dropout_rates_learn) >= layer &&
+              !is.null(self$dropout_rates_learn[[layer]]) &&
+              self$dropout_rates_learn[[layer]] > 0 &&
+              self$dropout_rates_learn[[layer]] < 1) {
+            
+            cat(sprintf("\n[Debug] Layer %d : Hidden output BEFORE dropout (sample):\n", layer))
+            print(head(hidden_output, 3))
+            
+            hidden_output <- self$dropout(hidden_output, self$dropout_rates_learn[[layer]])
+            hidden_outputs[[layer]] <- hidden_output
+            
+            hidden_outputs[[layer]] <- self$dropout(hidden_output, self$dropout_rates_learn[[layer]])
+            
+            cat(sprintf("[Debug] Layer %d : Hidden output AFTER  dropout (sample):\n", layer))
+            print(head(hidden_output, 3))
           }
           
+          cat(sprintf("[Debug] Layer %d : predicted_output_learn dim = %d x %d\n", layer, nrow(hidden_output), ncol(hidden_output)))
+          
+          if (activation_name != "none") {
+            derivative_name <- paste0(activation_name, "_derivative")
+            cat(sprintf("[Debug] Layer %d : Derivative function = %s\n", layer, derivative_name))
+            if (!exists(derivative_name, mode = "function")) {
+              stop(paste("Layer", layer, ": Activation derivative function", derivative_name, "does not exist."))
+            }
+            deriv <- get(derivative_name, mode = "function")(Z)
+          } else {
+            deriv <- matrix(1, nrow = nrow(Z), ncol = ncol(Z))
+          }
+          
+          activation_derivatives[[layer]] <- deriv
+          hidden_outputs[[layer]] <- hidden_output
           dim_hidden_layers_learn[[layer]] <- dim(hidden_output)
         }
         
         predicted_output_learn <- hidden_outputs[[self$num_layers]]
         predicted_output_learn_hidden <- hidden_outputs
         
-        # --- Utilize compute_error() for diagnostics (kept separate from gradient error) ---
-        # (Does not alter training dynamics; useful for printing/inspection if desired.)
-        error_abs_diag <- compute_error(predicted_output_learn, labels, CLASSIFICATION_MODE)
-        # You can preview if needed:
-        # if (!is.null(error_abs_diag)) print(utils::head(error_abs_diag, 3))
+        # ---- Error: matches (probs - labels) with proper weighting ----
+        # For binary: labels is n×1, weights n×1 → ok
+        # For multiclass: labels is n×K, weights is n×K → ok
+        error_learn <- (predicted_output_learn - labels) * sample_weights
         
-        # Error and deltas used for backprop (kept as in your original)
-        error_learn <- (predicted_output_learn - Y) * Wmat
         error_backprop <- error_learn
-        
         for (layer in self$num_layers:1) {
           delta <- error_backprop * activation_derivatives[[layer]]
-          errors[[layer]] <- delta
           bias_gradients[[layer]] <- matrix(colMeans(delta), nrow = 1)
-          input_for_grad <- if (layer == 1L) input_matrix else hidden_outputs[[layer - 1L]]
+          errors[[layer]] <- delta  # $$$$$$$$$$$$$$$$ Added
+          
+          input_for_grad <- if (layer == 1) input_matrix else hidden_outputs[[layer - 1]]
           grads_matrix[[layer]] <- t(input_for_grad) %*% delta
-          if (layer > 1L) {
-            error_backprop <- delta %*% t(as.matrix(self$weights[[layer]]))
+          
+          if (layer > 1) {
+            weights_t <- t(as.matrix(self$weights[[layer]]))
+            error_backprop <- delta %*% weights_t
           }
         }
-        
       } else {
-        # ---------- Single layer ----------
-        Wm <- as.matrix(self$weights); b <- as.numeric(self$biases)
-        if (length(b) == 1) {
-          B <- matrix(b, nrow = n, ncol = ncol(Wm))
-        } else if (length(b) == ncol(Wm)) {
-          B <- matrix(rep(b, each = n), nrow = n)
-        } else {
-          B <- matrix(rep(b, length.out = n * ncol(Wm)), nrow = n)
+        cat("Single Layer Learning Phase\n")
+        weights_matrix <- as.matrix(self$weights)
+        bias_vec <- as.numeric(unlist(self$biases))
+        input_rows <- nrow(Rdata)
+        weights_rows <- nrow(weights_matrix)
+        weights_cols <- ncol(weights_matrix)
+        
+        if (ncol(Rdata) != weights_rows) {
+          stop(sprintf("SL NN: input cols (%d) do not match weights rows (%d)", ncol(Rdata), weights_rows))
         }
-        rate <- if (!is.list(self$dropout_rates_learn)) self$dropout_rates_learn else self$dropout_rates_learn[[1]]
-        if (!is.null(rate) && is.finite(rate) && rate > 0 && rate < 1) Rdata <- self$dropout(Rdata, rate)
         
-        Z <- Rdata %*% Wm + B
-        af <- if (is.list(activation_functions_learn)) activation_functions_learn[[1]] else activation_functions_learn
-        af_name <- attr(af, "name")
-        limit <- switch(af_name, "sigmoid"=50, "tanh"=10, "softmax"=15, "relu"=100, "leaky_relu"=200, 90)
-        Z <- pmin(pmax(Z, -limit), limit)
-        predicted_output_learn <- if (!is.null(af)) af(Z) else Z
+        if (length(bias_vec) == 1) {
+          bias_matrix <- matrix(bias_vec, nrow = input_rows, ncol = weights_cols)
+        } else if (length(bias_vec) == weights_cols) {
+          bias_matrix <- matrix(rep(bias_vec, each = input_rows), nrow = input_rows)
+        } else if (length(bias_vec) == input_rows * weights_cols) {
+          bias_matrix <- matrix(bias_vec, nrow = input_rows)
+        } else {
+          stop(sprintf("SL NN: invalid bias shape: length = %d", length(bias_vec)))
+        }
         
-        # --- Utilize compute_error() for diagnostics (kept separate from gradient error) ---
-        error_abs_diag <- compute_error(predicted_output_learn, labels, CLASSIFICATION_MODE)
-        # if (!is.null(error_abs_diag)) print(utils::head(error_abs_diag, 3))
+        if (!is.list(self$dropout_rates_learn)) {
+          self$dropout_rates_learn <- list(self$dropout_rates_learn)
+        }
+        rate <- self$dropout_rates_learn[[1]]
+        if (!is.null(rate) && rate > 0 && rate < 1) {
+          cat(sprintf("[Debug] SL NN : Applying dropout with rate = %.2f\n", rate))
+          Rdata <- self$dropout(Rdata, rate)
+        }
         
-        # Backprop error preserved
-        error_learn <- (predicted_output_learn - Y) * Wmat
-        deriv <- if (!is.null(af)) {
-          dn <- paste0(attr(af, "name"), "_derivative")
-          if (exists(dn)) get(dn)(Z) else matrix(1, nrow = nrow(Z), ncol = ncol(Z))
+        Z <- Rdata %*% weights_matrix + bias_matrix
+        
+        cat(sprintf("[Debug]: Z summary BEFORE clipping.\n"))
+        print(summary(as.vector(Z)))
+        
+        if (is.function(activation_functions_learn)) {
+          activation_function <- activation_functions_learn
+        } else {
+          if (!is.list(activation_functions_learn)) {
+            activation_functions_learn <- list(activation_functions_learn)
+          }
+          activation_function <- activation_functions_learn[[1]]
+        }
+        
+        activation_name <- attr(activation_function, "name")
+        clip_limit <- switch(activation_name,
+                             "sigmoid" = 50,
+                             "tanh" = 10,
+                             "softmax" = 15,
+                             "relu" = 100,
+                             "leaky_relu" = 200,
+                             90)
+        
+        Z_max <- max(Z)
+        Z_min <- min(Z)
+        if (Z_max > clip_limit || Z_min < -clip_limit) {
+          cat(sprintf("[Debug] SL NN : Z clipped. Pre-clip range: [%.2f, %.2f] | Clip limit: ±%g\n", Z_min, Z_max, clip_limit))
+        }
+        Z <- pmin(pmax(Z, -clip_limit), clip_limit)
+        
+        cat("[Debug] SL NN : Z summary AFTER clipping:\n")
+        print(summary(as.vector(Z)))
+        
+        predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
+        
+        # For SL, we already arranged labels/sample_weights above per CLASSIFICATION_MODE:
+        #   - binary: n×1; multiclass: n×K
+        # If multiclass with SL, ensure dimensions match (weights_cols should equal K).
+        if (identical(CLASSIFICATION_MODE, "multiclass") && ncol(predicted_output_learn) != ncol(labels)) {
+          stop(sprintf("SL NN (multiclass): output cols (%d) != label cols (%d).",
+                       ncol(predicted_output_learn), ncol(labels)))
+        }
+        
+        error_learn <- (predicted_output_learn - labels) * sample_weights
+        
+        dim_hidden_layers_learn[[1]] <- dim(predicted_output_learn)
+        
+        activation_deriv <- if (!is.null(activation_function)) {
+          deriv_fn <- paste0(attr(activation_function, "name"), "_derivative")
+          if (!exists(deriv_fn)) matrix(1, nrow = nrow(Z), ncol = ncol(Z)) else get(deriv_fn)(Z)
         } else matrix(1, nrow = nrow(Z), ncol = ncol(Z))
-        delta <- error_learn * deriv
-        errors[[1]] <- delta
+        
+        delta <- error_learn * activation_deriv
         bias_gradients[[1]] <- matrix(colMeans(delta), nrow = 1)
         grads_matrix[[1]] <- t(Rdata) %*% delta
-        dim_hidden_layers_learn[[1]] <- dim(predicted_output_learn)
+        errors[[1]] <- delta  # $$$$$$$$$$$$$$$$ Added for SL NN
       }
       
       learn_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-      cat("------------------------learn-end-------------------------------------------------\n")
+      print("------------------------learn-end-------------------------------------------------")
       
-      
-      list(learn_output = predicted_output_learn, learn_time = learn_time, dim_hidden_layers = dim_hidden_layers_learn, hidden_outputs = predicted_output_learn_hidden, grads_matrix = grads_matrix, bias_gradients = bias_gradients, errors = errors)
-    }
+      return(list(learn_output = predicted_output_learn, learn_time = learn_time, error = error_learn, dim_hidden_layers = dim_hidden_layers_learn, hidden_outputs = predicted_output_learn_hidden, grads_matrix = grads_matrix, bias_gradients = bias_gradients, errors = errors))
     
-    ,# Method to perform prediction
+      },
+    
+    # Method to perform prediction
     predict = function(Rdata, weights = NULL, biases = NULL, activation_functions = NULL) {
       # If weights/biases are missing → fall back to internal state (stateful mode)
       if (is.null(weights)) {
@@ -1011,13 +1213,7 @@ SONN <- R6Class(
           num_epochs_check <<- num_epochs
           
           # 1) Train step
-          learn_result <- self$learn(
-            Rdata = Rdata, labels = labels, lr = lr,
-            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
-            activation_functions_learn = activation_functions,
-            dropout_rates_learn = dropout_rates,
-            sample_weights = sample_weights
-          )
+          learn_result <- self$learn(Rdata = Rdata, labels = labels, lr = lr, CLASSIFICATION_MODE = CLASSIFICATION_MODE, activation_functions_learn = activation_functions, dropout_rates_learn = dropout_rates,sample_weights = sample_weights)
           
           # ---- Gradients & misc outputs from learn() (normalize shapes early) ----
           weight_gradients_raw <- learn_result$grads_matrix
@@ -4301,247 +4497,235 @@ DESONN <- R6Class(
       return(low_mean_plots)
     }
     ,
-store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
+    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
-      
-  # ---------------- helpers (lightweight; keep most original structure) ----------------
-  to_num_mat <- function(x) {
-    # Coerce common inputs to a numeric matrix (no factors/characters left)
-    if (is.data.frame(x)) {
-      if (ncol(x) == 1L && (is.factor(x[[1]]) || is.character(x[[1]]))) {
-        x <- matrix(as.numeric(as.factor(x[[1]])), ncol = 1L)
-      } else {
-        x[] <- lapply(x, function(col) if (is.numeric(col)) col else as.numeric(as.factor(col)))
-        x <- as.matrix(x)
+      # ---------------- helpers (lightweight; keep most original structure) ----------------
+      to_num_mat <- function(x) {
+        # Coerce common inputs to a numeric matrix (no factors/characters left)
+        if (is.data.frame(x)) {
+          if (ncol(x) == 1L && (is.factor(x[[1]]) || is.character(x[[1]]))) {
+            x <- matrix(as.numeric(as.factor(x[[1]])), ncol = 1L)
+          } else {
+            x[] <- lapply(x, function(col) if (is.numeric(col)) col else as.numeric(as.factor(col)))
+            x <- as.matrix(x)
+          }
+        } else if (is.matrix(x)) {
+          if (!is.numeric(x)) x <- apply(x, 2, function(col) if (is.numeric(col)) col else as.numeric(as.factor(col)))
+          x <- as.matrix(x)
+        } else if (is.factor(x) || is.character(x)) {
+          x <- matrix(as.numeric(as.factor(x)), ncol = 1L)
+        } else if (is.atomic(x) && !is.matrix(x)) {
+          x <- matrix(x, ncol = 1L)
+        } else {
+          x <- as.matrix(x)
+          if (!is.numeric(x)) x <- matrix(as.numeric(as.factor(x)), nrow = nrow(x), ncol = ncol(x))
+        }
+        storage.mode(x) <- "double"
+        x
       }
-    } else if (is.matrix(x)) {
-      if (!is.numeric(x)) x <- apply(x, 2, function(col) if (is.numeric(col)) col else as.numeric(as.factor(col)))
-      x <- as.matrix(x)
-    } else if (is.factor(x) || is.character(x)) {
-      x <- matrix(as.numeric(as.factor(x)), ncol = 1L)
-    } else if (is.atomic(x) && !is.matrix(x)) {
-      x <- matrix(x, ncol = 1L)
-    } else {
-      x <- as.matrix(x)
-      if (!is.numeric(x)) x <- matrix(as.numeric(as.factor(x)), nrow = nrow(x), ncol = ncol(x))
+      clamp <- function(v, lo, hi) pmax(lo, pmin(hi, v))
+      
+      # ---------------- pick target set as before ----------------
+      target_raw <- if (isTRUE(validation_metrics)) {
+        get0("y_validation", ifnotfound = actual_values, inherits = TRUE)
+      } else {
+        actual_values
+      }
+      
+      # ---------------- Conform/compute by CLASSIFICATION_MODE (prevents non-numeric - operator) ----------------
+      # Coerce raw inputs to matrices we can work with
+      Lm0 <- to_num_mat(target_raw)
+      Pm0 <- to_num_mat(predicted_output)
+      
+      # Ensure same number of rows (trim to min; preserves original spirit without rowname alignment)
+      n_common <- min(nrow(Lm0), nrow(Pm0))
+      if (n_common == 0L) stop("[store_metadata] Empty labels/predictions after trim.")
+      if (nrow(Lm0) != nrow(Pm0)) {
+        Lm0 <- Lm0[seq_len(n_common), , drop = FALSE]
+        Pm0 <- Pm0[seq_len(n_common), , drop = FALSE]
+      }
+      
+      # ---- STRICT: require explicit CLASSIFICATION_MODE; no auto-infer ----
+      mode <- tolower(as.character(CLASSIFICATION_MODE))
+      if (!mode %in% c("binary","multiclass","regression")) {
+        stop("Invalid CLASSIFICATION_MODE. Must be one of: 'binary', 'multiclass', or 'regression'.")
+      }
+      
+      # We'll produce: target_matrix, predicted_output_matrix, error_prediction, differences
+      if (identical(mode, "binary")) {
+        # ----- Binary: target = {0,1}, predicted = p(pos) -----
+        if (ncol(Lm0) == 2L) {
+          y_true <- as.integer(Lm0[,2] >= Lm0[,1])
+        } else {
+          v <- as.numeric(Lm0[,1])
+          u <- sort(unique(as.integer(round(v))))
+          if (length(u) == 2L) {
+            y_true <- as.integer(v == max(u))  # map larger value to 1
+          } else if (all(v %in% c(0,1))) {
+            y_true <- as.integer(v)
+          } else {
+            y_true <- as.integer(v >= 0.5)
+          }
+        }
+        # predicted positive-class probability
+        p_pos <- if (ncol(Pm0) >= 2L) as.numeric(Pm0[,2]) else as.numeric(Pm0[,1])
+        p_pos[!is.finite(p_pos)] <- NA_real_
+        
+        target_matrix            <- matrix(as.numeric(y_true), ncol = 1L)
+        predicted_output_matrix  <- matrix(p_pos, ncol = 1L)
+        
+        error_prediction <- target_matrix - predicted_output_matrix
+        differences      <- error_prediction
+        
+      } else if (identical(mode, "multiclass")) {
+        # ----- Multiclass: target = one-hot (K), predicted = prob (K) -----
+        Kp <- ncol(Pm0); Kl <- ncol(Lm0)
+        K  <- if (Kp > 1L) Kp else if (Kl > 1L) Kl else max(2L, Kp, Kl)
+        
+        # Build true class IDs
+        if (Kl > 1L) {
+          true_ids <- max.col(Lm0, ties.method = "first")
+        } else {
+          # Single-column labels could be factor IDs; try to read from original target_raw if factor/character
+          if (is.data.frame(target_raw) && ncol(target_raw) == 1L && (is.factor(target_raw[[1]]) || is.character(target_raw[[1]]))) {
+            true_ids <- as.integer(factor(target_raw[[1]]))
+          } else {
+            vv <- as.integer(round(Lm0[,1]))
+            if (length(vv) && min(vv, na.rm = TRUE) == 0L) vv <- vv + 1L
+            true_ids <- vv
+          }
+          true_ids <- clamp(true_ids, 1L, K)
+        }
+        target_matrix <- one_hot_from_ids(true_ids, K)
+        
+        # Predicted probabilities: ensure N x K (replicate/truncate if needed)
+        if (ncol(Pm0) < K) {
+          total_needed <- n_common * K
+          rep_vec <- rep(as.vector(Pm0), length.out = total_needed)
+          predicted_output_matrix <- matrix(rep_vec, nrow = n_common, ncol = K, byrow = FALSE)
+        } else {
+          predicted_output_matrix <- Pm0[, seq_len(K), drop = FALSE]
+        }
+        
+        error_prediction <- target_matrix - predicted_output_matrix
+        differences      <- error_prediction
+        
+      } else {
+        # ----- Regression: preserve original shape logic (replicate/truncate columns) -----
+        if (ncol(Lm0) != ncol(Pm0)) {
+          total_elements_needed <- nrow(Lm0) * ncol(Lm0)
+          if (ncol(Pm0) < ncol(Lm0)) {
+            rep_factor <- ceiling(total_elements_needed / length(Pm0))
+            replicated_predicted_output <- rep(Pm0, rep_factor)[1:total_elements_needed]
+            predicted_output_matrix <- matrix(replicated_predicted_output,
+                                              nrow = nrow(Lm0), ncol = ncol(Lm0), byrow = FALSE)
+          } else {
+            truncated_predicted_output <- Pm0[, 1:ncol(Lm0), drop = FALSE]
+            predicted_output_matrix <- matrix(truncated_predicted_output,
+                                              nrow = nrow(Lm0), ncol = ncol(Lm0), byrow = FALSE)
+          }
+        } else {
+          predicted_output_matrix <- Pm0
+        }
+        target_matrix    <- Lm0
+        error_prediction <- target_matrix - predicted_output_matrix
+        differences      <- error_prediction
+      }
+      
+      # --- Calculate summary statistics (as in original) ---
+      summary_stats <- summary(differences)
+      boxplot_stats <- boxplot.stats(as.numeric(differences))
+      
+      # --- Load plot_epochs from file (placeholder kept) ---
+      # plot_epochs <- readRDS(paste0("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds"))
+      plot_epochs <- NULL
+      
+      # --- Prepare weight and bias records (preserved) ---
+      best_weights_records <- list()
+      best_biases_records  <- list()
+      for (i in 1:num_networks) {
+        best_weights_records[[i]] <- all_weights[[i]]
+        best_biases_records[[i]]  <- all_biases[[i]]
+      }
+      
+      # --- Generate model_serial_num (preserved) ---
+      model_serial_num <- sprintf("%d.0.%d", as.integer(ensemble_number), as.integer(model_iter_num))
+      
+      # --- Build filename prefix / artifact names (preserved) ---
+      fname <- make_fname_prefix(
+        do_ensemble     = isTRUE(get0("do_ensemble", ifnotfound = FALSE, inherits = TRUE)),
+        num_networks    = get0("num_networks", ifnotfound = NULL, inherits = TRUE),
+        total_models    = get0("num_networks", ifnotfound = NULL, inherits = TRUE),
+        ensemble_number = ensemble_number,
+        model_index     = model_iter_num,
+        who             = "SONN"
+      )
+      artifact_names <- list(
+        training_accuracy_loss_plot = fname("training_accuracy_loss_plot.png"),
+        output_saturation_plot      = fname("output_saturation_plot.png"),
+        max_weight_plot             = fname("max_weight_plot.png")
+      )
+      artifact_paths <- lapply(artifact_names, function(nm) file.path("plots", nm))
+      
+      # --- Create metadata list (preserved, using explicit CLASSIFICATION_MODE) ---
+      metadata <- list(
+        input_size = input_size,
+        output_size = output_size,
+        N = N,
+        never_ran_flag = never_ran_flag,
+        num_samples = total_num_samples,
+        num_test_samples = num_test_samples,
+        num_training_samples = num_training_samples,
+        num_validation_samples = num_validation_samples,
+        num_networks = num_networks,
+        update_weights = update_weights,
+        update_biases = update_biases,
+        lr = lr,
+        lambda = lambda,
+        num_epochs = num_epochs,
+        optimal_epoch = predicted_outputAndTime$optimal_epoch,
+        run_id = run_id,
+        ensemble_number = ensemble_number,
+        model_iter_num = model_iter_num,
+        model_serial_num = model_serial_num,
+        threshold = threshold,
+        CLASSIFICATION_MODE = mode,                     # explicit (no auto)
+        predicted_output = predicted_output,
+        predicted_output_tail = tail(predicted_output),
+        actual_values_tail = tail(actual_values),
+        differences = tail(differences),
+        summary_stats = summary_stats,
+        boxplot_stats = boxplot_stats,
+        X = X,
+        y = y,
+        lossesatoptimalepoch = predicted_outputAndTime$lossesatoptimalepoch,
+        loss_increase_flag = predicted_outputAndTime$loss_increase_flag,
+        performance_metric = performance_metric,
+        relevance_metric = relevance_metric,
+        plot_epochs = plot_epochs,
+        best_weights_record = best_weights_records,
+        best_biases_record = best_biases_records,
+        
+        # NEW: filename artifacts (preserved names/structure)
+        fname_artifact_names = artifact_names,
+        fname_artifact_paths = artifact_paths,
+        validation_metrics = validation_metrics
+      )
+      
+      metadata_main_ensemble <- list()
+      metadata_temp_ensemble <- list()
+      
+      # --- Store metadata by ensemble type (preserved) ---
+      if (ensemble_number <= 1) {
+        print(paste("Storing metadata for main ensemble model", model_iter_num, "as", model_serial_num))
+        assign(paste0("Ensemble_Main_", ensemble_number, "_model_", model_iter_num, "_metadata"),
+               metadata, envir = .GlobalEnv)
+      } else {
+        print(paste("Storing metadata for temp ensemble model", model_iter_num, "as", model_serial_num))
+        assign(paste0("Ensemble_Temp_", ensemble_number, "_model_", model_iter_num, "_metadata"),
+               metadata, envir = .GlobalEnv)
+      }
     }
-    storage.mode(x) <- "double"
-    x
-  }
-  clamp <- function(v, lo, hi) pmax(lo, pmin(hi, v))
-one_hot_from_ids <- function(ids, K) {
-  ids <- as.integer(ids)
-  N <- length(ids)
-  M <- matrix(0L, nrow = N, ncol = K)
-  ok <- !is.na(ids) & ids >= 1L & ids <= K
-  if (any(ok)) M[cbind(seq_len(N)[ok], ids[ok])] <- 1L
-  M
-}
-infer_mode <- function(L, P) {
-  # If either has >1 col -> multiclass; else binary if labels look {0,1}/two values; else regression
-  if (max(ncol(L), ncol(P)) > 1L) return("multiclass")
-  u <- sort(unique(as.integer(round(L[,1]))))
-  if (length(u) <= 2L) "binary" else "regression"
-}
-
-# ---------------- pick target set as before ----------------
-target_raw <- if (isTRUE(validation_metrics)) {
-  get0("y_validation", ifnotfound = actual_values, inherits = TRUE)
-} else {
-  actual_values
-}
-
-# ---------------- Conform/compute by CLASSIFICATION_MODE (prevents non-numeric - operator) ----------------
-# Coerce raw inputs to matrices we can work with
-Lm0 <- to_num_mat(target_raw)
-Pm0 <- to_num_mat(predicted_output)
-
-# Ensure same number of rows (trim to min; preserves original spirit without rowname alignment)
-n_common <- min(nrow(Lm0), nrow(Pm0))
-if (n_common == 0L) stop("[store_metadata] Empty labels/predictions after trim.")
-if (nrow(Lm0) != nrow(Pm0)) {
-  Lm0 <- Lm0[seq_len(n_common), , drop = FALSE]
-  Pm0 <- Pm0[seq_len(n_common), , drop = FALSE]
-}
-
-mode <- tolower(if (is.character(CLASSIFICATION_MODE) && nzchar(CLASSIFICATION_MODE)) CLASSIFICATION_MODE else "auto")
-if (identical(mode, "auto")) mode <- infer_mode(Lm0, Pm0)
-
-# We'll produce: target_matrix, predicted_output_matrix, error_prediction, differences
-if (identical(mode, "binary")) {
-  # ----- Binary: target = {0,1}, predicted = p(pos) -----
-  if (ncol(Lm0) == 2L) {
-    y_true <- as.integer(Lm0[,2] >= Lm0[,1])
-  } else {
-    v <- as.numeric(Lm0[,1])
-    u <- sort(unique(as.integer(round(v))))
-    if (length(u) == 2L) {
-      y_true <- as.integer(v == max(u))  # map larger value to 1
-    } else if (all(v %in% c(0,1))) {
-      y_true <- as.integer(v)
-    } else {
-      y_true <- as.integer(v >= 0.5)
-    }
-  }
-  # predicted positive-class probability
-  p_pos <- if (ncol(Pm0) >= 2L) as.numeric(Pm0[,2]) else as.numeric(Pm0[,1])
-  p_pos[!is.finite(p_pos)] <- NA_real_
-  
-  target_matrix            <- matrix(as.numeric(y_true), ncol = 1L)
-  predicted_output_matrix  <- matrix(p_pos, ncol = 1L)
-  
-  error_prediction <- target_matrix - predicted_output_matrix
-  differences      <- error_prediction
-  
-} else if (identical(mode, "multiclass")) {
-  # ----- Multiclass: target = one-hot (K), predicted = prob (K) -----
-  Kp <- ncol(Pm0); Kl <- ncol(Lm0)
-  K  <- if (Kp > 1L) Kp else if (Kl > 1L) Kl else max(2L, Kp, Kl)
-  
-  # Build true class IDs
-  if (Kl > 1L) {
-    true_ids <- max.col(Lm0, ties.method = "first")
-  } else {
-    # Single-column labels could be factor IDs; try to read from original target_raw if factor/character
-    if (is.data.frame(target_raw) && ncol(target_raw) == 1L && (is.factor(target_raw[[1]]) || is.character(target_raw[[1]]))) {
-      true_ids <- as.integer(factor(target_raw[[1]]))
-    } else {
-      vv <- as.integer(round(Lm0[,1]))
-      if (length(vv) && min(vv, na.rm = TRUE) == 0L) vv <- vv + 1L
-      true_ids <- vv
-    }
-    true_ids <- clamp(true_ids, 1L, K)
-  }
-  target_matrix <- one_hot_from_ids(true_ids, K)
-  
-  # Predicted probabilities: ensure N x K (replicate/truncate if needed)
-  if (ncol(Pm0) < K) {
-    total_needed <- n_common * K
-    rep_vec <- rep(as.vector(Pm0), length.out = total_needed)
-    predicted_output_matrix <- matrix(rep_vec, nrow = n_common, ncol = K, byrow = FALSE)
-  } else {
-    predicted_output_matrix <- Pm0[, seq_len(K), drop = FALSE]
-  }
-  
-  error_prediction <- target_matrix - predicted_output_matrix
-  differences      <- error_prediction
-  
-} else {
-  # ----- Regression: preserve original shape logic (replicate/truncate columns) -----
-  if (ncol(Lm0) != ncol(Pm0)) {
-    total_elements_needed <- nrow(Lm0) * ncol(Lm0)
-    if (ncol(Pm0) < ncol(Lm0)) {
-      rep_factor <- ceiling(total_elements_needed / length(Pm0))
-      replicated_predicted_output <- rep(Pm0, rep_factor)[1:total_elements_needed]
-      predicted_output_matrix <- matrix(replicated_predicted_output,
-                                        nrow = nrow(Lm0), ncol = ncol(Lm0), byrow = FALSE)
-    } else {
-      truncated_predicted_output <- Pm0[, 1:ncol(Lm0), drop = FALSE]
-      predicted_output_matrix <- matrix(truncated_predicted_output,
-                                        nrow = nrow(Lm0), ncol = ncol(Lm0), byrow = FALSE)
-    }
-  } else {
-    predicted_output_matrix <- Pm0
-  }
-  target_matrix    <- Lm0
-  error_prediction <- target_matrix - predicted_output_matrix
-  differences      <- error_prediction
-}
-
-# --- Calculate summary statistics (as in original) ---
-summary_stats <- summary(differences)
-boxplot_stats <- boxplot.stats(as.numeric(differences))
-
-# --- Load plot_epochs from file (placeholder kept) ---
-# plot_epochs <- readRDS(paste0("plot_epochs_DESONN", ensemble_number, "SONN", model_iter_num, ".rds"))
-plot_epochs <- NULL
-
-# --- Prepare weight and bias records (preserved) ---
-best_weights_records <- list()
-best_biases_records  <- list()
-for (i in 1:num_networks) {
-  best_weights_records[[i]] <- all_weights[[i]]
-  best_biases_records[[i]]  <- all_biases[[i]]
-}
-
-# --- Generate model_serial_num (preserved) ---
-model_serial_num <- sprintf("%d.0.%d", as.integer(ensemble_number), as.integer(model_iter_num))
-
-# --- Build filename prefix / artifact names (preserved) ---
-fname <- make_fname_prefix(
-  do_ensemble     = isTRUE(get0("do_ensemble", ifnotfound = FALSE, inherits = TRUE)),
-  num_networks    = get0("num_networks", ifnotfound = NULL, inherits = TRUE),
-  total_models    = get0("num_networks", ifnotfound = NULL, inherits = TRUE),
-  ensemble_number = ensemble_number,
-  model_index     = model_iter_num,
-  who             = "SONN"
-)
-artifact_names <- list(
-  training_accuracy_loss_plot = fname("training_accuracy_loss_plot.png"),
-  output_saturation_plot      = fname("output_saturation_plot.png"),
-  max_weight_plot             = fname("max_weight_plot.png")
-)
-artifact_paths <- lapply(artifact_names, function(nm) file.path("plots", nm))
-
-# --- Create metadata list (preserved, plus store mode & matrices we computed) ---
-metadata <- list(
-  input_size = input_size,
-  output_size = output_size,
-  N = N,
-  never_ran_flag = never_ran_flag,
-  num_samples = num_samples,
-  num_test_samples = num_test_samples,
-  num_training_samples = num_training_samples,
-  num_validation_samples = num_validation_samples,
-  num_networks = num_networks,
-  update_weights = update_weights,
-  update_biases = update_biases,
-  lr = lr,
-  lambda = lambda,
-  num_epochs = num_epochs,
-  optimal_epoch = predicted_outputAndTime$optimal_epoch,
-  run_id = run_id,
-  ensemble_number = ensemble_number,
-  model_iter_num = model_iter_num,
-  model_serial_num = model_serial_num,
-  threshold = threshold,
-  CLASSIFICATION_MODE = mode,                     # <--- added
-  predicted_output = predicted_output,
-  predicted_output_tail = tail(predicted_output),
-  actual_values_tail = tail(actual_values),
-  differences = tail(differences),
-  summary_stats = summary_stats,
-  boxplot_stats = boxplot_stats,
-  X = X,
-  y = y,
-  lossesatoptimalepoch = predicted_outputAndTime$lossesatoptimalepoch,
-  loss_increase_flag = predicted_outputAndTime$loss_increase_flag,
-  performance_metric = performance_metric,
-  relevance_metric = relevance_metric,
-  plot_epochs = plot_epochs,
-  best_weights_record = best_weights_records,
-  best_biases_record = best_biases_records,
-  
-  # NEW: filename artifacts (preserved names/structure)
-  fname_artifact_names = artifact_names,
-  fname_artifact_paths = artifact_paths,
-  validation_metrics = validation_metrics
-)
-
-metadata_main_ensemble <- list()
-metadata_temp_ensemble <- list()
-
-# --- Store metadata by ensemble type (preserved) ---
-if (ensemble_number <= 1) {
-  print(paste("Storing metadata for main ensemble model", model_iter_num, "as", model_serial_num))
-  assign(paste0("Ensemble_Main_", ensemble_number, "_model_", model_iter_num, "_metadata"),
-         metadata, envir = .GlobalEnv)
-} else {
-  print(paste("Storing metadata for temp ensemble model", model_iter_num, "as", model_serial_num))
-  assign(paste0("Ensemble_Temp_", ensemble_number, "_model_", model_iter_num, "_metadata"),
-         metadata, envir = .GlobalEnv)
-}
-}
     
     
     
@@ -5105,10 +5289,10 @@ calculate_relevance <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, model_
   
   # --- Active relevance metrics ---
   rel_metrics <- list(
-    hit_rate     = tryCatch(hit_rate(SONN, Rdata, predicted_output, labels, verbose), error = function(e) NULL),
-    ndcg         = tryCatch(ndcg(SONN, Rdata, predicted_output, labels, verbose), error = function(e) NULL),
-    diversity    = tryCatch(diversityfunction(SONN, Rdata, predicted_output, verbose), error = function(e) NULL),
-    serendipity  = tryCatch(serendipityfunction(SONN, Rdata, predicted_output, verbose), error = function(e) NULL)
+    hit_rate     = tryCatch(hit_rate(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, labels, verbose), error = function(e) NULL),
+    ndcg         = tryCatch(ndcg(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, labels, verbose), error = function(e) NULL),
+    diversity    = tryCatch(diversity(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, verbose), error = function(e) NULL),
+    serendipity  = tryCatch(serendipity(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, verbose), error = function(e) NULL)
   )
   
   
@@ -5591,13 +5775,11 @@ clustering_quality_db <- function(SONN, Rdata, cluster_assignments, verbose) {
 }
 
 
-# Debug MSE that USES CLASSIFICATION_MODE for shape handling
+# Debug MSE that USES CLASSIFICATION_MODE for shape handling (silent version)
 # Signature: MSE(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose)
 MSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose) {
-  dbg <- function(...) if (isTRUE(verbose)) cat(..., "\n")
-  t0 <- Sys.time()
-  dbg("\n[MSE] ===== begin =====")
-  dbg(sprintf("[MSE] CLASSIFICATION_MODE = %s", as.character(CLASSIFICATION_MODE)))
+  # support %||% like base R (define before use)
+  `%||%` <- function(x, y) if (is.null(x)) y else x
   
   # --- helpers ---
   to_num_mat <- function(x, name = "obj") {
@@ -5616,9 +5798,11 @@ MSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verb
   }
   one_hot <- function(idx, K) {
     idx <- as.integer(idx)
-    idx[idx < 1] <- 1L; idx[idx > K] <- K
+    idx[is.na(idx)] <- 1L
+    idx[idx < 1L] <- 1L
+    idx[idx > K]  <- K
     M <- matrix(0, nrow = length(idx), ncol = K)
-    M[cbind(seq_along(idx), idx)] <- 1
+    if (length(idx)) M[cbind(seq_along(idx), idx)] <- 1
     storage.mode(M) <- "double"
     M
   }
@@ -5627,131 +5811,99 @@ MSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verb
   lbl  <- to_num_mat(labels, "labels")
   pred <- to_num_mat(predicted_output, "predicted_output")
   
-  dbg(sprintf("[MSE] initial dims: labels=%d x %d | pred=%d x %d",
-              nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-  
   # --- ROW ALIGNMENT (no recycling) ---
   n_common <- min(nrow(lbl), nrow(pred))
-  if (nrow(lbl) != nrow(pred)) {
-    dbg(sprintf("[MSE] Row mismatch -> trimming to %d rows (labels=%d, pred=%d)",
-                n_common, nrow(lbl), nrow(pred)))
-  }
+  if (n_common == 0L) return(NA_real_)
   lbl  <- lbl[seq_len(n_common), , drop = FALSE]
   pred <- pred[seq_len(n_common), , drop = FALSE]
   
   # --- MODE-BASED SHAPE HARMONIZATION ---
   mode <- tolower(as.character(CLASSIFICATION_MODE %||% "regression"))
-  # support %||% like base R:
-  `%||%` <- function(x,y) if (is.null(x)) y else x
   
   if (identical(mode, "multiclass")) {
     # Expect pred: N x K
     K <- ncol(pred)
-    if (K < 2L) {
-      dbg("[MSE] ERROR: multiclass mode but predicted_output has <2 columns. Provide N x K probability matrix.")
-      return(NA_real_)
-    }
+    if (K < 2L) return(NA_real_)
     if (ncol(lbl) == 1L) {
       # class index 1..K or 0..K-1 -> one-hot
-      u <- sort(unique(as.integer(lbl[,1])))
-      if (min(u, na.rm = TRUE) == 0L && max(u, na.rm = TRUE) == (K - 1L)) {
-        dbg("[MSE] Detected 0-based class indices -> shifting +1")
-        lbl <- lbl + 1
+      u <- sort(unique(as.integer(lbl[, 1])))
+      if (length(u)) {
+        if (min(u, na.rm = TRUE) == 0L && max(u, na.rm = TRUE) == (K - 1L)) {
+          lbl <- lbl + 1
+        }
       }
-      dbg(sprintf("[MSE] Multiclass: one-hot encoding labels to K=%d", K))
-      lbl <- one_hot(lbl[,1], K)
+      lbl <- one_hot(lbl[, 1], K)
     } else if (ncol(lbl) != K) {
-      dbg(sprintf("[MSE] ERROR: Multiclass labels have %d cols; pred has %d. Provide class index or one-hot with K.",
-                  ncol(lbl), K))
       return(NA_real_)
     }
+    
   } else if (identical(mode, "binary")) {
     # Conventions:
     #   pred: N x 1 (p_pos) OR N x 2 ([p_neg, p_pos])
     #   lbl : N x 1 (0/1 or two unique values) OR N x 2 one-hot
     if (ncol(pred) == 1L && ncol(lbl) == 2L) {
-      dbg("[MSE] Binary: pred 1-col, labels 2-col one-hot -> reducing labels to 0/1 using column 2 as positive")
-      lbl <- matrix(lbl[,2], ncol = 1L)
+      # Reduce labels to 0/1 using column 2 as positive
+      lbl <- matrix(lbl[, 2], ncol = 1L)
     } else if (ncol(pred) == 2L && ncol(lbl) == 1L) {
-      dbg("[MSE] Binary: pred 2-col, labels 1-col 0/1 -> expanding labels to one-hot [neg,pos]")
-      v <- as.integer(round(lbl[,1]))
+      # Expand labels to one-hot [neg, pos]
+      v <- as.integer(round(lbl[, 1]))
       v[is.na(v)] <- 0L
+      v[v != 0L]  <- 1L
       lbl <- cbind(1 - v, v)
       storage.mode(lbl) <- "double"
     } else if (ncol(pred) == 1L && ncol(lbl) == 1L) {
-      uniq <- sort(unique(as.integer(lbl[,1])))
-      if (!all(uniq %in% c(0L,1L))) {
+      # Ensure {0,1}
+      uniq <- sort(unique(as.integer(lbl[, 1])))
+      if (!all(uniq %in% c(0L, 1L))) {
         if (length(uniq) == 2L) {
-          dbg(sprintf("[MSE] Binary: mapping labels {%d,%d} -> {0,1}", uniq[1], uniq[2]))
-          lbl[,1] <- ifelse(lbl[,1] == uniq[2], 1, 0)
+          lbl[, 1] <- ifelse(lbl[, 1] == uniq[2], 1, 0)
         } else {
-          dbg("[MSE] ERROR: labels not {0,1} and not exactly two values; cannot map safely.")
           return(NA_real_)
         }
       }
     } else if (ncol(pred) == 2L && ncol(lbl) == 2L) {
       # already aligned
+      # nothing to do
     } else {
-      dbg(sprintf("[MSE] ERROR: Unexpected binary shapes: labels=%d cols, pred=%d cols", ncol(lbl), ncol(pred)))
       return(NA_real_)
     }
+    
   } else if (!identical(mode, "regression")) {
-    dbg(sprintf("[MSE] ERROR: Unknown CLASSIFICATION_MODE='%s' (use 'binary','multiclass','regression')", mode))
+    # Unknown mode
     return(NA_real_)
   }
   
-  # --- FINAL COLUMN CHECK (avoid replicate/truncate for probabilities in mode-aware path) ---
+  # --- FINAL COLUMN CHECK (avoid replicate/truncate for class probs) ---
   if (ncol(lbl) != ncol(pred)) {
-    # Only fall back to replicate/truncate in regression or as last resort
     if (identical(mode, "regression")) {
-      dbg(sprintf("[MSE] Regression: conforming columns via replicate/truncate (labels=%d, pred=%d)",
-                  ncol(lbl), ncol(pred)))
+      # Conform via replicate/truncate
       total_needed <- nrow(lbl) * ncol(lbl)
       if (ncol(pred) < ncol(lbl)) {
-        rep_factor <- ceiling(total_needed / length(pred))
-        dbg(sprintf("[MSE] Replicating pred by factor %d then truncating to %d elements", rep_factor, total_needed))
-        vec <- rep(pred, rep_factor)[1:total_needed]
+        vec <- rep(pred, length.out = total_needed)
         pred <- matrix(vec, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
       } else {
-        dbg(sprintf("[MSE] Truncating pred columns from %d to %d", ncol(pred), ncol(lbl)))
         pred <- pred[, 1:ncol(lbl), drop = FALSE]
         pred <- matrix(pred, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
       }
     } else {
-      dbg(sprintf("[MSE] ERROR: After mode-based harmonization, labels=%d cols, pred=%d cols. Aborting.",
-                  ncol(lbl), ncol(pred)))
       return(NA_real_)
     }
   }
   
-  dbg(sprintf("[MSE] final dims aligned: labels=%d x %d | pred=%d x %d",
-              nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-  
   # --- NA handling ---
   cc <- stats::complete.cases(cbind(lbl, pred))
-  if (sum(!cc) > 0) dbg(sprintf("[MSE] Dropping %d row(s) with NA/Inf", sum(!cc)))
+  if (!any(cc)) return(NA_real_)
   lbl  <- lbl[cc, , drop = FALSE]
   pred <- pred[cc, , drop = FALSE]
-  if (!nrow(lbl)) { dbg("[MSE] No rows left -> NA"); return(NA_real_) }
+  if (!nrow(lbl)) return(NA_real_)
   
-  # --- Compute error + MSE (placeholder metric) ---
+  # --- Compute error + MSE ---
   err <- pred - lbl
   mse <- mean(err^2)
   
-  # --- Debug previews ---
-  dbg("[MSE] preview labels / pred / err (head 5):")
-  print(utils::head(lbl, 5))
-  print(utils::head(pred, 5))
-  print(utils::head(err, 5))
-  dbg(sprintf("[MSE] MSE = %.8f", mse))
-  dbg("[MSE] err summary:")
-  print(summary(as.numeric(err)))
-  dbg(sprintf("[MSE] done in %.3f sec", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-  dbg("[MSE] ===== end =====\n")
-  
   mse
-
 }
+
 
 # Generalization ability
 generalization_ability <- function(SONN, Rdata, verbose) {
@@ -5816,28 +5968,6 @@ memory_usage <- function(SONN, Rdata, verbose) {
 
 # Robustness
 robustness <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs, model_iter_num, predicted_output, ensemble_number, weights, biases, activation_functions, dropout_rates, verbose) {
-  dbg <- function(...) if (isTRUE(verbose)) cat(..., "\n")
-  
-  dbg("\n[robustness] ===== begin =====")
-  dbg(sprintf("[robustness] CLASSIFICATION_MODE = %s", as.character(CLASSIFICATION_MODE)))
-  
-  # ---------- DEBUG CHECK FOR CORRUPTED BIASES ----------
-  cat(">>> DEBUG: Checking SONN$biases types...\n")
-  if (is.null(SONN$biases)) {
-    cat("SONN$biases is NULL\n")
-  } else if (!is.list(SONN$biases)) {
-    cat("SONN$biases is not a list, type is:", class(SONN$biases), "\n")
-  } else {
-    for (i in seq_along(SONN$biases)) {
-      bias_class <- class(SONN$biases[[i]])
-      cat(sprintf("Layer %d bias type: %s\n", i, bias_class))
-      if (is.function(SONN$biases[[i]])) {
-        stop(sprintf("ERROR: SONN$biases[[%d]] is a function (closure). It should be numeric!", i))
-      }
-    }
-  }
-  
-  # ---------- helpers ----------
   `%||%` <- function(x, y) if (is.null(x)) y else x
   to_num_mat <- function(x, name = "obj") {
     if (is.data.frame(x)) {
@@ -5859,110 +5989,84 @@ robustness <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs,
     storage.mode(M) <- "double"; M
   }
   
-  # ---------- build noisy data ----------
+  # build noisy data
   Rdata <- as.matrix(Rdata)
   storage.mode(Rdata) <- "double"
-  
-  set.seed(123) # deterministic noise for reproducibility in debug
+  set.seed(123) # deterministic noise for reproducibility
   noisy_Rdata <- Rdata + rnorm(n = nrow(Rdata) * ncol(Rdata), mean = 0, sd = 0.2)
   noisy_Rdata <- matrix(noisy_Rdata, nrow = nrow(Rdata), ncol = ncol(Rdata))
   storage.mode(noisy_Rdata) <- "double"
   
-  # Add outliers (keep dimensions sane)
+  # Add outliers
   n_out_rows <- max(1L, min(nrow(noisy_Rdata), as.integer(round(0.02 * nrow(noisy_Rdata)))))
   outliers <- matrix(rnorm(n_out_rows * ncol(noisy_Rdata), mean = 5, sd = 1),
                      nrow = n_out_rows, ncol = ncol(noisy_Rdata))
   idx_rows <- sample.int(nrow(noisy_Rdata), n_out_rows)
   noisy_Rdata[idx_rows, ] <- outliers
   
-  dbg(sprintf("[robustness] Rdata dims: %d x %d | noisy dims: %d x %d",
-              nrow(Rdata), ncol(Rdata), nrow(noisy_Rdata), ncol(noisy_Rdata)))
-  
-  # ---------- global toggles (safe defaults) ----------
   learnOnlyTrainingRun <- get0("learnOnlyTrainingRun", ifnotfound = FALSE, inherits = TRUE)
   plot_robustness      <- get0("plot_robustness",      ifnotfound = FALSE, inherits = TRUE)
   
   accuracy <- NA_real_
   
   if (!isTRUE(learnOnlyTrainingRun)) {
-    # ---------- predict on noisy data ----------
-    dbg("[robustness] Predicting on noisy data...")
+    # predict on noisy data
     pred_obj <- SONN$predict(noisy_Rdata, weights, biases, activation_functions)
     pred_raw <- pred_obj$predicted_output
     
-    # ---------- coerce to numeric matrices ----------
+    # coerce to numeric matrices
     lbl  <- to_num_mat(labels, "labels")
     pred <- to_num_mat(pred_raw, "predicted_output")
     
-    dbg(sprintf("[robustness] initial dims: labels=%d x %d | pred=%d x %d",
-                nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-    
-    # ---------- row alignment (NO recycling) ----------
+    # row alignment
     n_common <- min(nrow(lbl), nrow(pred))
-    if (nrow(lbl) != nrow(pred)) {
-      dbg(sprintf("[robustness] Row mismatch -> trimming to %d rows (labels=%d, pred=%d)",
-                  n_common, nrow(lbl), nrow(pred)))
-    }
+    if (n_common == 0L) return(NA_real_)
     lbl  <- lbl[seq_len(n_common), , drop = FALSE]
     pred <- pred[seq_len(n_common), , drop = FALSE]
     
-    # ---------- mode-based shape harmonization ----------
+    # mode-based harmonization
     mode <- tolower(as.character(CLASSIFICATION_MODE %||% "regression"))
     
     if (identical(mode, "multiclass")) {
       K <- ncol(pred)
-      if (K < 2L) { dbg("[robustness] ERROR: multiclass but pred has <2 cols"); return(NA_real_) }
+      if (K < 2L) return(NA_real_)
       if (ncol(lbl) == 1L) {
         u <- sort(unique(as.integer(lbl[,1])))
         if (length(u) && min(u, na.rm = TRUE) == 0L && max(u, na.rm = TRUE) == (K - 1L)) {
-          dbg("[robustness] Detected 0-based class indices -> shifting +1")
           lbl <- lbl + 1
         }
-        dbg(sprintf("[robustness] One-hot encoding labels to K=%d", K))
         lbl <- one_hot(lbl[,1], K)
       } else if (ncol(lbl) != K) {
-        dbg(sprintf("[robustness] ERROR: labels have %d cols; pred has %d (expected K)", ncol(lbl), K))
         return(NA_real_)
       }
     } else if (identical(mode, "binary")) {
       if (ncol(pred) == 1L && ncol(lbl) == 2L) {
-        dbg("[robustness] Binary: pred 1-col; labels 2-col -> collapse labels to 0/1 (use col2 as positive)")
         lbl <- matrix(lbl[,2], ncol = 1L)
       } else if (ncol(pred) == 2L && ncol(lbl) == 1L) {
-        dbg("[robustness] Binary: pred 2-col; labels 1-col -> expand labels to one-hot [neg,pos]")
         v <- as.integer(round(lbl[,1])); v[is.na(v)] <- 0L
         lbl <- cbind(1 - v, v); storage.mode(lbl) <- "double"
       } else if (ncol(pred) == 1L && ncol(lbl) == 1L) {
         uniq <- sort(unique(as.integer(lbl[,1])))
         if (!all(uniq %in% c(0L,1L))) {
           if (length(uniq) == 2L) {
-            dbg(sprintf("[robustness] Mapping labels {%d,%d} -> {0,1}", uniq[1], uniq[2]))
             lbl[,1] <- ifelse(lbl[,1] == uniq[2], 1, 0)
           } else {
-            dbg("[robustness] ERROR: labels not {0,1} and not exactly two values; cannot map safely.")
             return(NA_real_)
           }
         }
       } else if (!(ncol(pred) == 2L && ncol(lbl) == 2L)) {
-        dbg(sprintf("[robustness] ERROR: unexpected binary shapes labels=%d, pred=%d", ncol(lbl), ncol(pred)))
         return(NA_real_)
       }
     } else if (!identical(mode, "regression")) {
-      dbg(sprintf("[robustness] ERROR: unknown CLASSIFICATION_MODE '%s'", mode)); return(NA_real_)
-    }
-    
-    # ---------- final column check ----------
-    if (!identical(mode, "regression") && ncol(lbl) != ncol(pred)) {
-      dbg(sprintf("[robustness] ERROR: after harmonization labels=%d, pred=%d", ncol(lbl), ncol(pred)))
       return(NA_real_)
     }
+    
+    # final column check
+    if (!identical(mode, "regression") && ncol(lbl) != ncol(pred)) return(NA_real_)
     if (identical(mode, "regression") && ncol(lbl) != ncol(pred)) {
-      dbg(sprintf("[robustness] Regression: conforming columns via replicate/truncate (labels=%d, pred=%d)",
-                  ncol(lbl), ncol(pred)))
       total_needed <- nrow(lbl) * ncol(lbl)
       if (ncol(pred) < ncol(lbl)) {
-        rep_factor <- ceiling(total_needed / length(pred))
-        vec <- rep(pred, rep_factor)[1:total_needed]
+        vec <- rep(pred, length.out = total_needed)
         pred <- matrix(vec, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
       } else {
         pred <- pred[, 1:ncol(lbl), drop = FALSE]
@@ -5970,31 +6074,21 @@ robustness <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs,
       }
     }
     
-    dbg(sprintf("[robustness] final dims: labels=%d x %d | pred=%d x %d",
-                nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-    
-    # ---------- NA handling ----------
+    # NA handling
     cc <- stats::complete.cases(cbind(lbl, pred))
-    if (sum(!cc) > 0) dbg(sprintf("[robustness] Dropping %d NA/Inf rows", sum(!cc)))
+    if (!any(cc)) return(NA_real_)
     lbl  <- lbl[cc, , drop = FALSE]
     pred <- pred[cc, , drop = FALSE]
-    if (!nrow(lbl)) { dbg("[robustness] No rows left -> NA"); return(NA_real_) }
+    if (!nrow(lbl)) return(NA_real_)
     
-    # ---------- compute MSE on noisy predictions ----------
+    # compute MSE on noisy predictions
     err <- pred - lbl
-    losses <- mean(err^2)   # single point (could be extended to a curve over multiple noise levels)
-    accuracy <- losses      # placeholder name retained for compatibility
+    losses <- mean(err^2)
+    accuracy <- losses
     
-    dbg("[robustness] labels head:"); print(utils::head(lbl, 5))
-    dbg("[robustness] pred   head:"); print(utils::head(pred, 5))
-    dbg("[robustness] err    head:"); print(utils::head(err, 5))
-    dbg(sprintf("[robustness] MSE (noisy) = %.8f", accuracy))
-    
-    # ---------- optional plotting (only meaningful if you compute a vector over multiple noise Sds) ----------
+    # optional plotting (only meaningful with multiple noise Sds)
     if (isTRUE(plot_robustness) && length(losses) > 1L) {
-      if (any(is.nan(losses)) || any(is.infinite(losses))) {
-        dbg("[robustness] NaN/Inf in 'losses' — skipping plot.")
-      } else {
+      if (!any(is.nan(losses)) && !any(is.infinite(losses))) {
         plot(losses, type = 'l',
              main = paste('Loss over noise SD for SONN', model_iter_num),
              xlab = 'Noise step', ylab = 'MSE', lwd = 2)
@@ -6002,39 +6096,30 @@ robustness <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs,
     }
     
   } else {
-    # ---------- training branch ----------
-    dbg("[robustness] learnOnlyTrainingRun=TRUE -> calling learn() on noisy data")
+    # training branch
     invisible(SONN$learn(noisy_Rdata, labels, lr))
-    # accuracy remains NA_real_
   }
   
-  dbg("[robustness] ===== end =====\n")
   return(accuracy)
-
   }
 
 # Hit Rate
-hit_rate <- function(SONN, Rdata, predicted_output, labels, verbose) {
-  # Predict the output for each Rdata point
-  # print("hit rate before predict")
-  # predictions <- SONN$predict(Rdata, weights, biases, activation_functions)
-  # print("hit rate after predict")
+hit_rate <- function(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, labels, verbose) {
   Rdata <- data.frame(Rdata)
+  
   # Identify the relevant Rdata points
-  relevant_Rdata <<- Rdata[Rdata$class == "relevant", ]
+  relevant_Rdata <- Rdata[Rdata$class == "relevant", ]
   
   # Calculate the hit rate
+  if (nrow(relevant_Rdata) == 0L) {
+    return(NA_real_)
+  }
+  
   hit_rate <- sum(predicted_output %in% relevant_Rdata$id) / nrow(relevant_Rdata)
-  # if (verbose) {
-  #   print("hit_rate")
-  #   print(hit_rate)
-  # }
-  # Return the hit rate
-  return(hit_rate)
-  # if (verbose) {
-  #   print("hit_rate complete")
-  # }
+  
+  hit_rate
 }
+
 
 # -------------------------
 # Accuracy (mode-aware: "binary" | "multiclass" | "regression")
@@ -6894,20 +6979,11 @@ accuracy_tuned <- function(
   )
 }
 
-
-
-
-
-# Mean Absolute Error (debug build) — uses CLASSIFICATION_MODE for safe shape handling
+# Mean Absolute Error (silent) — uses CLASSIFICATION_MODE for safe shape handling
 # Signature: MAE(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose)
-MAE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose = TRUE) {
-  dbg <- function(...) if (isTRUE(verbose)) cat(..., "\n")
-  t0 <- Sys.time()
-  dbg("\n[MAE] ===== begin =====")
-  dbg(sprintf("[MAE] CLASSIFICATION_MODE = %s", as.character(CLASSIFICATION_MODE)))
-  
-  # ---------- helpers ----------
+MAE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
+  
   to_num_mat <- function(x, name = "obj") {
     if (is.data.frame(x)) {
       mm <- model.matrix(~ . - 1, data = x); x <- as.matrix(mm)
@@ -6918,131 +6994,99 @@ MAE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verb
     } else {
       x <- as.matrix(x)
     }
-    storage.mode(x) <- "double"; x
+    storage.mode(x) <- "double"
+    x
   }
   one_hot <- function(idx, K) {
     idx <- as.integer(idx)
-    idx[idx < 1L] <- 1L; idx[idx > K] <- K
+    idx[is.na(idx)] <- 1L
+    idx[idx < 1L] <- 1L
+    idx[idx > K]  <- K
     M <- matrix(0, nrow = length(idx), ncol = K)
-    M[cbind(seq_along(idx), idx)] <- 1
-    storage.mode(M) <- "double"; M
+    if (length(idx)) M[cbind(seq_along(idx), idx)] <- 1
+    storage.mode(M) <- "double"
+    M
   }
   
-  # ---------- coerce to numeric matrices ----------
+  # Coerce to numeric matrices
   lbl  <- to_num_mat(labels, "labels")
   pred <- to_num_mat(predicted_output, "predicted_output")
   
-  dbg(sprintf("[MAE] initial dims: labels=%d x %d | pred=%d x %d",
-              nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-  
-  # ---------- row alignment (NO recycling) ----------
+  # Row alignment (no recycling)
   n_common <- min(nrow(lbl), nrow(pred))
-  if (nrow(lbl) != nrow(pred)) {
-    dbg(sprintf("[MAE] Row mismatch -> trimming to %d rows (labels=%d, pred=%d)",
-                n_common, nrow(lbl), nrow(pred)))
-  }
+  if (n_common == 0L) return(NA_real_)
   lbl  <- lbl[seq_len(n_common), , drop = FALSE]
   pred <- pred[seq_len(n_common), , drop = FALSE]
   
-  # ---------- mode-based shape harmonization ----------
+  # Mode-based shape harmonization
   mode <- tolower(as.character(CLASSIFICATION_MODE %||% "regression"))
   
   if (identical(mode, "multiclass")) {
     K <- ncol(pred)
-    if (K < 2L) { dbg("[MAE] ERROR: multiclass but predicted_output has <2 cols"); return(NA_real_) }
+    if (K < 2L) return(NA_real_)
     if (ncol(lbl) == 1L) {
-      u <- sort(unique(as.integer(lbl[,1])))
+      u <- sort(unique(as.integer(lbl[, 1])))
       if (length(u) && min(u, na.rm = TRUE) == 0L && max(u, na.rm = TRUE) == (K - 1L)) {
-        dbg("[MAE] Detected 0-based class indices -> shifting +1"); lbl <- lbl + 1
+        lbl <- lbl + 1
       }
-      dbg(sprintf("[MAE] One-hot encoding labels to K=%d", K))
-      lbl <- one_hot(lbl[,1], K)
+      lbl <- one_hot(lbl[, 1], K)
     } else if (ncol(lbl) != K) {
-      dbg(sprintf("[MAE] ERROR: Multiclass labels have %d cols; pred has %d. Provide class index or one-hot with K.",
-                  ncol(lbl), K))
       return(NA_real_)
     }
+    
   } else if (identical(mode, "binary")) {
     # pred: N×1 (p_pos) OR N×2 ([p_neg,p_pos]); lbl: N×1 (0/1 or two values) OR N×2 one-hot
     if (ncol(pred) == 1L && ncol(lbl) == 2L) {
-      dbg("[MAE] Binary: pred 1-col; labels 2-col -> collapse labels to 0/1 using column 2")
-      lbl <- matrix(lbl[,2], ncol = 1L)
+      lbl <- matrix(lbl[, 2], ncol = 1L)
     } else if (ncol(pred) == 2L && ncol(lbl) == 1L) {
-      dbg("[MAE] Binary: pred 2-col; labels 1-col -> expand labels to one-hot [neg,pos]")
-      v <- as.integer(round(lbl[,1])); v[is.na(v)] <- 0L
+      v <- as.integer(round(lbl[, 1])); v[is.na(v)] <- 0L; v[v != 0L] <- 1L
       lbl <- cbind(1 - v, v); storage.mode(lbl) <- "double"
     } else if (ncol(pred) == 1L && ncol(lbl) == 1L) {
-      uniq <- sort(unique(as.integer(lbl[,1])))
-      if (!all(uniq %in% c(0L,1L))) {
+      uniq <- sort(unique(as.integer(lbl[, 1])))
+      if (!all(uniq %in% c(0L, 1L))) {
         if (length(uniq) == 2L) {
-          dbg(sprintf("[MAE] Binary: mapping labels {%d,%d} -> {0,1}", uniq[1], uniq[2]))
-          lbl[,1] <- ifelse(lbl[,1] == uniq[2], 1, 0)
+          lbl[, 1] <- ifelse(lbl[, 1] == uniq[2], 1, 0)
         } else {
-          dbg("[MAE] ERROR: labels not {0,1} and not exactly two values; cannot map safely.")
           return(NA_real_)
         }
       }
     } else if (!(ncol(pred) == 2L && ncol(lbl) == 2L)) {
-      dbg(sprintf("[MAE] ERROR: unexpected binary shapes: labels=%d cols, pred=%d cols", ncol(lbl), ncol(pred)))
       return(NA_real_)
     }
+    
   } else if (!identical(mode, "regression")) {
-    dbg(sprintf("[MAE] ERROR: Unknown CLASSIFICATION_MODE '%s' (use 'binary','multiclass','regression')", mode))
     return(NA_real_)
   }
   
-  # ---------- final column check ----------
-  if (!identical(mode, "regression") && ncol(lbl) != ncol(pred)) {
-    dbg(sprintf("[MAE] ERROR: After harmonization, labels=%d cols, pred=%d cols", ncol(lbl), ncol(pred)))
-    return(NA_real_)
-  }
+  # Final column check
+  if (!identical(mode, "regression") && ncol(lbl) != ncol(pred)) return(NA_real_)
+  
   # Only in regression allow replicate/truncate to conform columns
   if (identical(mode, "regression") && ncol(lbl) != ncol(pred)) {
-    dbg(sprintf("[MAE] Regression: conforming columns via replicate/truncate (labels=%d, pred=%d)",
-                ncol(lbl), ncol(pred)))
     total_needed <- nrow(lbl) * ncol(lbl)
     if (ncol(pred) < ncol(lbl)) {
-      rep_factor <- ceiling(total_needed / length(pred))
-      dbg(sprintf("[MAE] Replicating pred by factor %d then truncating to %d elements", rep_factor, total_needed))
-      vec <- rep(pred, rep_factor)[1:total_needed]
+      vec <- rep(pred, length.out = total_needed)
       pred <- matrix(vec, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
     } else {
-      dbg(sprintf("[MAE] Truncating pred columns from %d to %d", ncol(pred), ncol(lbl)))
       pred <- pred[, 1:ncol(lbl), drop = FALSE]
       pred <- matrix(pred, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
     }
   }
   
-  dbg(sprintf("[MAE] final dims aligned: labels=%d x %d | pred=%d x %d",
-              nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-  
-  # ---------- NA handling ----------
+  # NA handling
   cc <- stats::complete.cases(cbind(lbl, pred))
-  if (sum(!cc) > 0) dbg(sprintf("[MAE] Dropping %d NA/Inf row(s)", sum(!cc)))
+  if (!any(cc)) return(NA_real_)
   lbl  <- lbl[cc, , drop = FALSE]
   pred <- pred[cc, , drop = FALSE]
-  if (!nrow(lbl)) { dbg("[MAE] No rows left -> NA"); return(NA_real_) }
+  if (!nrow(lbl)) return(NA_real_)
   
-  # ---------- compute MAE ----------
-  err <- pred - lbl
-  mae <- mean(abs(err))
-  
-  # debug previews
-  dbg("[MAE] labels head:"); print(utils::head(lbl, 5))
-  dbg("[MAE] pred   head:"); print(utils::head(pred, 5))
-  dbg("[MAE] err    head:"); print(utils::head(err, 5))
-  dbg(sprintf("[MAE] MAE = %.8f", mae))
-  dbg("[MAE] err summary:"); print(summary(as.numeric(err)))
-  dbg(sprintf("[MAE] done in %.3f sec", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-  dbg("[MAE] ===== end =====\n")
-  
-  # Keep compatibility if you store under 'accuracy'
-  accuracy <- mae
-  return(accuracy)
+  # Compute MAE
+  mae <- mean(abs(pred - lbl))
+  mae
 }
 
 # NDCG (Normalized Discounted Cumulative Gain)
-ndcg <- function(SONN, Rdata, predicted_output, labels, verbose) {
+ndcg <- function(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, labels, verbose = FALSE) {
   # Convert to data frame if needed
   Rdata <- data.frame(Rdata)
   
@@ -7052,7 +7096,7 @@ ndcg <- function(SONN, Rdata, predicted_output, labels, verbose) {
   # Create a data frame to pair predicted outputs with relevance
   df <- data.frame(
     prediction = predicted_output,
-    relevance = relevance_scores
+    relevance  = relevance_scores
   )
   
   # Sort by prediction score descending (as if ranked)
@@ -7070,28 +7114,20 @@ ndcg <- function(SONN, Rdata, predicted_output, labels, verbose) {
   # Avoid division by zero
   ndcg_value <- if (idcg == 0) 0 else dcg / idcg
   
-  # if (exists("verbose") && verbose) {
-  #   print("ndcg")
-  #   print(ndcg_value)
-  # }
-  
   return(ndcg_value)
 }
 
 
 # -------------------------
-# Custom Relative Error (binned), mode-aware
-# Signature (MODE is 4th arg):
+# Custom Relative Error (binned), mode-aware (silent)
+# Signature:
 #   custom_relative_error_binned(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose=FALSE)
 # Behavior:
 #   - regression (default): elementwise |pred - label| / |label| with epsilon guard, then binned.
-#   - binary: use per-row error = |1 - p_true|, where
-#       p_true = p(pos) if y=1, else p_true = 1 - p(pos) if y=0  -> error in [0,1]
-#   - multiclass: per-row error = |1 - p_true| where p_true is probability of the true class -> [0,1]
-# Returns: named LIST of bin means (so your flattener can unlist to columns)
+#   - binary: per-row error = |1 - p_true|, where p_true = p(pos) if y=1; else 1 - p(pos) if y=0.
+#   - multiclass: per-row error = |1 - p_true| where p_true is probability of the true class.
+# Returns: named LIST of bin means.
 custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose = FALSE) {
-  dbg <- function(...) if (isTRUE(verbose)) cat(..., "\n")
-  
   # --- helpers ---
   to_num_mat <- function(x) {
     if (is.data.frame(x)) x <- as.matrix(x)
@@ -7105,51 +7141,54 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MOD
   infer_mode <- function(L, P) {
     if (max(ncol(L), ncol(P)) > 1L) "multiclass" else "regression"
   }
+  
   # bin edges: 0%..100% -> 0..1
   bins <- c(0, 0.05, 0.10, 0.50, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
   brks <- bins / 100
   bin_names <- paste0("rel_", bins[-length(bins)], "_", bins[-1], "pct")
   
-  # --- coerce & trim to common rows (simple) ---
+  # empty-output helper
+  empty_out <- function(val = NA_real_) {
+    x <- rep(val, length(bin_names))
+    names(x) <- bin_names
+    as.list(x)
+  }
+  
+  # --- coerce & trim to common rows ---
   L <- to_num_mat(labels)
   P <- to_num_mat(predicted_output)
   n <- min(nrow(L), nrow(P))
-  if (n == 0L) stop("[custom_rel_err] empty inputs after trim.")
-  if (nrow(L) != nrow(P) && isTRUE(verbose)) {
-    dbg(sprintf("[custom_rel_err] trimming to %d rows (labels=%d, preds=%d)", n, nrow(L), nrow(P)))
-  }
+  if (n == 0L) return(empty_out())
+  
   L <- L[seq_len(n), , drop = FALSE]
   P <- P[seq_len(n), , drop = FALSE]
   
   # --- resolve mode ---
   mode <- if (is_valid_mode(CLASSIFICATION_MODE)) tolower(CLASSIFICATION_MODE) else infer_mode(L, P)
-  dbg(paste("[custom_rel_err] MODE =", mode))
   
-  # --- compute a vector of per-sample errors in [0, +inf) (classification paths ensure [0,1]) ---
+  # --- compute vector of per-sample errors ---
   if (identical(mode, "binary")) {
     # labels -> y_true in {0,1}
     if (ncol(L) == 2L) {
-      y_true <- as.integer(L[,2] >= L[,1])
+      y_true <- as.integer(L[, 2] >= L[, 1])
     } else {
-      v <- as.numeric(L[,1])
-      if (all(v %in% c(0,1))) y_true <- as.integer(v)
-      else y_true <- as.integer(v >= 0.5)
+      v <- as.numeric(L[, 1])
+      if (all(v %in% c(0, 1))) y_true <- as.integer(v) else y_true <- as.integer(v >= 0.5)
     }
     # preds -> p(pos)
-    p_pos <- if (ncol(P) >= 2L) as.numeric(P[,2]) else as.numeric(P[,1])
+    p_pos <- if (ncol(P) >= 2L) as.numeric(P[, 2]) else as.numeric(P[, 1])
     p_pos[!is.finite(p_pos)] <- NA_real_
     
     # p_true = p(pos) if y=1, else 1 - p(pos)
     p_true <- ifelse(y_true == 1L, p_pos, 1 - p_pos)
-    err <- abs(1 - p_true)              # in [0,1], higher = worse
+    err <- abs(1 - p_true)          # in [0,1]
     vals <- err[is.finite(err)]
     
   } else if (identical(mode, "multiclass")) {
     # Determine K (prefer predictions)
     Kp <- ncol(P); Kl <- ncol(L)
     if (Kp > 1L && Kl > 1L && Kp != Kl) {
-      K <- min(Kp, Kl)
-      if (isTRUE(verbose)) dbg(sprintf("[custom_rel_err][mc] column mismatch: using first %d columns of both", K))
+      K  <- min(Kp, Kl)
       Pk <- P[, seq_len(K), drop = FALSE]
       Lk <- L[, seq_len(K), drop = FALSE]
     } else {
@@ -7163,7 +7202,7 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MOD
       K <- ncol(Lk)
     } else {
       K <- max(2L, Kp)  # at least 2
-      v <- as.integer(round(L[,1]))
+      v <- as.integer(round(L[, 1]))
       if (length(v) && min(v, na.rm = TRUE) == 0L) v <- v + 1L
       v[v < 1L] <- 1L; v[v > K] <- K
       true_ids <- v
@@ -7172,24 +7211,22 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MOD
     # probability assigned to true class
     if (!is.null(Pk)) {
       idx <- cbind(seq_len(nrow(Pk)), true_ids)
-      p_true <- Pk[idx]
-      p_true <- as.numeric(p_true)
+      p_true <- as.numeric(Pk[idx])
     } else {
-      # degenerate: no multi-prob predictions; pretend all prob on predicted class 1
+      # degenerate: no multi-prob predictions; pretend all prob on class 1
       p_true <- as.numeric(true_ids == 1L)
     }
     p_true[!is.finite(p_true)] <- NA_real_
     
-    err <- abs(1 - p_true)              # in [0,1]
+    err  <- abs(1 - p_true)         # in [0,1]
     vals <- err[is.finite(err)]
     
-  } else {  # regression (default/or unknown)
-    # Align shapes (replicate/truncate columns as in your original)
+  } else {  # regression (default)
+    # Align shapes (replicate/truncate columns)
     if (ncol(L) != ncol(P)) {
       if (ncol(P) < ncol(L)) {
-        rep_factor <- ceiling((nrow(L) * ncol(L)) / length(P))
-        replicated <- rep(P, rep_factor)[1:(nrow(L) * ncol(L))]
-        Pm <- matrix(replicated, nrow = nrow(L), ncol = ncol(L), byrow = FALSE)
+        total <- nrow(L) * ncol(L)
+        Pm <- matrix(rep(P, length.out = total), nrow = nrow(L), ncol = ncol(L), byrow = FALSE)
       } else {
         Pm <- matrix(P[, 1:ncol(L)], nrow = nrow(L), ncol = ncol(L), byrow = FALSE)
       }
@@ -7209,7 +7246,7 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MOD
     idx <- findInterval(vals, brks, rightmost.closed = TRUE, all.inside = TRUE)
     for (j in seq_along(mean_precisions)) {
       v <- vals[idx == j]
-      mean_precisions[j] <- if (length(v) == 0L) 0 else mean(v)
+      mean_precisions[j] <- if (length(v)) mean(v) else 0
     }
   } else {
     mean_precisions[] <- 0
@@ -7220,9 +7257,8 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MOD
 }
 
 
-
-# Diversity
-diversity <- function(SONN, Rdata, predicted_output, verbose) {
+# Diversity (Shannon entropy)
+diversity <- function(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, verbose = FALSE) {
   # Replace zero values to avoid log2(0)
   predicted_output[predicted_output == 0] <- .Machine$double.eps
   
@@ -7240,21 +7276,14 @@ diversity <- function(SONN, Rdata, predicted_output, verbose) {
     warning("Entropy calculation returned Inf or NaN. Setting to NA.")
   }
   
-  # if (verbose) {
-  #   cat("Diversity (entropy):\n")
-  #   print(entropy)
-  # }
-  
-  return(entropy)
+  entropy
 }
 
-# Novelty placeholder
-# Root Mean Squared Error (robust + mode-aware)
-# Signature: RMSE(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose)
-RMSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose = TRUE) {
-  dbg <- function(...) if (isTRUE(verbose)) cat(..., "\n")
 
-  # -------- helpers --------
+# Root Mean Squared Error (silent + mode-aware)
+# Signature: RMSE(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose)
+RMSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose) {
+  # helpers
   `%||%` <- function(x, y) if (is.null(x)) y else x
   to_num_mat <- function(x, name = "obj") {
     if (is.data.frame(x)) {
@@ -7268,9 +7297,10 @@ RMSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, ver
   }
   one_hot <- function(idx, K) {
     idx <- as.integer(idx)
+    idx[is.na(idx)] <- 1L
     idx[idx < 1L] <- 1L; idx[idx > K] <- K
     M <- matrix(0, nrow = length(idx), ncol = K)
-    M[cbind(seq_along(idx), idx)] <- 1
+    if (length(idx)) M[cbind(seq_along(idx), idx)] <- 1
     storage.mode(M) <- "double"; M
   }
   is_valid_mode <- function(x) is.character(x) && length(x) == 1L &&
@@ -7283,61 +7313,50 @@ RMSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, ver
     }
     "regression"
   }
-
-  # -------- argument recovery (handle swapped positional args) --------
+  
+  # argument recovery (handle swapped positional args) — silent
   if (!is_valid_mode(CLASSIFICATION_MODE)) {
     if (!missing(predicted_output) && is.logical(predicted_output) && length(predicted_output) == 1L) {
-      dbg("[RMSE] Detected swapped args -> interpreting CLASSIFICATION_MODE as predicted_output; predicted_output as verbose.")
       verbose <- predicted_output
       predicted_output <- CLASSIFICATION_MODE
       CLASSIFICATION_MODE <- NULL
     } else if (missing(predicted_output)) {
-      dbg("[RMSE] Detected missing predicted_output -> treating CLASSIFICATION_MODE as predicted_output.")
       predicted_output <- CLASSIFICATION_MODE
       CLASSIFICATION_MODE <- NULL
     }
   }
-
-  # -------- coerce to numeric matrices --------
+  
+  # coerce to numeric matrices
   lbl  <- to_num_mat(labels, "labels")
   pred <- to_num_mat(predicted_output, "predicted_output")
-  if (isTRUE(verbose)) {
-    cat(sprintf("[RMSE] initial dims: labels=%d x %d | pred=%d x %d\n",
-                nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-  }
-
-  # -------- row alignment (NO recycling) --------
+  
+  # row alignment (NO recycling)
   n_common <- min(nrow(lbl), nrow(pred))
-  if (nrow(lbl) != nrow(pred) && isTRUE(verbose)) {
-    cat(sprintf("[RMSE] Row mismatch -> trimming to %d rows\n", n_common))
-  }
+  if (n_common == 0L) return(NA_real_)
   lbl  <- lbl[seq_len(n_common), , drop = FALSE]
   pred <- pred[seq_len(n_common), , drop = FALSE]
-
-  # -------- resolve/infer mode --------
+  
+  # resolve/infer mode
   mode <- if (is_valid_mode(CLASSIFICATION_MODE)) tolower(CLASSIFICATION_MODE) else infer_mode(lbl, pred)
-  if (isTRUE(verbose)) cat("[RMSE] MODE =", mode, "\n")
-
-  # -------- mode-based shape harmonization --------
+  
+  # mode-based shape harmonization
   if (identical(mode, "multiclass")) {
     K <- ncol(pred)
-    if (K < 2L) { if (isTRUE(verbose)) cat("[RMSE] ERROR: multiclass but pred has <2 cols\n"); return(NA_real_) }
+    if (K < 2L) return(NA_real_)
     if (ncol(lbl) == 1L) {
       u <- sort(unique(as.integer(lbl[,1])))
       if (length(u) && min(u, na.rm = TRUE) == 0L && max(u, na.rm = TRUE) == (K - 1L)) {
-        if (isTRUE(verbose)) cat("[RMSE] Detected 0-based class indices -> shifting +1\n")
         lbl <- lbl + 1
       }
       lbl <- one_hot(lbl[,1], K)
     } else if (ncol(lbl) != K) {
-      if (isTRUE(verbose)) cat(sprintf("[RMSE] ERROR: labels %d cols; pred %d cols (expected equal K)\n", ncol(lbl), K))
       return(NA_real_)
     }
   } else if (identical(mode, "binary")) {
     if (ncol(pred) == 1L && ncol(lbl) == 2L) {
-      lbl <- matrix(lbl[,2], ncol = 1L)                 # collapse one-hot to 0/1
+      lbl <- matrix(lbl[,2], ncol = 1L)  # collapse one-hot to 0/1
     } else if (ncol(pred) == 2L && ncol(lbl) == 1L) {
-      v <- as.integer(round(lbl[,1])); v[is.na(v)] <- 0L
+      v <- as.integer(round(lbl[,1])); v[is.na(v)] <- 0L; v[v != 0L] <- 1L
       lbl <- cbind(1 - v, v); storage.mode(lbl) <- "double"
     } else if (ncol(pred) == 1L && ncol(lbl) == 1L) {
       u <- sort(unique(as.integer(round(lbl[,1]))))
@@ -7345,76 +7364,50 @@ RMSE <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, ver
         if (length(u) == 2L) {
           lbl[,1] <- ifelse(lbl[,1] == max(u), 1, 0)
         } else {
-          if (isTRUE(verbose)) cat("[RMSE] ERROR: labels not {0,1} and not exactly two values; cannot map safely.\n")
           return(NA_real_)
         }
       }
     } else if (!(ncol(pred) == 2L && ncol(lbl) == 2L)) {
-      if (isTRUE(verbose)) cat(sprintf("[RMSE] ERROR: unexpected binary shapes: labels=%d, pred=%d\n", ncol(lbl), ncol(pred)))
       return(NA_real_)
     }
   } else if (!identical(mode, "regression")) {
-    if (isTRUE(verbose)) cat(sprintf("[RMSE] ERROR: Unknown mode '%s'\n", mode))
     return(NA_real_)
   }
-
-  # -------- final column check --------
-  if (!identical(mode, "regression") && ncol(lbl) != ncol(pred)) {
-    if (isTRUE(verbose)) cat(sprintf("[RMSE] ERROR: after harmonization labels=%d, pred=%d\n", ncol(lbl), ncol(pred)))
-    return(NA_real_)
-  }
-  # Only in regression allow replicate/truncate to conform columns
+  
+  # final column check
+  if (!identical(mode, "regression") && ncol(lbl) != ncol(pred)) return(NA_real_)
   if (identical(mode, "regression") && ncol(lbl) != ncol(pred)) {
-    if (isTRUE(verbose)) cat(sprintf("[RMSE] Regression: conforming columns (labels=%d, pred=%d)\n", ncol(lbl), ncol(pred)))
     total_needed <- nrow(lbl) * ncol(lbl)
     if (ncol(pred) < ncol(lbl)) {
-      rep_factor <- ceiling(total_needed / length(pred))
-      vec <- rep(pred, rep_factor)[1:total_needed]
+      vec <- rep(pred, length.out = total_needed)
       pred <- matrix(vec, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
     } else {
       pred <- pred[, 1:ncol(lbl), drop = FALSE]
       pred <- matrix(pred, nrow = nrow(lbl), ncol = ncol(lbl), byrow = FALSE)
     }
   }
-
-  if (isTRUE(verbose)) {
-    cat(sprintf("[RMSE] final dims: labels=%d x %d | pred=%d x %d\n",
-                nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
-  }
-
-  # -------- NA handling --------
+  
+  # NA handling
   cc <- stats::complete.cases(cbind(lbl, pred))
-  if (sum(!cc) > 0 && isTRUE(verbose)) cat(sprintf("[RMSE] Dropping %d NA/Inf row(s)\n", sum(!cc)))
+  if (!any(cc)) return(NA_real_)
   lbl  <- lbl[cc, , drop = FALSE]
   pred <- pred[cc, , drop = FALSE]
   if (!nrow(lbl)) return(NA_real_)
-
-  # -------- compute RMSE --------
-  err  <- pred - lbl
-  rmse <- sqrt(mean(err^2))
-
-  if (isTRUE(verbose)) cat(sprintf("[RMSE] RMSE = %.8f (rows=%d, cols=%d)\n", rmse, nrow(lbl), ncol(lbl)))
-  return(rmse)
+  
+  # compute RMSE
+  rmse <- sqrt(mean((pred - lbl)^2))
+  rmse
 }
 
 
 # Serendipity
-serendipity <- function(SONN, Rdata, predicted_output, verbose) {
-  # # Predict the output for each Rdata point
-  # predictions <- SONN$predict(Rdata, labels)
-  
+serendipity <- function(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, verbose = FALSE) {
   # Calculate the average number of times each prediction is made
   prediction_counts <- table(predicted_output)
   
   # Calculate the inverse of the prediction counts
   inverse_prediction_counts <- 1 / prediction_counts
-  # if (verbose) {
-  #   print("serendipity")
-  #   print(mean(inverse_prediction_counts, na.rm = TRUE))
-  # }
+  
   # Return the average inverse prediction count
-  return(mean(inverse_prediction_counts, na.rm = TRUE))
-  # if (verbose) {
-  #   print("serendipity complete")
-  # }
+  mean(inverse_prediction_counts, na.rm = TRUE)
 }
