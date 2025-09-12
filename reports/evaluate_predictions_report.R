@@ -121,6 +121,122 @@ EvaluatePredictionsReport <- function(
   probs_mat  <- probs_mat [seq_len(N_eff), , drop = FALSE]
   labels_mat <- labels_mat[seq_len(N_eff), , drop = FALSE]
   
+  # ========================= REGRESSION BRANCH (NEW) =========================
+  if (tolower(CLASSIFICATION_MODE) %in% c("regression", "reg")) {
+    # Treat probs_mat as continuous predictions; labels_mat as true y
+    y  <- suppressWarnings(as.numeric(labels_mat[, 1]))
+    yhat <- suppressWarnings(as.numeric(probs_mat[, 1]))
+    keep <- is.finite(y) & is.finite(yhat)
+    y    <- y[keep]
+    yhat <- yhat[keep]
+    
+    if (length(y) == 0L) stop("Regression mode: no finite overlapping y / yhat.")
+    
+    residuals <- yhat - y
+    SSE <- sum((yhat - y)^2)
+    SST <- sum((y - mean(y))^2)
+    RMSE <- sqrt(mean(residuals^2))
+    MAE  <- mean(abs(residuals))
+    MAPE <- if (any(y != 0)) mean(abs(residuals / y)) else NA_real_
+    R2   <- if (SST > 0) 1 - SSE / SST else NA_real_
+    Corr <- suppressWarnings(stats::cor(y, yhat))
+    
+    # Plots (saved to PNG)
+    # 1) Scatter y vs yhat
+    tryCatch({
+      df_sc <- data.frame(y = y, yhat = yhat)
+      p_sc <- ggplot(df_sc, aes(x = y, y = yhat)) +
+        geom_point(alpha = 0.6) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+        labs(title = "Regression: y (actual) vs ŷ (predicted)",
+             x = "Actual", y = "Predicted") +
+        theme_minimal()
+      ggsave("reg_scatter_y_vs_yhat.png", p_sc, width = 6, height = 4, dpi = 300)
+      while (!is.null(dev.list())) dev.off()
+      if (verbose) print(p_sc)
+    }, error = function(e) message("⚠️ Scatter plot failed: ", e$message))
+    
+    # 2) Residuals vs Fitted
+    tryCatch({
+      df_rf <- data.frame(fitted = yhat, resid = residuals)
+      p_rf <- ggplot(df_rf, aes(x = fitted, y = resid)) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+        geom_point(alpha = 0.6) +
+        labs(title = "Residuals vs Fitted", x = "Fitted (ŷ)", y = "Residual (ŷ - y)") +
+        theme_minimal()
+      ggsave("reg_residuals_vs_fitted.png", p_rf, width = 6, height = 4, dpi = 300)
+      while (!is.null(dev.list())) dev.off()
+      if (verbose) print(p_rf)
+    }, error = function(e) message("⚠️ Residuals vs Fitted failed: ", e$message))
+    
+    # 3) Residuals histogram
+    tryCatch({
+      df_rh <- data.frame(resid = residuals)
+      p_rh <- ggplot(df_rh, aes(x = resid)) +
+        geom_histogram(bins = 30) +
+        labs(title = "Residuals Histogram", x = "Residual", y = "Count") +
+        theme_minimal()
+      ggsave("reg_residuals_hist.png", p_rh, width = 6, height = 4, dpi = 300)
+      while (!is.null(dev.list())) dev.off()
+      if (verbose) print(p_rh)
+    }, error = function(e) message("⚠️ Residuals histogram failed: ", e$message))
+    
+    # Combined DF
+    Rdata_df <- as.data.frame(X_validation)
+    combined_df <- cbind(
+      Rdata_df[keep, , drop = FALSE],
+      label = y,
+      pred  = yhat,
+      residual = residuals
+    )
+    
+    # Metrics summary (regression)
+    metrics_summary <- data.frame(
+      Metric = c("RMSE", "MAE", "MAPE", "R2", "Correlation"),
+      Value  = c(RMSE, MAE, MAPE, R2, Corr)
+    )
+    
+    # Commentary
+    commentary_df_metrics <- data.frame(
+      Interpretation = c(
+        paste("RMSE:", round(RMSE, 6)),
+        paste("MAE :", round(MAE,  6)),
+        paste("R²  :", ifelse(is.finite(R2), round(R2, 6), NA)),
+        paste("Corr:", ifelse(is.finite(Corr), round(Corr, 6), NA))
+      )
+    )
+    
+    # Excel
+    wb <- createWorkbook()
+    addWorksheet(wb, "Combined")
+    suppressWarnings(writeData(wb, "Combined", combined_df))
+    addWorksheet(wb, "Metrics_Summary")
+    suppressWarnings(writeData(wb, "Metrics_Summary", metrics_summary))
+    suppressWarnings(writeData(wb, "Metrics_Summary", commentary_df_metrics, startRow = nrow(metrics_summary) + 3))
+    # Insert plots if present
+    if (file.exists("reg_scatter_y_vs_yhat.png")) {
+      tryCatch(insertImage(wb, "Metrics_Summary", "reg_scatter_y_vs_yhat.png", startRow = 20, startCol = 1, width = 6, height = 4), error = function(e) {})
+    }
+    if (file.exists("reg_residuals_vs_fitted.png")) {
+      tryCatch(insertImage(wb, "Metrics_Summary", "reg_residuals_vs_fitted.png", startRow = 35, startCol = 1, width = 6, height = 4), error = function(e) {})
+    }
+    if (file.exists("reg_residuals_hist.png")) {
+      tryCatch(insertImage(wb, "Metrics_Summary", "reg_residuals_hist.png", startRow = 50, startCol = 1, width = 6, height = 4), error = function(e) {})
+    }
+    saveWorkbook(wb, "Rdata_predictions.xlsx", overwrite = TRUE)
+    
+    # Return (keep contract; accuracy not applicable)
+    return(list(
+      best_threshold   = NA_real_,
+      best_thresholds  = NA_real_,
+      accuracy         = NA_real_,
+      accuracy_percent = NA_real_,
+      metrics          = list(RMSE = RMSE, MAE = MAE, MAPE = MAPE, R2 = R2, Correlation = Corr),
+      misclassified    = data.frame()
+    ))
+  }
+  # ======================= END REGRESSION BRANCH (NEW) =======================
+  
   # Infer binary vs multiclass using helpers from utils
   inf <- infer_is_binary(labels_mat, probs_mat)
   is_binary <- isTRUE(inf$is_binary)
@@ -146,17 +262,17 @@ EvaluatePredictionsReport <- function(
   }
   
   if(verbose){
-  cat("[DBG] probs_mat shape/type: ", paste(dbg_shape(probs_mat), collapse = " | "), "\n", sep = "")
-  cat("[DBG] labels_mat shape/type: ", paste(dbg_shape(labels_mat), collapse = " | "), "\n", sep = "")
-  cat("[DBG] probs non-finite: ", paste(dbg_count_nonfinite(probs_mat), collapse = " | "), "\n", sep = "")
-  cat("[DBG] labels non-finite: ", paste(dbg_count_nonfinite(labels_mat), collapse = " | "), "\n", sep = "")
-  
-  head_n <- min(5L, nrow(probs_mat))
-  cat("[DBG] head(probs_mat):\n"); print(utils::head(as.data.frame(probs_mat), head_n))
-  cat("[DBG] head(labels_mat):\n"); print(utils::head(as.data.frame(labels_mat), head_n))
-  
-  cat("[DBG] inferred is_binary: ", is_binary, " | K: ", K, " (1=binary, >1=multiclass)\n", sep = "")
-  cat("[DBG] --- end threshold tuning inputs ---\n\n")
+    cat("[DBG] probs_mat shape/type: ", paste(dbg_shape(probs_mat), collapse = " | "), "\n", sep = "")
+    cat("[DBG] labels_mat shape/type: ", paste(dbg_shape(labels_mat), collapse = " | "), "\n", sep = "")
+    cat("[DBG] probs non-finite: ", paste(dbg_count_nonfinite(probs_mat), collapse = " | "), "\n", sep = "")
+    cat("[DBG] labels non-finite: ", paste(dbg_count_nonfinite(labels_mat), collapse = " | "), "\n", sep = "")
+    
+    head_n <- min(5L, nrow(probs_mat))
+    cat("[DBG] head(probs_mat):\n"); print(utils::head(as.data.frame(probs_mat), head_n))
+    cat("[DBG] head(labels_mat):\n"); print(utils::head(as.data.frame(labels_mat), head_n))
+    
+    cat("[DBG] inferred is_binary: ", is_binary, " | K: ", K, " (1=binary, >1=multiclass)\n", sep = "")
+    cat("[DBG] --- end threshold tuning inputs ---\n\n")
   }
   # ------------------------- Build predictions & metrics --------------
   heatmap_path <- NULL
@@ -198,11 +314,11 @@ EvaluatePredictionsReport <- function(
     predicted_output_for_acc <- matrix(binary_preds, ncol = 1L)
     
     if (verbose) message(sprintf("Binary preds @ tuned threshold: mean=%0.3f", mean(binary_preds)))
-
+    
     acc_prop <- accuracy(SONN, Rdata, labels = matrix(labels_flat, ncol = 1L),
-      CLASSIFICATION_MODE,
-      predicted_output = predicted_output_for_acc,
-      verbose = FALSE
+                         CLASSIFICATION_MODE,
+                         predicted_output = predicted_output_for_acc,
+                         verbose = FALSE
     )
     accuracy <- acc_prop
     accuracy_percent <- accuracy * 100

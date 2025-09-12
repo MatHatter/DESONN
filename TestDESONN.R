@@ -2,13 +2,15 @@ source("DESONN.R")
 source("utils/utils.R")
 source("utils/bootstrap_metadata.R")
 library(readxl)
+library(dplyr)
 set.seed(111)
 # # Define parameters
 ## =========================
 ## Classification mode
 ## =========================
-CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "auto"
+# CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "regression"
 # CLASSIFICATION_MODE <- "binary"
+CLASSIFICATION_MODE <- "regression"
 
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
@@ -46,7 +48,7 @@ activation_functions <- list(relu, relu, sigmoid)
 # Activation functions applied in forward pass during training | learn() # You can keep them the same as predict() or customize, e.g. list(relu, selu, sigmoid) 
 activation_functions_learn <- activation_functions
 epsilon <- 1e-6
-loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+loss_type <- "MSE" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
 dropout_rates <- list(0.1) # NULL for output layer
 
@@ -58,6 +60,39 @@ dropout_rates_learn <- dropout_rates
 
 num_layers <- length(hidden_sizes) + 1
 output_size <- 1  # For binary classification
+
+## Kaggle Data
+runData <- FALSE
+if(runData){
+  library(reticulate)
+  
+  # Ensure we're using reticulate's default Python env (created above)
+  # If you prefer, you can create/use your own venv and call use_virtualenv() instead.
+  
+  # 1) Install kagglehub into the active Python used by reticulate
+  py_install("kagglehub", pip = TRUE)
+  
+  # 2) Download with kagglehub from Python, returning the path back to R
+  res <- py_run_string("
+import kagglehub
+p = kagglehub.dataset_download('matiflatif/walmart-complete-stocks-dataweekly-updated')
+print('Downloaded to:', p)
+path = p
+")
+  src_path <- res$path
+  
+  # 3) Copy the downloaded dataset into your target folder
+  dst_path <- "C:/Users/wfky1/Desktop/DESONN/data"
+  dir.create(dst_path, showWarnings = FALSE, recursive = TRUE)
+  # Copy everything (preserves directories); overwrite existing
+  file.copy(from = list.files(src_path, full.names = TRUE),
+            to   = dst_path,
+            recursive = TRUE, overwrite = TRUE)
+  
+  cat("Copied dataset from:\n ", src_path, "\n→\n ", dst_path, "\n")
+}
+
+
 ## -------------------------
 ## Load the dataset
 ## -------------------------
@@ -67,9 +102,14 @@ if (CLASSIFICATION_MODE == "binary") {
 } else if (CLASSIFICATION_MODE == "multiclass") {
   data <- read.csv("data/train_multiclass_customer_segmentation.csv")
   dependent_variable <- "Segmentation"
+} else if (CLASSIFICATION_MODE == "regression") {
+  data <- read.csv("data/WMT_1970-10-01_2025-03-15.csv")
+  dependent_variable <- "close"
 } else {
   stop("CLASSIFICATION_MODE must be 'binary' or 'multiclass'")
 }
+
+
 ## Quick NA check
 na_count <- sum(is.na(data))
 cat("[split] NA count:", na_count, "\n")
@@ -80,7 +120,7 @@ cat("[split] NA count:", na_count, "\n")
 data <- data %>% mutate(across(where(is.character), as.factor))
 
 
-if (CLASSIFICATION_MODE == "binary") {
+if (CLASSIFICATION_MODE %in% c("binary", "regression")) {
   input_size  <- ncol(Rdata)   # after model.matrix/processing
   output_size <- 1L            # single sigmoid/logit output
 }
@@ -99,17 +139,10 @@ if(!ML_NN) {
 }
 
 
-
-
-if (CLASSIFICATION_MODE == "binary") {
-  numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction',
-                       'platelets', 'serum_creatinine', 'serum_sodium', 'time')
-} else if (CLASSIFICATION_MODE == "multiclass") {
-  numeric_columns <- c("Age", "Work_Experience", "Family_Size")
-}
-
-
-
+# Keep only the variables you want
+# Drop adj_close (and optionally volume, if you don't want it)
+data_reduced <- data %>%
+  select(date, open, high, low, close, volume) 
 ## ------------------------------------------------------------
 ## Split the data into features (X) and target (y)
 ##   - If `data_reduced` exists, use it for X (minus DEATH_EVENT)
@@ -117,7 +150,7 @@ if (CLASSIFICATION_MODE == "binary") {
 ## ------------------------------------------------------------
 if (exists("data_reduced") && is.data.frame(data_reduced)) {
   # If data_reduced already excludes DEATH_EVENT, this is a no-op; otherwise it drops it.
-  X <- data_reduced %>% dplyr::select(-dplyr::all_of("DEATH_EVENT"))
+  X <- data_reduced %>% select(-all_of(dependent_variable)) 
 } else {
   X <- data %>% dplyr::select(-dplyr::all_of(dependent_variable))
 }
@@ -125,6 +158,26 @@ if (exists("data_reduced") && is.data.frame(data_reduced)) {
 y <- data %>% dplyr::select(dplyr::all_of(dependent_variable))
 
 colname_y <- colnames(y)
+
+
+if (CLASSIFICATION_MODE == "binary") {
+  numeric_columns <- c('age', 'creatinine_phosphokinase', 'ejection_fraction',
+                       'platelets', 'serum_creatinine', 'serum_sodium', 'time')
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  numeric_columns <- c("Age", "Work_Experience", "Family_Size")
+} else if (CLASSIFICATION_MODE == "regression") {
+  # Walmart stock regression task
+  numeric_columns <- c(
+    "open", 
+    "high", 
+    "low", 
+    "volume"
+    # Target is "close", so it's excluded here
+  )
+}
+
+
+
 
 ## -------------------------
 ## Robust split
@@ -445,7 +498,152 @@ if (CLASSIFICATION_MODE == "binary") {
   cat("[mc] N =", N, "\n")
   
   cat("===================== [MC] END =====================\n\n")
+} else if (CLASSIFICATION_MODE == "regression") {
+  cat("\n==================== [REG] START ====================\n")
+  
+  # ---------- A) Optional: make date numeric if present ----------
+  make_date_numeric <- function(df) {
+    if (!"date" %in% names(df)) return(df)
+    d <- df[["date"]]
+    # Try to coerce in a robust way
+    if (inherits(d, "POSIXt")) {
+      df[["date"]] <- as.numeric(as.Date(d))  # days since epoch
+    } else if (inherits(d, "Date")) {
+      df[["date"]] <- as.numeric(d)           # days since epoch
+    } else {
+      # If character, try to parse; if parse fails, drop to NA then median-impute later
+      suppressWarnings({
+        parsed <- as.Date(d)
+      })
+      if (all(is.na(parsed))) {
+        warning("[reg] 'date' column could not be parsed; converting to NA (will be imputed).")
+        df[["date"]] <- NA_real_
+      } else {
+        df[["date"]] <- as.numeric(parsed)
+      }
+    }
+    df
+  }
+  X_train      <- make_date_numeric(X_train)
+  X_validation <- make_date_numeric(X_validation)
+  X_test       <- make_date_numeric(X_test)
+  
+  # ---------- B) Numeric imputation with TRAIN medians (no leakage) ----------
+  impute_with_train_median <- function(df_train, df_other) {
+    num_cols <- names(df_train)[vapply(df_train, is.numeric, TRUE)]
+    for (nm in num_cols) {
+      med <- suppressWarnings(median(df_train[[nm]], na.rm = TRUE))
+      if (!is.finite(med) || is.na(med)) med <- 0
+      if (nm %in% names(df_train))   df_train[[nm]][is.na(df_train[[nm]])] <- med
+      if (nm %in% names(df_other))   df_other[[nm]][is.na(df_other[[nm]])] <- med
+    }
+    list(train = df_train, other = df_other)
+  }
+  tmp <- impute_with_train_median(X_train, X_validation); X_train <- tmp$train; X_validation <- tmp$other
+  tmp <- impute_with_train_median(X_train, X_test);       X_test  <- tmp$other
+  
+  # ---------- C) Feature scaling without leakage ----------
+  # Only scale numeric columns; keep column order
+  X_train_df <- as.data.frame(X_train)
+  X_val_df   <- as.data.frame(X_validation)
+  X_test_df  <- as.data.frame(X_test)
+  
+  num_mask <- vapply(X_train_df, is.numeric, TRUE)
+  if (!any(num_mask)) stop("[reg] No numeric predictors found after preprocessing.")
+  
+  X_train_num <- as.matrix(X_train_df[, num_mask, drop = FALSE])
+  X_val_num   <- as.matrix(X_val_df[,   num_mask, drop = FALSE])
+  X_test_num  <- as.matrix(X_test_df[,  num_mask, drop = FALSE])
+  
+  X_train_scaled <- scale(X_train_num)
+  center <- attr(X_train_scaled, "scaled:center")
+  scale_ <- attr(X_train_scaled, "scaled:scale"); scale_[!is.finite(scale_) | scale_ == 0] <- 1
+  
+  X_validation_scaled <- sweep(sweep(X_val_num,  2, center, "-"), 2, scale_, "/")
+  X_test_scaled       <- sweep(sweep(X_test_num, 2, center, "-"), 2, scale_, "/")
+  
+  # ---------- D) Further rescale to prevent exploding activations (keep parity with binary) ----------
+  max_val <- suppressWarnings(max(abs(X_train_scaled)))
+  if (!is.finite(max_val) || is.na(max_val) || max_val == 0) max_val <- 1
+  
+  X_train_scaled      <- X_train_scaled      / max_val
+  X_validation_scaled <- X_validation_scaled / max_val
+  X_test_scaled       <- X_test_scaled       / max_val
+  
+  # ==============================================================
+  # Choose whether to use scaled or raw data for NN training
+  # ==============================================================
+  scaledData <- TRUE   # <<<<<< set to FALSE to use raw data
+  
+  if (isTRUE(scaledData)) {
+    X <- as.matrix(X_train_scaled)
+    y <- as.matrix(y_train)
+    X_validation <- as.matrix(X_validation_scaled)
+    y_validation <- as.matrix(y_validation)
+    X_test <- as.matrix(X_test_scaled)
+    y_test <- as.matrix(y_test)
+  } else {
+    # If using raw, still subset to numeric columns and align shapes
+    X <- as.matrix(X_train_num)
+    y <- as.matrix(y_train)
+    X_validation <- as.matrix(X_val_num)
+    y_validation <- as.matrix(y_validation)
+    X_test <- as.matrix(X_test_num)
+    y_test <- as.matrix(y_test)
+  }
+  
+  # Ensure y is one numeric column (target = "close")
+  if (ncol(y) != 1L) {
+    y <- matrix(as.numeric(y[,1]), ncol = 1L)
+  } else {
+    storage.mode(y) <- "double"
+  }
+  colnames(y) <- colname_y
+  
+  # ---------- E) Diagnostics ----------
+  cat("=== [reg] Unscaled X_train (numeric subset) summary ===\n")
+  print(summary(as.vector(X_train_num)))
+  cat("First 5 rows of unscaled numeric X_train:\n")
+  print(X_train_num[1:5, 1:min(5, ncol(X_train_num)), drop = FALSE])
+  
+  cat("=== [reg] Scaled X_train summary ===\n")
+  print(summary(as.vector(X)))
+  cat("First 5 rows of scaled X (train):\n")
+  print(X[1:5, 1:min(5, ncol(X)), drop = FALSE])
+  
+  cat("[reg] Dimensions (train/val/test):\n")
+  cat("X:",          paste(dim(X), collapse="×"),          "\n")
+  cat("X_validation:",paste(dim(X_validation), collapse="×"), "\n")
+  cat("X_test:",     paste(dim(X_test), collapse="×"),     "\n")
+  cat("[reg] Any NAs?  train:", anyNA(X), 
+      "  val:", anyNA(X_validation), 
+      "  test:", anyNA(X_test), "\n")
+  
+  # ---------- F) Single source of truth for training ----------
+  Rdata       <- X                 # features for training
+  labels      <- y                 # regression labels (continuous)
+  input_size  <- ncol(Rdata)
+  output_size <- 1L                # regression → single output
+  
+  cat("[reg] FINAL dim(Rdata)=", paste(dim(Rdata), collapse="×"),
+      " | dim(labels)=", paste(dim(labels), collapse="×"),
+      " | input_size=", input_size, " | output_size=", output_size, "\n")
+  
+  if (nrow(Rdata) != nrow(labels)) {
+    stop(sprintf("[reg][FATAL] Row mismatch: nrow(Rdata)=%d vs nrow(labels)=%d.", nrow(Rdata), nrow(labels)))
+  }
+  
+  # ---------- G) Recompute N now that sizes are final ----------
+  if (!ML_NN) {
+    N <- input_size + output_size
+  } else {
+    N <- input_size + sum(hidden_sizes) + output_size
+  }
+  cat("[reg] N =", N, "\n")
+  
+  cat("==================== [REG] END ====================\n\n")
 }
+
 
 
 if (CLASSIFICATION_MODE == "multiclass") {

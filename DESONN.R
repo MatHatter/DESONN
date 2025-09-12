@@ -788,6 +788,23 @@ SONN <- R6Class(
         }
         sample_weights <- matrix(sample_weights, nrow = nrow(labels), ncol = ncol(labels), byrow = FALSE)
         
+      } else if (identical(CLASSIFICATION_MODE, "regression")) {
+        # === Regression: continuous target (e.g., 'close'); weights default to 1 ===
+        self$dropout_rates_learn <- dropout_rates_learn
+        
+        # Ensure labels are numeric column vector (n x 1)
+        if (!is.numeric(labels)) labels <- as.numeric(labels)
+        if (!is.matrix(labels) || ncol(labels) != 1L) {
+          labels <- matrix(labels, ncol = 1L)
+        }
+        storage.mode(labels) <- "double"
+        
+        # Sample weights: n x 1 (defaults to ones if NULL)
+        if (is.null(sample_weights)) {
+          sample_weights <- rep(1, nrow(labels))
+        }
+        sample_weights <- matrix(as.numeric(sample_weights), nrow = nrow(labels), ncol = 1L)
+        
       } else {
         stop(sprintf("Unknown CLASSIFICATION_MODE: %s", CLASSIFICATION_MODE))
       }
@@ -908,6 +925,7 @@ SONN <- R6Class(
         # ---- Error: matches (probs - labels) with proper weighting ----
         # For binary: labels is n×1, weights n×1 → ok
         # For multiclass: labels is n×K, weights is n×K → ok
+        # For regression: labels is n×1, weights n×1 → ok
         error_learn <- (predicted_output_learn - labels) * sample_weights
         
         error_backprop <- error_learn
@@ -991,7 +1009,7 @@ SONN <- R6Class(
         predicted_output_learn <- if (!is.null(activation_function)) activation_function(Z) else Z
         
         # For SL, we already arranged labels/sample_weights above per CLASSIFICATION_MODE:
-        #   - binary: n×1; multiclass: n×K
+        #   - binary: n×1; multiclass: n×K; regression: n×1
         # If multiclass with SL, ensure dimensions match (weights_cols should equal K).
         if (identical(CLASSIFICATION_MODE, "multiclass") && ncol(predicted_output_learn) != ncol(labels)) {
           stop(sprintf("SL NN (multiclass): output cols (%d) != label cols (%d).",
@@ -1017,8 +1035,7 @@ SONN <- R6Class(
       print("------------------------learn-end-------------------------------------------------")
       
       return(list(learn_output = predicted_output_learn, learn_time = learn_time, error = error_learn, dim_hidden_layers = dim_hidden_layers_learn, hidden_outputs = predicted_output_learn_hidden, grads_matrix = grads_matrix, bias_gradients = bias_gradients, errors = errors))
-    
-      },
+    },
     
     # Method to perform prediction
     predict = function(Rdata, weights = NULL, biases = NULL, activation_functions = NULL) {
@@ -1124,6 +1141,7 @@ SONN <- R6Class(
       # =========================
       # Local helpers (debug friendly)
       # =========================
+      
       .extract_vec <- function(x) {
         if (is.data.frame(x)) return(x[[1]])
         if (is.matrix(x) || is.array(x)) {
@@ -1132,29 +1150,18 @@ SONN <- R6Class(
         }
         x
       }
+      
       .align_len <- function(v, n) {
-        if (length(v) > n) v[seq_len(n)] else if (length(v) < n) c(v, rep(NA, n - length(v))) else v
+        if (length(v) > n) v[seq_len(n)]
+        else if (length(v) < n) c(v, rep(NA, n - length(v)))
+        else v
       }
-      .one_hot_from_idx <- function(idx, n, K) {
-        Y <- matrix(0, n, K)
-        ok <- !is.na(idx) & idx >= 1L & idx <= K
-        rr <- which(ok); cc <- idx[ok]
-        if (length(rr) > 0L) {
-          # DEBUG
-          cat(sprintf("[dbg] one-hot assign: valid=%d | max(r)=%s | max(c)=%s\n",
-                      length(rr),
-                      ifelse(length(rr)>0, max(rr), NA),
-                      ifelse(length(cc)>0, max(cc), NA)))
-          Y[cbind(rr, cc)] <- 1
-        } else {
-          cat("[dbg] one-hot assign: no valid indices\n")
-        }
-        Y
-      }
+      
       .build_targets <- function(labels, n, K, CLASSIFICATION_MODE) {
         lv <- .align_len(.extract_vec(labels), n)
         cat("[dbg] targets: CLASSIFICATION_MODE =", CLASSIFICATION_MODE, "\n")
         cat("[dbg] targets: labels class =", paste(class(labels), collapse=","), " | lv length =", length(lv), "\n")
+        
         if (identical(CLASSIFICATION_MODE, "multiclass")) {
           stopifnot(K >= 2)
           if (is.matrix(labels) && nrow(labels) >= n && ncol(labels) == K &&
@@ -1172,8 +1179,10 @@ SONN <- R6Class(
               idx[idx > K] <- K
             }
             cat("[dbg] targets: factor levels L =", L, " | head idx =", paste(utils::head(idx,6), collapse=", "), "\n")
-            return(list(Y=.one_hot_from_idx(idx, n, K), y_idx=idx))
+            # use your global one_hot_from_ids
+            return(list(Y=one_hot_from_ids(idx, K, N=n), y_idx=idx))
           }
+          
         } else if (identical(CLASSIFICATION_MODE, "binary")) {
           stopifnot(K == 1)
           if (is.factor(lv)) {
@@ -1186,10 +1195,51 @@ SONN <- R6Class(
           y <- pmin(pmax(as.numeric(y), 0), 1)
           cat("[dbg] targets: binary y summary -> mean=", mean(y), " | sum=", sum(y), "\n")
           return(list(y=y))
+          
+        } else if (identical(CLASSIFICATION_MODE, "regression")) {
+          cat("[dbg] targets: regression path | n=", n, " K=", K, "\n")
+          
+          if (is.matrix(labels) || is.data.frame(labels)) {
+            Ytmp <- suppressWarnings(matrix(as.numeric(as.matrix(labels)),
+                                            nrow = nrow(as.matrix(labels)),
+                                            ncol = ncol(as.matrix(labels))))
+          } else {
+            Ytmp <- suppressWarnings(matrix(as.numeric(lv), nrow = length(lv), ncol = 1L))
+          }
+          if (all(is.na(Ytmp))) {
+            cat("[dbg] targets: all NA after coercion; filling zeros\n")
+            Ytmp <- matrix(0, nrow = max(1L, nrow(Ytmp)), ncol = max(1L, ncol(Ytmp)))
+          }
+          
+          # conform rows
+          if (nrow(Ytmp) > n) {
+            Ytmp <- Ytmp[seq_len(n), , drop = FALSE]
+          } else if (nrow(Ytmp) < n) {
+            add <- n - nrow(Ytmp)
+            last_row <- if (nrow(Ytmp) >= 1) Ytmp[nrow(Ytmp), , drop = FALSE] else matrix(0, 1, max(1L, ncol(Ytmp)))
+            Ytmp <- rbind(Ytmp, do.call(rbind, replicate(add, last_row, simplify = FALSE)))
+          }
+          # conform cols
+          if (ncol(Ytmp) > K) {
+            Ytmp <- Ytmp[, seq_len(K), drop = FALSE]
+          } else if (ncol(Ytmp) < K) {
+            if (ncol(Ytmp) == 0L) Ytmp <- matrix(0, nrow = nrow(Ytmp), ncol = 1L)
+            col_map <- rep(seq_len(ncol(Ytmp)), length.out = K)
+            Ytmp <- Ytmp[, col_map, drop = FALSE]
+          }
+          
+          storage.mode(Ytmp) <- "double"
+          cat("[dbg] targets: regression Y dim ->", paste(dim(Ytmp), collapse="x"),
+              " | summary mean=", mean(Ytmp), "\n")
+          
+          # provide both Y and y for downstream compatibility
+          return(list(Y = Ytmp, y = as.numeric(Ytmp[,1])))
+          
         } else {
-          stop("Unknown CLASSIFICATION_MODE. Use 'multiclass' or 'binary'.")
+          stop("Unknown CLASSIFICATION_MODE. Use 'multiclass', 'binary', or 'regression'.")
         }
       }
+      
       .bce_loss <- function(p, y, eps=1e-12) {
         p <- pmin(pmax(as.numeric(p), eps), 1 - eps)
         y <- pmin(pmax(as.numeric(y), 0), 1)
@@ -1197,23 +1247,147 @@ SONN <- R6Class(
         if (!is.finite(val)) val <- NA_real_
         val
       }
+      
       .ce_loss_multiclass <- function(P, Y, eps=1e-12) {
         P <- pmin(pmax(as.matrix(P), eps), 1 - eps)  # n×K
-        if (is.vector(Y)) Y <- .one_hot_from_idx(as.integer(Y), nrow(P), ncol(P))
+        if (is.vector(Y)) Y <- one_hot_from_ids(as.integer(Y), K=ncol(P), N=nrow(P))
         val <- mean(-rowSums(Y * log(P)))
         if (!is.finite(val)) val <- NA_real_
         val
       }
       
+      
       # ======== TRAIN LOOP ========
       if (train) {
+        # --- minimal safety init so best_epoch_train & logs always exist (keeps groundwork intact) ---
+        if (!exists("best_train_acc"))      best_train_acc      <- NA_real_
+        if (!exists("best_epoch_train"))    best_epoch_train    <- NA_integer_
+        if (!exists("train_accuracy_log"))  train_accuracy_log  <- numeric(0)
+        if (!exists("train_loss_log"))      train_loss_log      <- numeric(0)
+        if (!exists("mean_output_log"))     mean_output_log     <- numeric(0)
+        if (!exists("sd_output_log"))       sd_output_log       <- numeric(0)
+        if (!exists("max_weight_log"))      max_weight_log      <- numeric(0)
+        
         for (epoch in 1:epoch_in_list) {
+          
           lr <- lr_scheduler(epoch)
           cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
           num_epochs_check <<- num_epochs
           
           # 1) Train step
-          learn_result <- self$learn(Rdata = Rdata, labels = labels, lr = lr, CLASSIFICATION_MODE = CLASSIFICATION_MODE, activation_functions_learn = activation_functions, dropout_rates_learn = dropout_rates,sample_weights = sample_weights)
+          learn_result <- self$learn(
+            Rdata = Rdata,
+            labels = labels,
+            lr = lr,
+            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+            activation_functions_learn = activation_functions,
+            dropout_rates_learn = dropout_rates,
+            sample_weights = sample_weights
+          )
+          
+          # =========================
+          # ORIGINAL BLOCK — keep exactly (binary-style preview vs original labels)
+          # (Now guarded so it only runs for binary; other modes keep same logs without breaking)
+          # =========================
+          # Training prediction and accuracy
+          probs_train  <- learn_result$learn_output
+          learn_time   <- learn_result$learn_time
+          
+          if (identical(CLASSIFICATION_MODE, "binary")) {
+            binary_preds_train <- ifelse(probs_train >= 0.5, 1, 0)
+            train_accuracy     <- mean(binary_preds_train == labels, na.rm = TRUE)
+            train_accuracy_log <- c(train_accuracy_log, train_accuracy)
+            
+            # Track best training accuracy
+            if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
+              best_train_acc   <- train_accuracy
+              best_epoch_train <- epoch
+            }
+            
+            cat(sprintf("Epoch %d | Training Accuracy: %.2f%%\n", epoch, 100 * train_accuracy))
+            
+          } else if (identical(CLASSIFICATION_MODE, "multiclass")) {
+            # Preserve structure: define train_accuracy & log it (multiclass accuracy via argmax)
+            # Try to get label indices; fallback to NA if shapes/labels aren't one-hot
+            if (is.matrix(labels) && ncol(labels) >= 2) {
+              y_idx <- max.col(labels, ties.method = "first")
+              p_idx <- max.col(probs_train, ties.method = "first")
+              train_accuracy <- mean(p_idx == y_idx, na.rm = TRUE)
+            } else {
+              train_accuracy <- NA_real_
+            }
+            train_accuracy_log <- c(train_accuracy_log, train_accuracy)
+            cat(sprintf("Epoch %d | Training Accuracy: %s\n", epoch,
+                        ifelse(is.na(train_accuracy), "NA", sprintf("%.2f%%", 100 * train_accuracy))))
+            
+            # Track best training accuracy when available
+            if (!is.na(train_accuracy) && (is.na(best_train_acc) || train_accuracy > best_train_acc)) {
+              best_train_acc   <- train_accuracy
+              best_epoch_train <- epoch
+            }
+            
+          } else if (identical(CLASSIFICATION_MODE, "regression")) {
+            # Preserve variables/logs: accuracy undefined → NA, but keep log vector shape
+            train_accuracy <- NA_real_
+            train_accuracy_log <- c(train_accuracy_log, NA_real_)
+            cat(sprintf("Epoch %d | Training Accuracy: NA (regression)\n", epoch))
+          } else {
+            stop("Unknown CLASSIFICATION_MODE")
+          }
+          
+          predicted_output_train_reg <- learn_result
+          predicted_output_train_reg_prediction_time <- learn_result$learn_time
+          
+          # Predicted output (use correct output layer)
+          if (self$ML_NN) {
+            predicted_output <- predicted_output_train_reg$hidden_outputs[[self$num_layers]]
+          } else {
+            predicted_output <- predicted_output_train_reg$learn_output
+          }
+          
+          # Output saturation diagnostics
+          mean_output <- mean(predicted_output)
+          sd_output   <- sd(predicted_output)
+          cat("Mean Output:", round(mean_output, 4), "| StdDev:", round(sd_output, 4), "\n")
+          mean_output_log <- c(mean_output_log, mean_output)
+          sd_output_log   <- c(sd_output_log, sd_output)
+          
+          # Optional: compute and store loss (MSE), keeps original variable names
+          train_loss <- mean((predicted_output - labels)^2, na.rm = TRUE)
+          train_loss_log <- c(train_loss_log, train_loss)
+          
+          # Weight explosion diagnostics
+          if (exists("best_weights_record")) {
+            max_weight <- max(sapply(best_weights_record, function(w) max(abs(w))))
+            cat("Max Weight Abs:", round(max_weight, 4), "\n")
+          } else {
+            max_weight <- NA
+          }
+          max_weight_log <- c(max_weight_log, max_weight)
+          
+          ## =========================
+          ## SONN — Top 3 Per-epoch Plots (your original scaffolding)
+          ## =========================
+          if (is.null(self$PerEpochlViewPlotsConfig)) self$PerEpochlViewPlotsConfig <- list()
+          .fix_flag <- function(v, default) { if (isTRUE(v)) TRUE else if (isFALSE(v)) FALSE else default }
+          defaults <- list(accuracy_plot = TRUE, saturation_plot = TRUE, max_weight_plot = TRUE, viewAllPlots = FALSE, verbose = FALSE)
+          for (nm in names(defaults)) {
+            self$PerEpochlViewPlotsConfig[[nm]] <- .fix_flag(self$PerEpochlViewPlotsConfig[[nm]], defaults[[nm]])
+          }
+          pe <- self$PerEpochlViewPlotsConfig
+          message(sprintf("SONN per-epoch flags → acc=%s, sat=%s, max=%s, all=%s, verbose=%s",
+                          pe$accuracy_plot, pe$saturation_plot, pe$max_weight_plot, pe$viewAllPlots, pe$verbose))
+          message(sprintf("SONN gate eval → acc=%s, sat=%s, max=%s",
+                          self$viewPerEpochPlots("accuracy_plot"),
+                          self$viewPerEpochPlots("saturation_plot"),
+                          self$viewPerEpochPlots("max_weight_plot")))
+          if (!dir.exists("plots")) dir.create("plots", recursive = TRUE, showWarnings = FALSE)
+          ens <- as.integer(if (!is.null(self$ensemble_number)) self$ensemble_number else get0("ensemble_number", 1L))
+          mod <- as.integer(if (exists("model_iter_num", inherits = TRUE)) model_iter_num else get0("model_iter_num", 1L))
+          
+          # =========================
+          # MERGED-IN (SECOND BLOCK) — gradients, normalization, BLOCK A metrics
+          # =========================
           
           # ---- Gradients & misc outputs from learn() (normalize shapes early) ----
           weight_gradients_raw <- learn_result$grads_matrix
@@ -1268,7 +1442,8 @@ SONN <- R6Class(
           }
           
           cat(sprintf("Grad norm L1 by layer: %s\n",
-                      paste(vapply(weight_gradients, function(G) sum(abs(G), na.rm=TRUE), numeric(1)), collapse=" | ")))
+                      paste(vapply(weight_gradients, function(G) sum(abs(G), na.rm=TRUE), numeric(1)),
+                            collapse=" | ")))
           
           # 2) Final head / predictions (ALWAYS define now)
           probs_train <- learn_result$learn_output
@@ -1279,6 +1454,8 @@ SONN <- R6Class(
             predictions <- probs_train                # n×1
           } else if (CLASSIFICATION_MODE == "multiclass") {
             predictions <- probs_train                # n×K
+          } else if (CLASSIFICATION_MODE == "regression") {
+            predictions <- probs_train                # n×1 continuous
           } else stop("Unknown CLASSIFICATION_MODE")
           
           # 3) Align labels for this epoch (trim to n; no padding)
@@ -1295,9 +1472,8 @@ SONN <- R6Class(
                       n, K, min(probs_train), max(probs_train)))
           cat("[dbg] BLOCK A: CLASSIFICATION_MODE =", CLASSIFICATION_MODE, "\n")
           
-          targs <- .build_targets(labels_epoch, n, K, CLASSIFICATION_MODE)
-          
           if (identical(CLASSIFICATION_MODE, "multiclass")) {
+            targs <- .build_targets(labels_epoch, n, K, CLASSIFICATION_MODE)
             stopifnot(K >= 2)
             pred_idx <- max.col(probs_train, ties.method = "first")
             cat("[dbg] BLOCK A: pred_idx head =", paste(utils::head(pred_idx, 6), collapse=", "), "\n")
@@ -1307,15 +1483,16 @@ SONN <- R6Class(
             cat(sprintf("[dbg] BLOCK A: train_accuracy=%.6f\n", train_accuracy))
             
             if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
-              train_loss <- .ce_loss_multiclass(probs_train, targs$Y)
-              cat(sprintf("[dbg] BLOCK A: CE loss=%.6f\n", train_loss))
+              train_loss_A <- .ce_loss_multiclass(probs_train, targs$Y)
+              cat(sprintf("[dbg] BLOCK A: CE loss=%.6f\n", train_loss_A))
             } else {
-              train_loss <- mean((probs_train - targs$Y)^2, na.rm = TRUE)
-              cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss))
+              train_loss_A <- mean((probs_train - targs$Y)^2, na.rm = TRUE)
+              cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss_A))
             }
-            train_loss_log <- c(train_loss_log, train_loss)
+            train_loss_log <- c(train_loss_log, train_loss_A)
             
           } else if (identical(CLASSIFICATION_MODE, "binary")) {
+            targs <- .build_targets(labels_epoch, n, K, CLASSIFICATION_MODE)
             stopifnot(K == 1)
             preds_bin <- as.integer(probs_train >= 0.5)
             cat("[dbg] BLOCK A: preds_bin head =", paste(utils::head(preds_bin, 6), collapse=", "), "\n")
@@ -1325,30 +1502,119 @@ SONN <- R6Class(
             cat(sprintf("[dbg] BLOCK A: train_accuracy=%.6f\n", train_accuracy))
             
             if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
-              train_loss <- .bce_loss(probs_train, targs$y)
-              cat(sprintf("[dbg] BLOCK A: BCE loss=%.6f\n", train_loss))
+              train_loss_A <- .bce_loss(probs_train, targs$y)
+              cat(sprintf("[dbg] BLOCK A: BCE loss=%.6f\n", train_loss_A))
             } else {
-              train_loss <- mean((probs_train - matrix(targs$y, ncol=1))^2, na.rm = TRUE)
-              cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss))
+              train_loss_A <- mean((probs_train - matrix(targs$y, ncol=1))^2, na.rm = TRUE)
+              cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss_A))
             }
-            train_loss_log <- c(train_loss_log, train_loss)
+            train_loss_log <- c(train_loss_log, train_loss_A)
             
+          } else if (identical(CLASSIFICATION_MODE, "regression")) {
+            # Regression: continuous target — keep same logging structure; accuracy as NA
+            y_reg <- if (is.matrix(labels_epoch)) as.numeric(labels_epoch[,1]) else as.numeric(labels_epoch)
+            preds_reg <- as.numeric(probs_train[,1])
+            cat("[dbg] BLOCK A: y_reg head     =", paste(utils::head(y_reg, 6), collapse=", "), "\n")
+            cat("[dbg] BLOCK A: preds_reg head =", paste(utils::head(preds_reg, 6), collapse=", "), "\n")
+            
+            # Loss = MSE
+            train_loss_A <- mean((preds_reg - y_reg)^2, na.rm = TRUE)
+            cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss_A))
+            train_loss_log <- c(train_loss_log, train_loss_A)
+            
+            # Preserve 'train_accuracy' variables
+            train_accuracy <- NA_real_
+            train_accuracy_log <- c(train_accuracy_log, NA_real_)
+            cat("[dbg] BLOCK A: train_accuracy=NA (regression)\n")
+            
+            # Extra diagnostics (not added to logs to preserve structure)
+            mae <- mean(abs(preds_reg - y_reg), na.rm = TRUE)
+            var_y <- stats::var(y_reg, na.rm = TRUE)
+            r2 <- if (is.finite(var_y) && var_y > 0) 1 - train_loss_A / var_y else NA_real_
+            cat(sprintf("[dbg] BLOCK A: MAE=%.6f | R^2=%s\n", mae, ifelse(is.na(r2), "NA", sprintf("%.6f", r2))))
           } else {
-            stop("Unknown CLASSIFICATION_MODE. Use 'multiclass' or 'binary'.")
+            stop("Unknown CLASSIFICATION_MODE. Use 'multiclass', 'binary', or 'regression'.")
+          }
+
+          
+          # =========================
+          # BLOCK A — Accuracy & Saturation (multiclass/binary/regression aware)
+          # =========================
+          cat(sprintf("[dbg] BLOCK A: n=%d, K=%d | probs_train range=[%.6f, %.6f]\n",
+                      n, K, min(probs_train), max(probs_train)))
+          cat("[dbg] BLOCK A: CLASSIFICATION_MODE =", CLASSIFICATION_MODE, "\n")
+          
+          if (identical(CLASSIFICATION_MODE, "multiclass")) {
+            targs <- .build_targets(labels_epoch, n, K, CLASSIFICATION_MODE)
+            stopifnot(K >= 2)
+            pred_idx <- max.col(probs_train, ties.method = "first")
+            cat("[dbg] BLOCK A: pred_idx head =", paste(utils::head(pred_idx, 6), collapse=", "), "\n")
+            cat("[dbg] BLOCK A: lbl_idx head  =", paste(utils::head(targs$y_idx, 6), collapse=", "), "\n")
+            train_accuracy_blockA <- mean(pred_idx == targs$y_idx, na.rm = TRUE)
+            train_accuracy_log    <- c(train_accuracy_log, train_accuracy_blockA)
+            cat(sprintf("[dbg] BLOCK A: train_accuracy=%.6f\n", train_accuracy_blockA))
+            
+            if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
+              train_loss_blockA <- .ce_loss_multiclass(probs_train, targs$Y)
+              cat(sprintf("[dbg] BLOCK A: CE loss=%.6f\n", train_loss_blockA))
+            } else {
+              train_loss_blockA <- mean((probs_train - targs$Y)^2, na.rm = TRUE)
+              cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss_blockA))
+            }
+            train_loss_log <- c(train_loss_log, train_loss_blockA)
+            
+          } else if (identical(CLASSIFICATION_MODE, "binary")) {
+            targs <- .build_targets(labels_epoch, n, K, CLASSIFICATION_MODE)
+            stopifnot(K == 1)
+            preds_bin_blockA <- as.integer(probs_train >= 0.5)
+            cat("[dbg] BLOCK A: preds_bin head =", paste(utils::head(preds_bin_blockA, 6), collapse=", "), "\n")
+            cat("[dbg] BLOCK A: y head        =", paste(utils::head(targs$y, 6), collapse=", "), "\n")
+            train_accuracy_blockA <- mean(preds_bin_blockA == targs$y, na.rm = TRUE)
+            train_accuracy_log    <- c(train_accuracy_log, train_accuracy_blockA)
+            cat(sprintf("[dbg] BLOCK A: train_accuracy=%.6f\n", train_accuracy_blockA))
+            
+            if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
+              train_loss_blockA <- .bce_loss(probs_train, targs$y)
+              cat(sprintf("[dbg] BLOCK A: BCE loss=%.6f\n", train_loss_blockA))
+            } else {
+              train_loss_blockA <- mean((probs_train - matrix(targs$y, ncol=1))^2, na.rm = TRUE)
+              cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss_blockA))
+            }
+            train_loss_log <- c(train_loss_log, train_loss_blockA)
+            
+          } else if (identical(CLASSIFICATION_MODE, "regression")) {
+            y_reg    <- if (is.matrix(labels_epoch)) as.numeric(labels_epoch[,1]) else as.numeric(labels_epoch)
+            preds_reg <- as.numeric(probs_train[,1])
+            cat("[dbg] BLOCK A: y_reg head     =", paste(utils::head(y_reg, 6), collapse=", "), "\n")
+            cat("[dbg] BLOCK A: preds_reg head =", paste(utils::head(preds_reg, 6), collapse=", "), "\n")
+            
+            train_loss_blockA <- mean((preds_reg - y_reg)^2, na.rm = TRUE)
+            cat(sprintf("[dbg] BLOCK A: MSE loss=%.6f\n", train_loss_blockA))
+            train_loss_log <- c(train_loss_log, train_loss_blockA)
+            
+            train_accuracy_blockA <- NA_real_
+            train_accuracy_log    <- c(train_accuracy_log, NA_real_)
+            cat("[dbg] BLOCK A: train_accuracy=NA (regression)\n")
+            
+            mae  <- mean(abs(preds_reg - y_reg), na.rm = TRUE)
+            vary <- stats::var(y_reg, na.rm = TRUE)
+            r2   <- if (is.finite(vary) && vary > 0) 1 - train_loss_blockA / vary else NA_real_
+            cat(sprintf("[dbg] BLOCK A: MAE=%.6f | R^2=%s\n", mae, ifelse(is.na(r2), "NA", sprintf("%.6f", r2))))
+          } else {
+            stop("Unknown CLASSIFICATION_MODE. Use 'multiclass', 'binary', or 'regression'.")
           }
           
-          if (!exists("best_train_acc") || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
+          # keep your best tracker (already updated earlier by original block); optional reinforce:
+          if (is.na(best_train_acc) || (!is.na(train_accuracy) && train_accuracy > best_train_acc)) {
             best_train_acc   <- train_accuracy
             best_epoch_train <- epoch
             cat(sprintf("[dbg] BLOCK A: new best_train_acc=%.6f at epoch=%d\n", best_train_acc, best_epoch_train))
           }
           
-          # Saturation stats from final layer (logits/probs)
-          predicted_output <- if (isTRUE(self$ML_NN)) learn_result$hidden_outputs[[self$num_layers]] else learn_result$learn_output
-          mean_output <- mean(predicted_output); sd_output <- sd(predicted_output)
-          mean_output_log <- c(mean_output_log, mean_output)
-          sd_output_log   <- c(sd_output_log, sd_output)
+          # Saturation stats already computed above from predicted_output
           cat(sprintf("[dbg] BLOCK A: saturation mean=%.6f | sd=%.6f\n", mean_output, sd_output))
+          
+          
           
           # -----------------------------------------
           # (unchanged) plotting & filename handling
@@ -1490,6 +1756,8 @@ SONN <- R6Class(
             } # end ML_NN else
           } # end if !is.null(reg_type)
           
+          
+          
           # ===== Loss (train) =====
           losses[[epoch]] <- loss_function(
             predictions         = predictions,     # defined right after learn_result
@@ -1589,16 +1857,16 @@ SONN <- R6Class(
             biases_record  <- vector("list", self$num_layers)
           }
           
-
-      
-        
+          
+          
+          
           
           # Initialize records and optimizer parameters if ML_NN is TRUE
           if (self$ML_NN) {
             weights_record <- vector("list", self$num_layers)
             biases_record  <- vector("list", self$num_layers)
           }
-
+          
           
           # Update weights and biases code removed for chatgpt to process
           if (update_weights) {
@@ -2928,7 +3196,7 @@ SONN <- R6Class(
           }
           
           
-    
+          
           
           
           
@@ -2945,15 +3213,15 @@ SONN <- R6Class(
       biases_record <- NULL
       dim_hidden_layers <- NULL}
       
-
+      
       if (train && validation_metrics) {
         predicted_output_train_reg <- predicted_output_val
       } else if (!train && !validation_metrics) {
         
       }
       
-
-
+      
+      
       if (train) {
         if (self$ML_NN) {
           for (layer in 1:self$num_layers) {
@@ -3086,12 +3354,12 @@ SONN <- R6Class(
           print(paste("Unexpected error:", e$message))
         }
       })
-
-
+      
+      
       
       # Optionally timestamp prediction time
       predicted_output_train_reg_prediction_time <- Sys.time() - start_time
-
+      
       # Return the predicted output
       return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, training_time = training_time, learn_output = learn_result$learn_output, learn_time = learn_result$learn_time, learn_dim_hidden_layers = learn_result$dim_hidden_layers, learn_hidden_outputs = learn_result$hidden_outputs, learn_grads_matrix = learn_result$grads_matrix, learn_bias_gradients = learn_result$bias_gradients, learn_errors = learn_result$errors, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
     },
@@ -3528,7 +3796,7 @@ DESONN <- R6Class(
             all_model_iter_num[[i]] <- model_iter_num
             
             
-
+            
             all_predicted_outputAndTime[[i]] <- list(
               predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
               prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
@@ -3543,7 +3811,7 @@ DESONN <- R6Class(
             # Optional storage
             # my_optimal_epoch_out_vector[[i]] <<- predicted_outputAndTime$optimal_epoch
             # ----------------------------------
-
+            
             # Continue if predictions are available
             if (!is.null(predicted_outputAndTime$predicted_output_l2)) {
               
@@ -3557,7 +3825,7 @@ DESONN <- R6Class(
               all_weights[[i]]                 <- predicted_outputAndTime$best_weights_record
               all_biases[[i]]                  <- predicted_outputAndTime$best_biases_record
               all_activation_functions[[i]]    <- activation_functions_learn
-
+              
               # --- Debug prints ---
               cat(">> Ensemble Index:", i, "\n")
               cat("Predicted Output (first 5):\n"); print(head(all_predicted_outputs[[i]], 5))
@@ -3727,7 +3995,7 @@ DESONN <- R6Class(
         }
         
         # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
-
+        
         performance_relevance_data <- self$update_performance_and_relevance(
           Rdata                        = Rdata,
           labels                       = labels,
@@ -3916,7 +4184,7 @@ DESONN <- R6Class(
     
     update_performance_and_relevance = function(Rdata, labels, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
       
-
+      
       # Initialize lists to store performance and relevance metrics for each SONN
       performance_list <- list()
       relevance_list <- list()
@@ -3951,7 +4219,7 @@ DESONN <- R6Class(
               Rdata = X_validation
               labels = y_validation
             }
-
+            
             
             performance_list[[i]] <- calculate_performance(
               SONN = self$ensemble[[i]],
@@ -3993,14 +4261,14 @@ DESONN <- R6Class(
             relevance_metric <- relevance_list[[i]]$metrics
             
             if (ensemble_number < 1 && length(self$ensemble) >= 1 || (verbose && (ensemble_number < 1 && length(self$ensemble) >= 1))){
-            cat(">> METRICS FOR ENSEMBLE:", ensemble_number, "MODEL:", i, "\n")
-            print(performance_metric)
-            print(relevance_metric)
-            
+              cat(">> METRICS FOR ENSEMBLE:", ensemble_number, "MODEL:", i, "\n")
+              print(performance_metric)
+              print(relevance_metric)
+              
             }
             
           }
-        
+          
           
           cat("\n====================================\n")
           cat("🔍 DEBUG: Preparing to store metadata\n")
@@ -4043,7 +4311,7 @@ DESONN <- R6Class(
       null_check_relevance <- check_null(relevance_metrics) #<<-
       
       
-
+      
       
       # Convert the matrix to a data frame without modifying row names
       # Initialize empty vectors to store values and row names
@@ -4197,7 +4465,7 @@ DESONN <- R6Class(
         list(high_mean_df = high_mean_df, low_mean_df = low_mean_df)
       }
       
-
+      
       
       # Assuming performance_metrics and relevance_metrics are already defined
       performance_results <- process_performance(performance_metrics, run_id) #<<-
@@ -4275,7 +4543,7 @@ DESONN <- R6Class(
       Set `verbose = TRUE` to print data frames, 
       or `viewTables = TRUE` to see tables.\n")
       }
-
+      
       # Grouped metrics (run whenever you have ≥1 model)
       if (ensemble_number >= 1 && length(self$ensemble) > 1) {
         group_perf <- calculate_performance_grouped(
@@ -4312,24 +4580,24 @@ DESONN <- R6Class(
           agg_method            = "mean",
           metric_mode           = "aggregate_predictions+rep_sonn"
         )
-      
+        
         perf_df <<- perf_df
         relev_df <<- relev_df
-      # ---------- Printing policy ----------
-      # Tables (DF heads) print if EITHER verbose OR viewTables
-      if (isTRUE(verbose) || isTRUE(viewTables)) {
-        if (!is.null(perf_df))  { cat("\n--- performance_long_df (head) ---\n"); print(utils::head(perf_df, 12)) }
-        if (!is.null(relev_df)) { cat("\n--- relevance_long_df (head) ---\n"); print(utils::head(relev_df, 12)) }
-      }
-      
-      # Summaries + grouped metrics print ONLY when verbose = TRUE
-      if (isTRUE(verbose)) {
-        if (!is.null(perf_group_summary))  { cat("\n=== PERFORMANCE group summary ===\n"); print(perf_group_summary) }
-        if (!is.null(relev_group_summary)) { cat("\n=== RELEVANCE group summary ===\n"); print(relev_group_summary) }
-        if (!is.null(group_perf))  { cat("\n=== GROUPED PERFORMANCE metrics ===\n"); print(group_perf$metrics) }
-        if (!is.null(group_relev)) { cat("\n=== GROUPED RELEVANCE metrics ===\n"); print(group_relev$metrics) }
-      }
-      
+        # ---------- Printing policy ----------
+        # Tables (DF heads) print if EITHER verbose OR viewTables
+        if (isTRUE(verbose) || isTRUE(viewTables)) {
+          if (!is.null(perf_df))  { cat("\n--- performance_long_df (head) ---\n"); print(utils::head(perf_df, 12)) }
+          if (!is.null(relev_df)) { cat("\n--- relevance_long_df (head) ---\n"); print(utils::head(relev_df, 12)) }
+        }
+        
+        # Summaries + grouped metrics print ONLY when verbose = TRUE
+        if (isTRUE(verbose)) {
+          if (!is.null(perf_group_summary))  { cat("\n=== PERFORMANCE group summary ===\n"); print(perf_group_summary) }
+          if (!is.null(relev_group_summary)) { cat("\n=== RELEVANCE group summary ===\n"); print(relev_group_summary) }
+          if (!is.null(group_perf))  { cat("\n=== GROUPED PERFORMANCE metrics ===\n"); print(group_perf$metrics) }
+          if (!is.null(group_relev)) { cat("\n=== GROUPED RELEVANCE metrics ===\n"); print(group_relev$metrics) }
+        }
+        
       }
       
       
@@ -5246,7 +5514,7 @@ calculate_performance <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, 
   cat("Length of SONN$weights: ", length(SONN$weights), "\n")
   cat("Length of SONN$map: ", if (is.null(SONN$map)) "NULL" else length(SONN$map), "\n")
   
-
+  
   # --- Metrics (all take SONN) ---
   perf_metrics <- list(
     quantization_error            = quantization_error(SONN, Rdata, run_id, verbose),
@@ -5325,18 +5593,18 @@ calculate_relevance <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, model_
 
 
 calculate_performance_grouped <- function(SONN_list, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs, threshold, predicted_output_list, prediction_time_list, ensemble_number, run_id, ML_NN, verbose,
-    agg_method = c("mean","median","vote"),
-    metric_mode = c("aggregate_predictions+rep_sonn", "average_per_model"),
-    weights_list = NULL, biases_list = NULL, act_list = NULL
+                                          agg_method = c("mean","median","vote"),
+                                          metric_mode = c("aggregate_predictions+rep_sonn", "average_per_model"),
+                                          weights_list = NULL, biases_list = NULL, act_list = NULL
 ) {
   agg_method <- match.arg(agg_method)
   metric_mode <- match.arg(metric_mode)
-
+  
   # 1) Aggregate predictions once
   p_agg <- aggregate_predictions(predicted_output_list, method = agg_method)
   pred_time_agg <- mean(unlist(prediction_time_list), na.rm = TRUE)
-
-    if (metric_mode == "aggregate_predictions+rep_sonn") {
+  
+  if (metric_mode == "aggregate_predictions+rep_sonn") {
     # 2a) Use ONE representative SONN (best F1) so we can reuse your metric code as-is
     rep_sonn <- pick_representative_sonn(SONN_list, predicted_output_list, labels)
     rep_w <- rep_sonn$weights; rep_b <- rep_sonn$biases; rep_af <- rep_sonn$activation_functions
@@ -5398,8 +5666,8 @@ calculate_performance_grouped <- function(SONN_list, Rdata, labels, lr, CLASSIFI
 }
 
 calculate_relevance_grouped <- function(SONN_list, Rdata, labels, CLASSIFICATION_MODE, predicted_output_list, ensemble_number, run_id, ML_NN, verbose,
-    agg_method = c("mean","median","vote"),
-    metric_mode = c("aggregate_predictions+rep_sonn", "average_per_model")
+                                        agg_method = c("mean","median","vote"),
+                                        metric_mode = c("aggregate_predictions+rep_sonn", "average_per_model")
 ) {
   agg_method <- match.arg(agg_method)
   metric_mode <- match.arg(metric_mode)
@@ -5451,7 +5719,9 @@ calculate_relevance_grouped <- function(SONN_list, Rdata, labels, CLASSIFICATION
 
 
 
-# Loss Function: Computes the loss based on the type specified and includes regularization term
+# Unified Loss Function (minimal edits, original style preserved)
+# Supports binary, multiclass, and regression.
+# Strictly enforces valid (mode, loss_type) combos with clear error messages.
 loss_function <- function(predictions, labels, CLASSIFICATION_MODE, reg_loss_total, loss_type) {
   # Default reg_loss_total to 0 if NULL
   if (is.null(reg_loss_total)) reg_loss_total <- 0
@@ -5461,14 +5731,39 @@ loss_function <- function(predictions, labels, CLASSIFICATION_MODE, reg_loss_tot
   
   # Handle missing or NULL loss_type gracefully
   if (is.null(loss_type)) {
-    print("Loss type is NULL. Please specify 'MSE', 'MAE', 'CrossEntropy'.")
+    print("Loss type is NULL. Please specify 'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'.")
     return(NA)
+  }
+  
+  # Normalize inputs
+  mode <- tolower(as.character(CLASSIFICATION_MODE))
+  lt   <- tolower(as.character(loss_type))
+  
+  # ---- Compatibility checks (clear + strict) ----
+  if (mode == "regression") {
+    if (lt %in% c("crossentropy", "categoricalcrossentropy")) {
+      stop("Invalid loss_type for regression: '", loss_type,
+           "'. Use 'MSE' or 'MAE' for CLASSIFICATION_MODE = 'regression'.\n",
+           "# Tip: Cross-entropy losses require class probabilities and one-hot/0-1 labels; ",
+           "regression targets are continuous.")
+    }
+  } else if (mode == "binary") {
+    if (lt == "categoricalcrossentropy") {
+      stop("Invalid loss_type for binary: 'CategoricalCrossEntropy'. ",
+           "Use 'CrossEntropy' (binary) or 'MSE'/'MAE'.")
+    }
+  } else if (mode == "multiclass") {
+    # all four allowed; CE names both valid here
+    # no-op
+    ;
+  } else {
+    stop("Unknown CLASSIFICATION_MODE: must be 'binary', 'multiclass', or 'regression'")
   }
   
   P <- as.matrix(predictions)
   n <- nrow(P); K <- ncol(P)
   
-  # small helpers
+  # small helpers (kept)
   one_hot <- function(idx, n, K) {
     Y <- matrix(0, n, K)
     ok <- !is.na(idx) & idx >= 1 & idx <= K
@@ -5482,17 +5777,17 @@ loss_function <- function(predictions, labels, CLASSIFICATION_MODE, reg_loss_tot
     ex / rowSums(ex)
   }
   
-  if (loss_type == "MSE") {
+  if (lt == "mse") {
     loss <- mean((P - as.matrix(labels))^2, na.rm = TRUE)
     
-  } else if (loss_type == "MAE") {
+  } else if (lt == "mae") {
     loss <- mean(abs(P - as.matrix(labels)), na.rm = TRUE)
     
-  } else if (loss_type == "CrossEntropy") {
+  } else if (lt %in% c("crossentropy", "categoricalcrossentropy")) {
     eps <- 1e-12
     
-    if (CLASSIFICATION_MODE == "binary") {
-      # labels may be factor/char — coerce to numeric 0/1
+    if (mode == "binary") {
+      # Binary Cross-Entropy
       y <- if (is.matrix(labels)) labels[,1] else labels
       y <- suppressWarnings(as.numeric(y))
       if (all(is.na(y))) y <- as.integer(factor(labels)) - 1L
@@ -5503,7 +5798,7 @@ loss_function <- function(predictions, labels, CLASSIFICATION_MODE, reg_loss_tot
       P <- pmin(pmax(P, eps), 1 - eps)
       loss <- -mean(y * log(P) + (1 - y) * log(1 - P))
       
-    } else if (CLASSIFICATION_MODE == "multiclass") {
+    } else if (mode == "multiclass") {
       stopifnot(K >= 2)
       # If labels already one-hot n×K, use them; else factor -> indices -> one-hot
       if (is.matrix(labels) && nrow(labels) >= n && ncol(labels) == K &&
@@ -5523,18 +5818,20 @@ loss_function <- function(predictions, labels, CLASSIFICATION_MODE, reg_loss_tot
       P <- pmin(pmax(P, eps), 1 - eps)
       loss <- -mean(rowSums(Y * log(P)))
       
-    } else {
-      stop("Unknown CLASSIFICATION_MODE: must be 'binary' or 'multiclass'")
+    } else if (mode == "regression") {
+      # Should never get here due to compatibility check above
+      stop("Cross-entropy not valid for regression.")
     }
     
   } else {
-    print("Invalid loss type. Choose from 'MSE', 'MAE', or 'CrossEntropy'.")
+    print("Invalid loss type. Choose from 'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'.")
     return(NA)
   }
   
   total_loss <- loss + reg_loss_total
   return(total_loss)
 }
+
 
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -6101,7 +6398,7 @@ robustness <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs,
   }
   
   return(accuracy)
-  }
+}
 
 # Hit Rate
 hit_rate <- function(SONN, Rdata, CLASSIFICATION_MODE, predicted_output, labels, verbose) {
@@ -6175,7 +6472,7 @@ accuracy <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output,
     }
   }
   
-
+  
   
   # ---------- coerce ----------
   lbl  <- to_num_mat(labels, "labels")
@@ -6185,8 +6482,8 @@ accuracy <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output,
                                    nrow(lbl), ncol(lbl), nrow(pred), ncol(pred)))
   
   # ---------- row alignment (NO aggressive recycling) ----------
-
-
+  
+  
   if (nrow(lbl) != nrow(pred)) {
     n_common <- min(nrow(lbl), nrow(pred))
     ratio <- n_common / max(nrow(lbl), nrow(pred))

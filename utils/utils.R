@@ -1166,14 +1166,16 @@ find_best_model <- function(target_metric_name_best,
 compute_error <- function(
     predicted_output,
     labels,
-    CLASSIFICATION_MODE = c("binary","multiclass")
+    CLASSIFICATION_MODE = c("binary","multiclass","regression")
 ) {
   CLASSIFICATION_MODE <- match.arg(CLASSIFICATION_MODE)
   if (is.null(labels)) return(NULL)
   
+  # --- normalize predictions to a matrix ---
   P <- as.matrix(predicted_output)
   n <- nrow(P); k <- ncol(P)
   
+  # --- helpers ---
   as_mat <- function(x) {
     if (is.data.frame(x)) return(as.matrix(x))
     if (is.vector(x))     return(matrix(x, ncol = 1L))
@@ -1192,13 +1194,16 @@ compute_error <- function(
     cbind(M, matrix(pad, nrow = nrow(M), ncol = cols - ncol(M)))
   }
   
-  # ---------- BINARY ----------
+  # =========================
+  # BINARY CLASSIFICATION
+  # =========================
   if (CLASSIFICATION_MODE == "binary") {
-    pred <- if (k == 1L) P else matrix(P[, k], ncol = 1L)
+    pred <- if (k == 1L) P else matrix(P[, k], ncol = 1L)  # take last col if logits/probs provided
     L <- labels
     
-    if (is.factor(L))    L <- as.integer(L) - 1L
-    else if (is.character(L)) {
+    if (is.factor(L)) {
+      L <- as.integer(L) - 1L
+    } else if (is.character(L)) {
       lu <- sort(unique(L))
       L  <- as.integer(factor(L, levels = lu)) - 1L
     } else {
@@ -1217,40 +1222,85 @@ compute_error <- function(
     return(abs(L - pred))
   }
   
-  # ---------- MULTICLASS ----------
-  L <- labels
-  if (is.data.frame(L)) L <- as.matrix(L)
-  
-  if (!is.null(dim(L)) && ncol(L) > 1L) {
-    Y <- align_rows(as.matrix(L), n)
-    Y <- pad_or_trim_cols(Y, k, pad = 0)
+  # =========================
+  # MULTICLASS CLASSIFICATION
+  # =========================
+  if (CLASSIFICATION_MODE == "multiclass") {
+    L <- labels
+    if (is.data.frame(L)) L <- as.matrix(L)
+    
+    # If labels are already one-hot / probability matrix → align & diff
+    if (!is.null(dim(L)) && ncol(L) > 1L) {
+      Y <- align_rows(as.matrix(L), n)
+      Y <- pad_or_trim_cols(Y, k, pad = 0)
+      return(abs(Y - P))
+    }
+    
+    # Otherwise, treat labels as class IDs / names
+    class_order <- if (!is.null(colnames(P))) colnames(P) else sort(unique(as.character(L)))
+    
+    if (is.factor(L)) {
+      L_idx <- as.integer(factor(L, levels = class_order))
+    } else if (is.character(L)) {
+      L_idx <- as.integer(factor(L, levels = class_order))
+    } else {
+      L_num <- suppressWarnings(as.numeric(L))
+      if (!all(is.na(L_num))) {
+        if (min(L_num, na.rm = TRUE) == 0 && max(L_num, na.rm = TRUE) <= (k - 1)) {
+          L_idx <- as.integer(L_num + 1L)
+        } else {
+          L_idx <- as.integer(L_num)
+        }
+      } else {
+        L_idx <- as.integer(factor(as.character(L), levels = class_order))
+      }
+    }
+    
+    if (anyNA(L_idx)) L_idx[is.na(L_idx)] <- 1L
+    L_idx <- rep(L_idx, length.out = n)
+    
+    Y <- matrix(0, nrow = n, ncol = k)
+    Y[cbind(seq_len(n), pmax(1L, pmin(k, L_idx)))] <- 1L
+    
     return(abs(Y - P))
   }
   
-  class_order <- if (!is.null(colnames(P))) colnames(P) else sort(unique(as.character(L)))
+  # =========================
+  # REGRESSION
+  # =========================
+  # Goal: return absolute error |Y - P| with shape n x k.
+  # - Accepts labels as vector/matrix/data.frame.
+  # - Coerces to numeric, aligns rows, and matches columns:
+  #   * If labels have 1 col and k > 1 → replicate that column across k.
+  #   * If labels have >1 col → trim or pad with zeros to match k.
+  L <- labels
   
-  if (is.factor(L)) {
-    L_idx <- as.integer(factor(L, levels = class_order))
-  } else if (is.character(L)) {
-    L_idx <- as.integer(factor(L, levels = class_order))
-  } else {
-    L_num <- suppressWarnings(as.numeric(L))
-    if (!all(is.na(L_num))) {
-      if (min(L_num, na.rm = TRUE) == 0 && max(L_num, na.rm = TRUE) <= (k - 1)) {
-        L_idx <- as.integer(L_num + 1L)
-      } else {
-        L_idx <- as.integer(L_num)
-      }
-    } else {
-      L_idx <- as.integer(factor(as.character(L), levels = class_order))
+  # Coerce to numeric matrix safely
+  to_numeric_matrix <- function(x) {
+    M <- as_mat(x)
+    # Try numeric coercion while preserving shape
+    suppressWarnings(storage.mode(M) <- "double")
+    # If still all NA (e.g., character), try a character→numeric pass
+    if (all(is.na(M))) {
+      M_chr <- as_mat(as.character(x))
+      suppressWarnings(storage.mode(M_chr) <- "double")
+      M <- M_chr
     }
+    M
   }
   
-  if (anyNA(L_idx)) L_idx[is.na(L_idx)] <- 1L
-  L_idx <- rep(L_idx, length.out = n)
+  Y <- to_numeric_matrix(L)
+  if (is.null(dim(Y))) Y <- matrix(Y, ncol = 1L)
   
-  Y <- matrix(0, nrow = n, ncol = k)
-  Y[cbind(seq_len(n), pmax(1L, pmin(k, L_idx)))] <- 1L
+  # Align rows
+  Y <- align_rows(Y, n)
   
-  abs(Y - P)
+  # Align columns to predictions
+  if (ncol(Y) == 1L && k > 1L) {
+    Y <- matrix(rep(Y[, 1L], times = k), nrow = n, ncol = k)
+  } else {
+    Y <- pad_or_trim_cols(Y, k, pad = 0)
+  }
+  
+  return(abs(Y - P))
 }
