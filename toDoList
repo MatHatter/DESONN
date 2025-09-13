@@ -1,0 +1,14 @@
+generalization_ability <- function(SONN, Rdata, X_validation, verbose) {
+  # Split the Rdata into training and testing sets
+  set.seed(123)
+  train_idx <- sample(1:nrow(Rdata), 0.8 * nrow(Rdata))
+  train_Rdata <- Rdata[train_idx, ]
+  test_Rdata <- Rdata[-train_idx, ]
+  
+  if (verbose) {
+    print("generalization_ability")
+  }
+  if (verbose) {
+    print("generalization_ability complete")
+  }
+}
