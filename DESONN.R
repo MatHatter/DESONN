@@ -1039,32 +1039,52 @@ SONN <- R6Class(
     
     # Method to perform prediction
     predict = function(Rdata, weights = NULL, biases = NULL, activation_functions = NULL) {
+      # ---- Debug toggle (from env/global) ----
+      DEBUG_PREDICT_FORWARD <- isTRUE(get0("DEBUG_PREDICT_FORWARD", inherits = TRUE, ifnotfound = FALSE))
+      .dbg <- function(...) if (isTRUE(DEBUG_PREDICT_FORWARD)) cat("[PRED-DBG]", sprintf(...), "\n")
+      
+      # ---------- last-layer variance probe (local helper) ----------
+      probe_last_layer <- function(Z_last, A_last, last_af_name = NA_character_, tag = "[PROBE]") {
+        vZ  <- as.vector(Z_last); vA <- as.vector(A_last)
+        sdZ <- sd(vZ, na.rm = TRUE); sdA <- sd(vA, na.rm = TRUE)
+        rngZ <- range(vZ, na.rm = TRUE); rngA <- range(vA, na.rm = TRUE)
+        
+        cat(sprintf("%s last_af=%s | sd(Z)=%.6g | sd(A)=%.6g | range(Z)=[%.6g, %.6g] | range(A)=[%.6g, %.6g]\n",
+                    tag, as.character(last_af_name), sdZ, sdA, rngZ[1], rngZ[2], rngA[1], rngA[2]))
+        
+        eps_flat <- 1e-6
+        if (sdZ < eps_flat) {
+          cat(sprintf("%s DIAG: Z_last is ~flat -> training collapse.\n", tag))
+        } else if (sdA < sdZ * 1e-3) {
+          cat(sprintf("%s DIAG: Z_last has spread but A_last is squashed -> activation/head mismatch.\n", tag))
+        } else {
+          cat(sprintf("%s DIAG: Variance preserved across head.\n", tag))
+        }
+        invisible(list(sdZ = sdZ, sdA = sdA))
+      }
+      # --------------------------------------------------------------
+      
       # If weights/biases are missing → fall back to internal state (stateful mode)
       if (is.null(weights)) {
-        if (!is.null(self$weights)) {
-          weights <- self$weights
-        } else {
-          stop("predict(): weights not provided and self$weights is NULL.")
-        }
+        if (!is.null(self$weights)) weights <- self$weights else stop("predict(): weights not provided and self$weights is NULL.")
       }
       if (is.null(biases)) {
-        if (!is.null(self$biases)) {
-          biases <- self$biases
-        } else {
-          stop("predict(): biases not provided and self$biases is NULL.")
-        }
+        if (!is.null(self$biases))  biases  <- self$biases  else stop("predict(): biases not provided and self$biases is NULL.")
       }
       
       # Ensure lists
       if (!is.list(weights)) weights <- list(weights)
-      if (!is.list(biases)) biases <- list(biases)
-      if (!is.null(activation_functions) && !is.list(activation_functions)) {
-        activation_functions <- list(activation_functions)
-      }
+      if (!is.list(biases))  biases  <- list(biases)
+      if (!is.null(activation_functions) && !is.list(activation_functions)) activation_functions <- list(activation_functions)
       
-      start_time <- Sys.time()
-      output <- as.matrix(Rdata)
-      num_layers <- length(weights)
+      start_time  <- Sys.time()
+      output      <- as.matrix(Rdata)
+      num_layers  <- length(weights)
+      
+      # Input diagnostics
+      .dbg("INPUT dims=%d x %d | mean=%.6f sd=%.6f min=%.6f p50=%.6f max=%.6f",
+           nrow(output), ncol(output),
+           mean(output), sd(as.vector(output)), min(output), stats::median(as.vector(output)), max(output))
       
       for (layer in seq_len(num_layers)) {
         w <- as.matrix(weights[[layer]])
@@ -1078,26 +1098,93 @@ SONN <- R6Class(
         } else if (length(b) == n_units) {
           bias_mat <- matrix(b, nrow = n_samples, ncol = n_units, byrow = TRUE)
         } else {
-          bias_mat <- matrix(rep(b, length.out = n_units), nrow = n_samples,
-                             ncol = n_units, byrow = TRUE)
+          bias_mat <- matrix(rep(b, length.out = n_units), nrow = n_samples, ncol = n_units, byrow = TRUE)
         }
+        
+        # ---- Always print concise bias stats (requested) ----
+        b_sd   <- if (length(b) > 1) sd(b) else 0
+        b_min  <- if (length(b) > 0) min(b) else NA_real_
+        b_max  <- if (length(b) > 0) max(b) else NA_real_
+        b_head <- paste(utils::head(round(b, 6), 6), collapse = ", ")
+        cat(sprintf("[BIAS] L%02d: len=%d | mean=%.6g sd=%.6g | range=[%s, %s] | head=[%s]\n",
+                    layer, length(b), mean(b), b_sd,
+                    format(b_min, digits = 6), format(b_max, digits = 6), b_head))
+        
+        # Layer diagnostics (weights/biases) — keep under debug flag
+        .dbg("L%02d: W dims=%d x %d | W mean=%.6g sd=%.6g min=%.6g max=%.6g",
+             layer, nrow(w), ncol(w), mean(w), sd(as.vector(w)), min(w), max(w))
         
         # Linear transformation
         output <- output %*% w + bias_mat
+        
+        # Pre-activation stats
+        .dbg("L%02d: Z dims=%d x %d | Z mean=%.6f sd=%.6f min=%.6f p50=%.6f max=%.6f",
+             layer, nrow(output), ncol(output),
+             mean(output), sd(as.vector(output)), min(output), stats::median(as.vector(output)), max(output))
+        
+        # Per-layer probe (before activation) so we can see where collapse starts
+        sdZ  <- sd(as.vector(output))
+        rngZ <- range(as.vector(output))
+        cat(sprintf("[L%02d-PROBE] sd(Z)=%.6g | range(Z)=[%.6g, %.6g]\n", layer, sdZ, rngZ[1], rngZ[2]))
+        
+        # Keep a copy of Z for the last-layer probe
+        Z_curr <- output
         
         # Apply activation if provided
         if (!is.null(activation_functions) &&
             length(activation_functions) >= layer &&
             is.function(activation_functions[[layer]])) {
+          
+          # Try to print a friendly name for the activation
+          act_name <- tryCatch({
+            nm <- attr(activation_functions[[layer]], "name")
+            if (is.null(nm)) "function" else nm
+          }, error = function(e) "function")
+          
+          .dbg("L%02d: ACT[%s] applying...", layer, act_name)
           output <- activation_functions[[layer]](output)
+          
+          # Per-layer probe (after activation)
+          sdA  <- sd(as.vector(output))
+          rngA <- range(as.vector(output))
+          cat(sprintf("[L%02d-PROBE] sd(A)=%.6g | range(A)=[%.6g, %.6g]\n", layer, sdA, rngA[1], rngA[2]))
+          
+          # ====== PROBE ONLY ON THE LAST LAYER ======
+          if (layer == num_layers) {
+            last_af_name <- tryCatch(tolower(attr(activation_functions[[layer]], "name")),
+                                     error = function(e) NA_character_)
+            probe_last_layer(Z_last = Z_curr, A_last = output,
+                             last_af_name = last_af_name, tag = "[PROBE]")
+          }
+          # ==========================================
+          
+        } else {
+          .dbg("L%02d: ACT[identity] (no activation function provided for this layer)", layer)
+          
+          # Per-layer probe (after identity)
+          sdA  <- sd(as.vector(output))
+          rngA <- range(as.vector(output))
+          cat(sprintf("[L%02d-PROBE] sd(A)=%.6g | range(A)=[%.6g, %.6g]\n", layer, sdA, rngA[1], rngA[2]))
+          
+          # If no function provided and this is the last layer, still probe using identity
+          if (layer == num_layers) {
+            probe_last_layer(Z_last = Z_curr, A_last = output,
+                             last_af_name = "identity", tag = "[PROBE]")
+          }
         }
       }
       
       end_time <- Sys.time()
       prediction_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
+      .dbg("DONE | total_time=%.6fs | FINAL dims=%d x %d | mean=%.6f sd=%.6f min=%.6f p50=%.6f max=%.6f",
+           prediction_time, nrow(output), ncol(output),
+           mean(output), sd(as.vector(output)), min(output), stats::median(as.vector(output)), max(output))
       
       return(list(predicted_output = output, prediction_time = prediction_time))
-    },# Method for training the SONN with L2 regularization
+    }
+    
+    
+    ,# Method for training the SONN with L2 regularization
     train_with_l2_regularization = function(Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs, model_iter_num, update_weights, update_biases, use_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose) {
       
       start_time <- Sys.time()
@@ -3436,7 +3523,7 @@ DESONN <- R6Class(
     }
     ,
     
-    train = function(Rdata, labels, lr, lr_decay_rate, lr_decay_epoch, lr_min, ensemble_number, num_epochs, use_biases, threshold, reg_type, numeric_columns, CLASSIFICATION_MODE, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
+    train = function(Rdata, labels, lr, lr_decay_rate, lr_decay_epoch, lr_min, ensemble_number, num_epochs, use_biases, threshold, reg_type, numeric_columns, CLASSIFICATION_MODE, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, preprocessScaledData, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3774,6 +3861,7 @@ DESONN <- R6Class(
         performance_relevance_data <- self$update_performance_and_relevance(
           Rdata                        = Rdata,
           labels                       = labels,
+          preprocessScaledData         = preprocessScaledData,
           X_validation                 = X_validation,
           y_validation                 = y_validation,
           validation_metrics           = validation_metrics,
@@ -3957,7 +4045,7 @@ DESONN <- R6Class(
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
+    update_performance_and_relevance = function(Rdata, labels, preprocessScaledData, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, learn_results, predicted_output_list, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
       
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -4056,7 +4144,7 @@ DESONN <- R6Class(
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = single_ensemble_name_model_name, CLASSIFICATION_MODE, ensemble_number, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
+          self$store_metadata(run_id = single_ensemble_name_model_name, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
           
         }
       }
@@ -4540,7 +4628,7 @@ DESONN <- R6Class(
       return(low_mean_plots)
     }
     ,
-    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
+    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
       
       # ---------------- helpers (lightweight; keep most original structure) ----------------
       to_num_mat <- function(x) {
@@ -4739,8 +4827,12 @@ DESONN <- R6Class(
         differences = tail(differences),
         summary_stats = summary_stats,
         boxplot_stats = boxplot_stats,
+        preprocessScaledData = preprocessScaledData,            # <— add this
+        target_transform = preprocessScaledData$target_transform,
         X = X,
         y = y,
+        X_test = X_test_scaled,
+        y_test = y_test,
         lossesatoptimalepoch = predicted_outputAndTime$lossesatoptimalepoch,
         loss_increase_flag = predicted_outputAndTime$loss_increase_flag,
         performance_metric = performance_metric,

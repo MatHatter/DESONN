@@ -421,8 +421,5 @@ leaky_selu <- function(x, alpha = 0.01, lambda = 1.0507) {
 attr(leaky_selu, "name") <- "leaky_selu"
 
 # -------- Identity (Linear) --------
-identity <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  x
-}
+identity <- base::identity
 attr(identity, "name") <- "identity"
