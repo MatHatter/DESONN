@@ -1,3 +1,107 @@
+probe_preds_vs_labels <- function(preds, labs, tag = "GENERIC", save_global = FALSE) {
+  r2_val <- tryCatch({
+    ss_tot <- sum((labs - mean(labs))^2, na.rm = TRUE)
+    ss_res <- sum((labs - preds)^2, na.rm = TRUE)
+    1 - ss_res / ss_tot
+  }, error = function(e) NA_real_)
+  
+  cat(sprintf(
+    "[PROBE-R2 %s] preds min=%.4f mean=%.4f max=%.4f\n",
+    tag, min(preds), mean(preds), max(preds)
+  ))
+  cat(sprintf(
+    "[PROBE-R2 %s] labs  min=%.4f mean=%.4f max=%.4f\n",
+    tag, min(labs), mean(labs), max(labs)
+  ))
+  cat(sprintf("[PROBE-R2 %s] R^2=%.6f (n=%d)\n",
+              tag, r2_val, length(preds)))
+  
+  if (save_global) {
+    dbg <- list(
+      tag   = tag,
+      preds = list(min = min(preds), mean = mean(preds), max = max(preds)),
+      labs  = list(min = min(labs),  mean = mean(labs),  max = max(labs)),
+      r2    = r2_val,
+      n     = length(preds)
+    )
+    
+    # Separate globals for train vs predict
+    if (grepl("^TRAIN", tag)) {
+      assign("probe_last_train", dbg, envir = .GlobalEnv)
+    } else if (grepl("^PREDICT", tag)) {
+      assign("probe_last_predict", dbg, envir = .GlobalEnv)
+    } else {
+      assign("probe_last_dbg", dbg, envir = .GlobalEnv)
+    }
+  }
+}
+
+probe_last_layer <- function(weights, biases, y, tag = "GENERIC", save_global = TRUE) {
+  W_last <- weights[[length(weights)]]
+  b_last <- biases[[length(biases)]]
+  
+  stats <- list(
+    tag = tag,
+    W_last = list(
+      dims  = dim(W_last),
+      mean  = mean(W_last),
+      sd    = sd(W_last),
+      min   = min(W_last),
+      max   = max(W_last)
+    ),
+    b_last = list(
+      len   = length(b_last),
+      mean  = mean(b_last),
+      sd    = sd(b_last),
+      min   = min(b_last),
+      max   = max(b_last),
+      head  = head(b_last, 10L)
+    ),
+    y = list(
+      n     = length(y),
+      mean  = mean(y),
+      sd    = sd(y),
+      min   = min(y),
+      max   = max(y),
+      head  = head(y, 10L)
+    )
+  )
+  
+  cat(sprintf(
+    "[LASTLAYER %s] W dims=%s | mean=%.6f sd=%.6f range=[%.3f, %.3f]\n",
+    tag, paste(dim(W_last), collapse="x"),
+    stats$W_last$mean, stats$W_last$sd,
+    stats$W_last$min, stats$W_last$max
+  ))
+  cat(sprintf(
+    "[LASTLAYER %s] b len=%d | mean=%.6f range=[%.3f, %.3f]\n",
+    tag, stats$b_last$len,
+    stats$b_last$mean, stats$b_last$min, stats$b_last$max
+  ))
+  cat(sprintf(
+    "[LASTLAYER %s] y n=%d | mean=%.6f sd=%.6f range=[%.3f, %.3f]\n",
+    tag, stats$y$n,
+    stats$y$mean, stats$y$sd,
+    stats$y$min, stats$y$max
+  ))
+  
+  if (save_global) {
+    # store in global env
+    assign(paste0("probe_last_layer_", tag), stats, envir = .GlobalEnv)
+    
+    # save RDS snapshot in artifacts
+    fname <- sprintf("artifacts/probe_last_layer_%s_%s.rds",
+                     tag, format(Sys.time(), "%Y%m%d_%H%M%S"))
+    saveRDS(stats, fname)
+    cat("[LASTLAYER] Snapshot saved to:", fname, "\n")
+  }
+  
+  invisible(stats)
+}
+
+
+
+
 ## ===== Shared plot filename helper =====
 # Builds a filename prefixer for a specific context
 # utils_plots.R
@@ -458,6 +562,8 @@ if (!exists("LAST_DEBUG", inherits = TRUE)) {
 ## ------------------------------------------------------------------------
 .as_pred_matrix <- function(pred, mode = NULL, meta = NULL,
                             DEBUG = get0("DEBUG_ASPM", inherits = TRUE, ifnotfound = FALSE)) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+  
   stamp <- format(Sys.time(), "%H:%M:%S")
   if (isTRUE(DEBUG)) {
     cat(sprintf("[ASPM-DBG %s] entry: class=%s len=%s\n",
@@ -465,21 +571,31 @@ if (!exists("LAST_DEBUG", inherits = TRUE)) {
     if (is.list(pred)) cat("[ASPM-DBG] list names: ", paste(names(pred), collapse=", "), "\n")
   }
   
-  # unwrap
-  if (is.list(pred) && !is.null(pred$predicted_output)) pred <- pred$predicted_output
-  if (is.list(pred) && length(pred) == 1L && !is.matrix(pred)) pred <- pred[[1]]
-  if (is.null(pred) || length(pred) == 0) {
+  # --- unwrap list containers (outer and inner) ---
+  if (is.list(pred) && "predicted_output" %in% names(pred)) {
+    pred <- pred$predicted_output
+  }
+  if (is.list(pred) && length(pred) == 1L) {
+    pred <- pred[[1L]]
+  }
+  
+  # --- normalize types ---
+  if (is.null(pred) || length(pred) == 0L) {
     if (isTRUE(DEBUG)) cat("[ASPM-DBG] empty → returning 0x1 matrix\n")
     return(matrix(numeric(0), nrow = 0, ncol = 1))
   }
   if (is.data.frame(pred)) pred <- as.matrix(pred)
-  if (is.vector(pred))     pred <- matrix(as.numeric(pred), ncol = 1)
-  pred <- as.matrix(pred); storage.mode(pred) <- "double"
+  if (is.vector(pred))     pred <- matrix(as.numeric(pred), ncol = 1L)
+  if (is.list(pred))       pred <- matrix(as.numeric(unlist(pred)), ncol = 1L)
   
+  pred <- as.matrix(pred)
+  storage.mode(pred) <- "double"
+  
+  # --- resolve mode ---
   resolved_mode <- tolower(
     mode %||%
       get0("CLASSIFICATION_MODE", inherits = TRUE, ifnotfound = NULL) %||%
-      (tryCatch(meta$CLASSIFICATION_MODE, error=function(e) NULL)) %||%
+      (tryCatch(meta$CLASSIFICATION_MODE, error = function(e) NULL)) %||%
       "regression"
   )
   
@@ -490,10 +606,11 @@ if (!exists("LAST_DEBUG", inherits = TRUE)) {
   }
   assign("LAST_ASPM_IN", pred, envir = LAST_DEBUG)
   
+  # --- apply mode-specific transforms ---
   if (identical(resolved_mode, "binary")) {
     if (!.in_range01(pred)) {
       if (isTRUE(DEBUG)) cat("[ASPM-DBG] applying sigmoid (binary)\n")
-      pred <- 1/(1+exp(-pred))
+      pred <- 1 / (1 + exp(-pred))
     }
   } else if (identical(resolved_mode, "multiclass")) {
     if (NCOL(pred) > 1 && !.in_range01(pred)) {
@@ -505,174 +622,225 @@ if (!exists("LAST_DEBUG", inherits = TRUE)) {
     }
   } else {
     if (isTRUE(DEBUG)) cat("[ASPM-DBG] regression mode: no squashing applied\n")
-    # Invert any saved target transform from metadata (comes from store_metadata)
-    tt <- .get_target_transform(meta)
-    if (!is.null(tt)) {
-      pred <- ._invert_target(pred, tt, DEBUG = isTRUE(DEBUG))
+    tt <- try(.get_target_transform(meta), silent = TRUE)
+    if (!inherits(tt, "try-error") && !is.null(tt)) {
+      pred <- tryCatch(
+        ._invert_target(pred, tt, DEBUG = isTRUE(DEBUG)),
+        error = function(e) {
+          if (isTRUE(DEBUG)) cat("[ASPM-DBG] invert skipped: ", conditionMessage(e), "\n")
+          pred
+        }
+      )
     }
   }
   
-  
   if (isTRUE(DEBUG)) {
-    cat(sprintf("[ASPM-DBG %s] mode=%s | AFTER  squash/unscale: %s | hash=%s | head=[%s]\n",
+    cat(sprintf("[ASPM-DBG %s] mode=%s | AFTER squash/unscale: %s | hash=%s | head=[%s]\n",
                 stamp, resolved_mode, .summarize_matrix(pred), .hash_vec(pred), .peek_num(pred)))
   }
   assign("LAST_ASPM_OUT", pred, envir = LAST_DEBUG)
   pred
 }
 
+
+.is_linear_verbose <- function(af, PROBE = TRUE) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+  
+  .now <- function() format(Sys.time(), "%H:%M:%S")
+  .attr_name <- function(f) tolower(trimws(attr(f, "name") %||% ""))
+  .is_identity_fn <- function(f) {
+    if (!is.function(f)) return(FALSE)
+    nm <- .attr_name(f)
+    if (nm %in% c("identity","linear","id")) return(TRUE)
+    if (identical(f, base::identity)) return(TRUE)
+    # try to match a global 'identity' if user defined one
+    if (exists("identity", inherits = TRUE)) {
+      g <- get("identity", inherits = TRUE)
+      if (is.function(g) && identical(f, g)) return(TRUE)
+    }
+    if (!PROBE) return(FALSE)
+    v <- c(-2,-1,0,1,2)
+    ok <- tryCatch({
+      out <- f(v)
+      is.numeric(out) && length(out) == length(v) && max(abs(out - v)) <= 1e-12
+    }, error = function(e) {
+      cat(sprintf("[AF-TRACE %s] probe error: %s\n", .now(), conditionMessage(e)))
+      FALSE
+    })
+    ok
+  }
+  
+  cat(sprintf("\n[AF-TRACE %s] activation_functions candidate:\n", .now()))
+  if (is.null(af)) { cat("  <NULL>\n"); return(FALSE) }
+  if (!is.list(af)) af <- as.list(af)
+  
+  for (i in seq_along(af)) {
+    ai     <- af[[i]]
+    is_fun <- is.function(ai)
+    nm     <- if (is_fun) .attr_name(ai) else NA_character_
+    cls    <- paste0(class(ai), collapse = ",")
+    # short deparse/description
+    desc <- tryCatch({
+      paste(utils::capture.output(str(ai, give.attr = TRUE, vec.len = 6L)), collapse = " ")
+    }, error = function(e) paste0("<str error: ", conditionMessage(e), ">"))
+    
+    cat(sprintf("  [%02d] class=%s | is.function=%s | name=%s\n      desc=%s\n",
+                i, cls, is_fun, if (is.na(nm) || nm == "") "<NULL>" else nm, desc))
+  }
+  
+  last <- af[[length(af)]]
+  last_is_linear <-
+    (is.character(last) && tolower(trimws(last)) %in% c("linear","identity","id")) ||
+    (is.function(last)  && .is_identity_fn(last))
+  
+  # extra diags for last
+  if (is.function(last)) {
+    nm  <- .attr_name(last)
+    sig <- tryCatch(paste(deparse(last, nlines = 1L), collapse = ""), error = function(e) "<deparse error>")
+    cat(sprintf("  [HEAD %s] name=%s | signature=%s | linear?=%s\n",
+                .now(), if (nm=="") "<NULL>" else nm, sig, last_is_linear))
+  } else {
+    cat(sprintf("  [HEAD %s] last is %s | value=%s | linear?=%s\n",
+                .now(), paste0(class(last), collapse=","), as.character(last)[1], last_is_linear))
+  }
+  
+  cat(sprintf("  -> last_is_linear=%s\n\n", last_is_linear))
+  last_is_linear
+}
+
+
+
+
+
 ## ------------------------------------------------------------------------
 ## Safe wrapper
 ## ------------------------------------------------------------------------
-.safe_run_predict <- function(X, meta, model_index = 1L, ML_NN = TRUE, ...,
-                              DEBUG = get0("DEBUG_SAFERUN", inherits = TRUE, ifnotfound = FALSE)) {
+# ===========================================
+# .safe_run_predict (passes verbose/debug through)
+# ===========================================
+.safe_run_predict <- function(
+    X, meta, model_index = 1L, ML_NN = TRUE, ...,
+    verbose = get0("VERBOSE_SAFERUN", inherits = TRUE, ifnotfound = FALSE),
+    debug   = get0("DEBUG_SAFERUN",   inherits = TRUE, ifnotfound = FALSE),
+    DEBUG   = get0("DEBUG_SAFERUN",   inherits = TRUE, ifnotfound = FALSE)
+) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+  
+  vrb <- isTRUE(verbose)
+  dbg <- isTRUE(DEBUG) || isTRUE(debug)
   stamp <- format(Sys.time(), "%H:%M:%S")
-  if (isTRUE(DEBUG)) {
-    cat(sprintf("[SAFE-DBG %s] enter .safe_run_predict | X dims=%s x %s | X hash=%s\n",
-                stamp, NROW(X), NCOL(X), .hash_vec(X)))
+  
+  if (isTRUE(dbg)) {
+    cat(sprintf("[SAFE-DBG %s] enter .safe_run_predict | X dims=%d x %d\n",
+                stamp, NROW(X), NCOL(X)))
+    cat(sprintf("[SAFE-DBG %s] X summary: mean=%.6f sd=%.6f min=%.6f max=%.6f\n",
+                stamp, mean(X), sd(as.vector(X)), min(X), max(X)))
   }
   
   out <- tryCatch(
-    .run_predict(X = X, meta = meta, model_index = model_index, ML_NN = ML_NN, ...,
-                 DEBUG = get0("DEBUG_RUNPRED", inherits = TRUE, ifnotfound = FALSE)),
+    .run_predict(
+      X = X,
+      meta = meta,
+      model_index = model_index,
+      ML_NN = ML_NN,
+      ...,
+      verbose = vrb,
+      debug   = dbg
+    ),
     error = function(e) {
-      if (isTRUE(DEBUG)) message("[SAFE-DBG] .run_predict error: ", conditionMessage(e))
+      if (isTRUE(dbg)) message("[SAFE-DBG] .run_predict error: ", conditionMessage(e))
       list(predicted_output = matrix(numeric(0), nrow = 0, ncol = 1))
     }
   )
   
-  mode <- .get_mode(meta)
-  if (isTRUE(DEBUG)) {
+  if (isTRUE(dbg)) {
     raw <- out$predicted_output %||% out
-    cat(sprintf("[SAFE-DBG] raw out: %s | hash=%s | head=[%s]\n",
-                .summarize_matrix(raw), .hash_vec(raw), .peek_num(raw)))
+    cat(sprintf("[SAFE-DBG %s] raw preds head=%s | mean=%.6f | sd=%.6f\n",
+                stamp,
+                paste(head(as.numeric(raw)), collapse=", "),
+                mean(as.numeric(raw)), sd(as.numeric(raw))))
   }
   
-  res <- .as_pred_matrix(out, mode = mode, meta = meta,
+  res <- .as_pred_matrix(out, mode = .get_mode(meta), meta = meta,
                          DEBUG = get0("DEBUG_ASPM", inherits = TRUE, ifnotfound = FALSE))
-  if (isTRUE(DEBUG)) {
-    cat(sprintf("[SAFE-DBG %s] ASPM result: %s | hash=%s\n",
-                stamp, .summarize_matrix(res), .hash_vec(res)))
+  if (isTRUE(dbg)) {
+    cat(sprintf("[SAFE-DBG %s] ASPM result dims=%d x %d | mean=%.6f | sd=%.6f\n",
+                stamp, nrow(res), ncol(res), mean(res), sd(as.vector(res))))
   }
-  assign("LAST_SAFERUN_OUT", res, envir = LAST_DEBUG)
   res
 }
 
-.is_linear_verbose <- function(af) {
-  cat("\n[AF-TRACE] activation_functions candidate:\n")
-  if (is.null(af)) { cat("  <NULL>\n"); return(FALSE) }
-  if (!is.list(af)) af <- as.list(af)
-  for (i in seq_along(af)) {
-    cat(sprintf("  [%02d] class=%s | is.function=%s | deparse=%s\n",
-                i, paste0(class(af[[i]]), collapse=","),
-                is.function(af[[i]]), paste(utils::capture.output(str(af[[i]])), collapse=" ")))
-  }
-  last <- af[[length(af)]]
-  # accept several “linear” flavors
-  ok <- (is.character(last) && tolower(last) %in% c("linear","identity")) ||
-    (is.function(last) && (identical(last, base::identity) ||
-                             identical(last, get("identity", envir=baseenv()))))
-  cat(sprintf("  -> last_is_linear=%s\n\n", ok))
-  ok
-}
+
+
 
 ## ------------------------------------------------------------------------
-## Predict shim (stateless)
+## Predict shim (stateless, uses extract_best_records)
 ## ------------------------------------------------------------------------
 if (!exists(".run_predict", inherits = TRUE)) {
-  .run_predict <- function(X, meta, model_index = 1L, ML_NN = TRUE, ...,
-                           DEBUG = get0("DEBUG_RUNPRED", inherits = TRUE, ifnotfound = FALSE)) {
-    stamp <- format(Sys.time(), "%H:%M:%S")
+  .run_predict <- function(
+    X, meta,
+    model_index = 1L,
+    ML_NN = TRUE,
+    ...,
+    verbose = get0("VERBOSE_RUNPRED", inherits = TRUE, ifnotfound = FALSE),
+    debug   = get0("DEBUG_RUNPRED",   inherits = TRUE, ifnotfound = FALSE)
+  ) {
+    `%||%` <- function(x, y) if (is.null(x)) y else x
+    
     if (is.null(meta)) stop(".run_predict: 'meta' is NULL")
     X <- as.matrix(X); storage.mode(X) <- "double"
-    
-    # -------- local helper so you don't depend on utils load order --------
-    .is_linear_verbose <- function(af) {
-      cat("\n[AF-TRACE] activation_functions candidate:\n")
-      if (is.null(af)) { cat("  <NULL>\n"); return(FALSE) }
-      if (!is.list(af)) af <- as.list(af)
-      for (i in seq_along(af)) {
-        ai <- af[[i]]
-        ai_class <- paste0(class(ai), collapse=",")
-        ai_is_fun <- is.function(ai)
-        ai_str <- tryCatch(paste(utils::capture.output(str(ai)), collapse=" "),
-                           error=function(e) "<str() error>")
-        cat(sprintf("  [%02d] class=%s | is.function=%s | deparse=%s\n",
-                    i, ai_class, ai_is_fun, ai_str))
-      }
-      last <- af[[length(af)]]
-      ok <- (is.character(last) && tolower(last) %in% c("linear","identity")) ||
-        (is.function(last) && (identical(last, base::identity) ||
-                                 identical(last, get("identity", envir=baseenv()))))
-      cat(sprintf("  -> last_is_linear=%s\n\n", ok))
-      ok
-    }
-    
-    if (isTRUE(DEBUG)) {
-      cat(sprintf("[RUNPRED-DBG %s] X: %s | hash=%s\n",
-                  stamp, .summarize_matrix(X), .hash_vec(X)))
-    }
     if (nrow(X) == 0) {
-      if (isTRUE(DEBUG)) cat("[RUNPRED-DBG] X has 0 rows → return 0x1\n")
       return(list(predicted_output = matrix(numeric(0), nrow = 0, ncol = 1)))
     }
     
-    # pull best weights/biases
+    vrb   <- isTRUE(verbose)
+    dbg   <- isTRUE(debug)
+    stamp <- format(Sys.time(), "%H:%M:%S")
+    
+    # ---- Always pull weights/biases via extract_best_records ----
     rec <- extract_best_records(meta, ML_NN = ML_NN, model_index = model_index)
-    if (isTRUE(DEBUG)) {
+    probe_last_layer(rec$weights, rec$biases, meta$y, tag = "PREDICT-ONLY")
+    if (dbg) {
       wdims <- tryCatch(dim(rec$weights[[1]]), error = function(e) NULL)
       cat("[RUNPRED-DBG] have weights/biases: ",
           paste0(length(rec$weights), "W/", length(rec$biases), "b"),
-          " | W1 dims=", if (is.null(wdims)) "NA" else paste(wdims, collapse="x"), "\n", sep = "")
+          " | W1 dims=", if (is.null(wdims)) "NA" else paste(wdims, collapse = "x"), "\n", sep = "")
     }
     
-    # infer sizes
+    # ---- Model configuration (meta always first) ----
     input_size   <- ncol(X)
-    hidden_sizes <- meta$hidden_sizes %||% meta$model$hidden_sizes %||% c(32L, 16L)
+    hidden_sizes <- meta$hidden_sizes %||% meta$model$hidden_sizes
     output_size  <- as.integer(meta$output_size %||% 1L)
-    num_networks <- max(1L,
-                        as.integer(meta$num_networks %||% length(meta$best_weights_record) %||% 1L),
-                        model_index)
+    num_networks <- as.integer(meta$num_networks %||% length(meta$best_weights_record) %||% 1L)
+    N            <- as.integer(meta$N %||% nrow(X))
+    lambda       <- as.numeric(meta$lambda %||% 0)
+    init_method  <- meta$init_method %||% "xavier"
+    custom_scale <- meta$custom_scale %||% NULL
     
-    N            <- as.integer(meta$N        %||% nrow(X))
-    lambda       <- as.numeric(meta$lambda   %||% 0)
-    init_method  <- meta$init_method   %||% "xavier"
-    custom_scale <- meta$custom_scale  %||% NULL
-    
-    # ------------- resolve activation_functions with full trace -------------
-    af_global <- get0("activation_functions", inherits = TRUE, ifnotfound = NULL)
-    af_meta   <- try(meta$activation_functions, silent = TRUE); if (inherits(af_meta, "try-error")) af_meta <- NULL
-    af_model  <- try(meta$model$activation_functions, silent = TRUE); if (inherits(af_model, "try-error")) af_model <- NULL
-    
-    cat("[AF-TRACE] sources:\n")
-    cat("  - global activation_functions: ", if (is.null(af_global)) "<NULL>\n" else "present\n")
-    cat("  - meta$activation_functions:   ", if (is.null(af_meta))   "<NULL>\n" else "present\n")
-    cat("  - meta$model$activation_functions: ", if (is.null(af_model)) "<NULL>\n" else "present\n")
-    
-    activation_functions <- af_global %||% af_meta %||% af_model %||% NULL
-    last_is_linear <- .is_linear_verbose(activation_functions)
-    
-    # also show meta hints if any
-    cat("[AF-TRACE] meta$head_activation:   ", as.character(meta$head_activation %||% NA), "\n", sep = "")
-    cat("[AF-TRACE] meta$output_activation: ", as.character(meta$output_activation %||% NA), "\n", sep = "")
-    
-    # quick probe of last activation (if it is a function)
-    if (!is.null(activation_functions)) {
-      lf <- tail(as.list(activation_functions), 1)[[1]]
-      if (is.function(lf)) {
-        v <- c(-2, -1, 0, 1, 2)
-        out_probe <- tryCatch(lf(v), error=function(e) rep(NA_real_, length(v)))
-        cat("[AF-TRACE] last activation on probe [-2,-1,0,1,2] -> ",
-            paste(out_probe, collapse=", "), "\n", sep = "")
-      }
+    # ---- FIX: activation_functions must come from meta ----
+    if (dbg) {
+      cat("[RUNPRED-DBG] meta names:", paste(names(meta), collapse=","), "\n")
     }
     
-    if (!isTRUE(last_is_linear)) {
-      warning("[ACT-DBG] Last activation is NOT linear. This will cause constant-ish regression outputs.")
+    activation_functions <- meta$activation_functions %||%
+      (meta$model$activation_functions %||%
+         (meta$preprocessScaledData$activation_functions %||% NULL))
+    
+    if (is.null(activation_functions)) {
+      stop("[RUNPRED-ERR] activation_functions not found in meta (checked top-level, $model, and $preprocessScaledData).")
     }
     
-    # ------------- build model wrapper and predict --------------------------
     ML_NN <- isTRUE(meta$ML_NN) || isTRUE(ML_NN)
+    
+    if (dbg) {
+      cat("[RUNPRED-PROBE] hidden_sizes:", paste(hidden_sizes, collapse = ","), "\n")
+      cat("[RUNPRED-PROBE] output_size:", output_size, "\n")
+      cat("[RUNPRED-PROBE] activation_functions:",
+          paste(sapply(activation_functions, function(f) attr(f, "name") %||% "??"),
+                collapse = ","), "\n")
+    }
+    
+    # ---- Model skeleton ----
     main_model <- DESONN$new(
       num_networks    = num_networks,
       input_size      = input_size,
@@ -689,44 +857,32 @@ if (!exists(".run_predict", inherits = TRUE)) {
     sonn_idx  <- min(model_index, length(main_model$ensemble))
     model_obj <- main_model$ensemble[[sonn_idx]]
     
-    if (isTRUE(DEBUG)) cat("[RUNPRED-DBG] calling SONN$predict (stateless)\n")
-    out <- model_obj$predict(
+    # ---- Call SONN$predict with extracted weights ----
+    call_args <- list(
       Rdata   = X,
       weights = rec$weights,
       biases  = rec$biases,
-      activation_functions = activation_functions
+      activation_functions = activation_functions,
+      verbose = vrb,
+      debug   = dbg
     )
     
-    # after-call light sanity: if last was function, re-probe to show it's consistent
-    if (!is.null(activation_functions)) {
-      lf <- tail(as.list(activation_functions), 1)[[1]]
-      if (is.function(lf)) {
-        v <- c(-2, -1, 0, 1, 2)
-        out_probe <- tryCatch(lf(v), error=function(e) rep(NA_real_, length(v)))
-        cat("[AF-TRACE] (post-predict) last activation on probe [-2,-1,0,1,2] -> ",
-            paste(out_probe, collapse=", "), "\n", sep = "")
-      }
-    }
+    out <- do.call(model_obj$predict, call_args)
     
+    # ---- Normalize output types ----
     pred <- out$predicted_output %||% out
     if (is.list(pred) && length(pred) == 1L && !is.matrix(pred)) pred <- pred[[1]]
     if (is.data.frame(pred)) pred <- as.matrix(pred)
     if (is.vector(pred))     pred <- matrix(as.numeric(pred), ncol = 1)
     pred <- as.matrix(pred); storage.mode(pred) <- "double"
     
-    if (isTRUE(DEBUG)) {
-      cat(sprintf("[RUNPRED-DBG %s] raw model out: %s | hash=%s | head=[%s]\n",
-                  stamp, .summarize_matrix(pred), .hash_vec(pred), .peek_num(pred)))
-    }
+    if (dbg) cat(sprintf("[RUNPRED-DBG %s] raw model out: %dx%d\n",
+                         stamp, nrow(pred), ncol(pred)))
     
     assign("LAST_RUNPRED_OUT", pred, envir = LAST_DEBUG)
     list(predicted_output = pred)
   }
 }
-
-
-
-
 
 
 
