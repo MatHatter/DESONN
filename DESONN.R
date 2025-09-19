@@ -3309,7 +3309,7 @@ SONN <- R6Class(
       predicted_output_train_reg_prediction_time <- Sys.time() - start_time
       
       # Return the predicted output
-      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, training_time = training_time, learn_output = learn_result$learn_output, learn_time = learn_result$learn_time, learn_dim_hidden_layers = learn_result$dim_hidden_layers, learn_hidden_outputs = learn_result$hidden_outputs, learn_grads_matrix = learn_result$grads_matrix, learn_bias_gradients = learn_result$bias_gradients, learn_errors = learn_result$errors, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
+      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch, training_time = training_time, learn_output = learn_result$learn_output, learn_time = learn_result$learn_time, learn_dim_hidden_layers = learn_result$dim_hidden_layers, learn_hidden_outputs = learn_result$hidden_outputs, learn_grads_matrix = learn_result$grads_matrix, learn_bias_gradients = learn_result$bias_gradients, learn_errors = learn_result$errors, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
     },
     # # Method to calculate performance and relevance
     # calculate_metrics = function(Rdata) {
@@ -3739,8 +3739,7 @@ DESONN <- R6Class(
                 Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs, model_iter_num, update_weights, update_biases, use_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose
               ))
             
-            
-            
+
             
             # -- Start: Store core model info --
             all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
@@ -4077,12 +4076,14 @@ DESONN <- R6Class(
         
         
         
+      
+        
         
         
         
       }
       
-      return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, performance_relevance_data  = performance_relevance_data))
+      return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, performance_relevance_data = performance_relevance_data, best_train_acc = predicted_outputAndTime$best_train_acc, best_epoch_train = predicted_outputAndTime$best_epoch_train, best_val_acc = predicted_outputAndTime$best_val_acc, best_val_epoch = predicted_outputAndTime$best_val_epoch))
     }
     , # Method for updating performance and relevance metrics
     
@@ -4239,6 +4240,8 @@ DESONN <- R6Class(
             
             performance_metric <- performance_list[[i]]$metrics
             
+            
+            
             relevance_metric <- relevance_list[[i]]$metrics
             
             
@@ -4304,13 +4307,13 @@ DESONN <- R6Class(
       process_performance <- function(metrics_data, model_names, high_threshold = 10, verbose = FALSE) {
         EXCLUDE_METRICS_REGEX <- paste(
           c(
-            "^accuracy_tuned_accuracy_percent$",
+            "^accuracy_precision_recall_f1_tuned_accuracy_percent$",
             "^accuracy_percent$",
-            "^accuracy_tuned_y_pred_class\\d+$",
+            "^accuracy_precision_recall_f1_tuned_y_pred_class\\d+$",
             "^y_pred_class\\d+$",
-            "^accuracy_tuned_best_thresholds?$",
+            "^accuracy_precision_recall_f1_tuned_best_thresholds?$",
             "^best_thresholds?$",
-            "^accuracy_tuned_grid_used",
+            "^accuracy_precision_recall_f1_tuned_grid_used",
             "^grid_used"
           ),
           collapse = "|"
@@ -4449,8 +4452,6 @@ DESONN <- R6Class(
         list(high_mean_df = high_mean_df, low_mean_df = low_mean_df)
       }
       
-      
-      
       # Assuming performance_metrics and relevance_metrics are already defined
       performance_results <- process_performance(performance_metrics, run_id) #<<-
       relevance_results <- process_performance(relevance_metrics, run_id) #<<-
@@ -4586,7 +4587,7 @@ DESONN <- R6Class(
       
       
       # Return the lists of plots
-      return(list(performance_high_mean_plots = performance_high_mean_plots, performance_low_mean_plots = performance_low_mean_plots, relevance_high_mean_plots = relevance_high_mean_plots, relevance_low_mean_plots = relevance_low_mean_plots, performance_group_summary = perf_group_summary, relevance_group_summary = relev_group_summary, performance_long_df = perf_df, relevance_long_df = relev_df, performance_grouped = if (exists("group_perf")  && !is.null(group_perf))  group_perf$metrics  else NULL, relevance_grouped   = if (exists("group_relev") && !is.null(group_relev)) group_relev$metrics else NULL, threshold = threshold_used, thresholds = thresholds_used, accuracy = eval_result$accuracy, accuracy_percent = eval_result$accuracy_percent, metrics = if (!is.null(eval_result$metrics)) eval_result$metrics else NULL, misclassified = if (!is.null(eval_result$misclassified)) eval_result$misclassified else NULL))
+      return(list(performance_metric = performance_metric, relevance_metric = relevance_metric, performance_high_mean_plots = performance_high_mean_plots, performance_low_mean_plots = performance_low_mean_plots, relevance_high_mean_plots = relevance_high_mean_plots, relevance_low_mean_plots = relevance_low_mean_plots, performance_group_summary = perf_group_summary, relevance_group_summary = relev_group_summary, performance_long_df = perf_df, relevance_long_df = relev_df, performance_grouped = if (exists("group_perf")  && !is.null(group_perf))  group_perf$metrics  else NULL, relevance_grouped   = if (exists("group_relev") && !is.null(group_relev)) group_relev$metrics else NULL, threshold = threshold_used, thresholds = thresholds_used, accuracy = eval_result$accuracy, accuracy_percent = eval_result$accuracy_percent, metrics = if (!is.null(eval_result$metrics)) eval_result$metrics else NULL, misclassified = if (!is.null(eval_result$misclassified)) eval_result$misclassified else NULL))
       
       
     },
@@ -5067,7 +5068,8 @@ calculate_performance <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, 
     precision                     = precision(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose),
     recall                        = recall(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose),
     f1_score                      = f1_score(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose),
-    accuracy_tuned                = accuracy_tuned(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, metric_for_tuning = "accuracy", grid, verbose),
+    confusion_matrix              = confusion_matrix(SONN, labels, CLASSIFICATION_MODE, predicted_output, threshold, verbose),
+    accuracy_precision_recall_f1_tuned                = accuracy_precision_recall_f1_tuned(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, metric_for_tuning = "accuracy", grid, verbose),
     speed                         = speed(SONN, prediction_time, verbose),
     speed_learn                   = speed_learn(SONN, learn_time, verbose),
     memory_usage                  = memory_usage(SONN, Rdata, verbose),
@@ -5075,14 +5077,15 @@ calculate_performance <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, 
     custom_relative_error_binned  = custom_relative_error_binned(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output, verbose)
   )
   
-  
-  # --- Clean invalid metrics (NULL, NA, or TRUE by accident) ---
+
   for (name in names(perf_metrics)) {
     val <- perf_metrics[[name]]
     if (is.null(val) || any(is.na(val)) || isTRUE(val)) {
-      perf_metrics[[name]] <- NULL
+      perf_metrics[[name]] <- NA_real_
     }
   }
+  
+  
   
   return(list(metrics = perf_metrics, names = names(perf_metrics)))
 }
@@ -5117,14 +5120,15 @@ calculate_relevance <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, model_
   
   for (metric_name in all_possible_metrics) {
     if (!metric_name %in% names(rel_metrics)) {
-      rel_metrics[[metric_name]] <- NULL
+      rel_metrics[[metric_name]] <- NA_real_
     } else {
       val <- rel_metrics[[metric_name]]
       if (is.null(val) || any(is.na(val)) || isTRUE(val)) {
-        rel_metrics[[metric_name]] <- NULL
+        rel_metrics[[metric_name]] <- NA_real_
       }
     }
   }
+  
   
   return(list(metrics = rel_metrics, names = names(rel_metrics)))
 }
@@ -5377,13 +5381,13 @@ loss_function <- function(predictions, labels, CLASSIFICATION_MODE, reg_loss_tot
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 #      _     _      _     _      _     _      _     _      _     _      _     _      _     _    $$$$$$$$$$$$$$$$$$$$$$$
 #     (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)    (c).-.(c)   $$$$$$$$$$$$$$$$$$$$$$$
-#      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \    $$$$$$$$$$$$$$$$$$$$$$$
+#     / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \      / ._. \     $$$$$$$$$$$$$$$$$$$$$$$
 #   __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__  __\( Y )/__   $$$$$$$$$$$$$$$$$$$$$$$
 #  (_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)(_.-/'-'\-._)  $$$$$$$$$$$$$$$$$$$$$$$
 #    || M ||      || E ||      || T ||      || R ||      || I ||      || C ||      || S ||      $$$$$$$$$$$$$$$$$$$$$$$
 # _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._  _.' `-' '._     $$$$$$$$$$$$$$$$$$$$$$$
 #(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-`\.-.)(.-./`-'\.-.)(.-./`-'\.-.)(.-./`-`\.-.)    $$$$$$$$$$$$$$$$$$$$$$$
-#`-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'      $$$$$$$$$$$$$$$$$$$$$$$
+# `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'  `-'     `-'     $$$$$$$$$$$$$$$$$$$$$$$
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 
 quantization_error <- function(SONN, Rdata, run_id, verbose) {
@@ -5537,7 +5541,6 @@ topographic_error <- function(SONN, Rdata, threshold, verbose) {
   if (isTRUE(verbose)) cat("[topo] error =", err, "\n")
   err
 }
-
 
 is.adjacent <- function(map, neuron1, neuron2) {
   # 💡 Ensure map rownames exist and match neuron indices
@@ -6896,6 +6899,40 @@ f1_score <- function(SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output,
   stop("[f1] Unhandled mode.")
 }
 
+confusion_matrix <- function(SONN, labels, CLASSIFICATION_MODE, predicted_output,
+                             threshold = NULL, verbose = FALSE) {
+  # only for binary
+  if (!identical(CLASSIFICATION_MODE, "binary")) {
+    if (verbose) message("[CONFUSION_MATRIX] Only valid for binary classification.")
+    return(NULL)
+  }
+  
+  # resolve threshold robustly: arg > SONN$threshold > 0.5
+  thr <- if (!is.null(threshold)) {
+    as.numeric(threshold)[1]
+  } else if (!is.null(SONN$threshold)) {
+    as.numeric(SONN$threshold)[1]
+  } else {
+    0.5
+  }
+  
+  # normalize shapes/types
+  if (!is.matrix(labels)) labels <- matrix(as.numeric(labels), ncol = 1)
+  if (!is.matrix(predicted_output)) predicted_output <- matrix(as.numeric(predicted_output), ncol = 1)
+  
+  preds   <- as.integer(predicted_output >= thr)
+  actuals <- as.integer(labels)
+  
+  TP <- sum(preds == 1 & actuals == 1, na.rm = TRUE)
+  FP <- sum(preds == 1 & actuals == 0, na.rm = TRUE)
+  TN <- sum(preds == 0 & actuals == 0, na.rm = TRUE)
+  FN <- sum(preds == 0 & actuals == 1, na.rm = TRUE)
+  
+  if (verbose) message(sprintf("[CONFUSION_MATRIX] thr=%.3f  TP=%d FP=%d TN=%d FN=%d", thr, TP, FP, TN, FN))
+  
+  list(TP = TP, FP = FP, TN = TN, FN = FN)
+}
+
 
 # =========================
 # Global threshold helpers
@@ -6923,9 +6960,9 @@ desonn_clear_threshold <- function() {
 }
 
 # =========================
-# accuracy_tuned (revised)
+# accuracy_precision_recall_f1_tuned (revised)
 # =========================
-accuracy_tuned <- function(
+accuracy_precision_recall_f1_tuned <- function(
     SONN, Rdata, labels, CLASSIFICATION_MODE, predicted_output,
     metric_for_tuning = c("accuracy","f1","precision","recall",
                           "macro_f1","macro_precision","macro_recall"),
@@ -6969,7 +7006,7 @@ accuracy_tuned <- function(
   L <- to_num_mat(labels)
   P <- to_num_mat(predicted_output)
   n <- min(nrow(L), nrow(P))
-  if (n == 0L) stop("[accuracy_tuned] empty inputs after trim.")
+  if (n == 0L) stop("[accuracy_precision_recall_f1_tuned] empty inputs after trim.")
   L <- L[seq_len(n), , drop = FALSE]
   P <- P[seq_len(n), , drop = FALSE]
   
@@ -6977,14 +7014,22 @@ accuracy_tuned <- function(
   mode <- if (is_valid_mode(CLASSIFICATION_MODE)) tolower(CLASSIFICATION_MODE) else infer_mode(L, P)
   thr_grid <- sanitize_grid_simple(threshold_grid)
   
-  # regression: not applicable
+  # =========================
+  # ===== REGRESSION ========
+  # =========================
   if (identical(mode, "regression")) {
     return(list(
-      accuracy = NA_real_,
+      accuracy  = NA_real_,
       precision = NA_real_,
-      recall = NA_real_,
-      f1 = NA_real_,
-      details = list(best_threshold = NA_real_, y_pred_class = NA, grid_used = thr_grid, tuned_by = "n/a")
+      recall    = NA_real_,
+      f1        = NA_real_,
+      confusion_matrix = NULL,
+      details = list(
+        best_threshold = NA_real_,
+        y_pred_class   = NA,
+        grid_used      = thr_grid,
+        tuned_by       = "n/a"
+      )
     ))
   }
   
@@ -6994,17 +7039,15 @@ accuracy_tuned <- function(
   if (identical(mode, "binary")) {
     # --- Labels (expecting 0/1) ---
     y_true <- if (ncol(L) == 1L) {
-      # Keep as 0/1 if already binary; otherwise coerce.
       v <- as.numeric(L[,1])
       if (all(v %in% c(0,1))) as.integer(v) else as.integer(v >= 0.5)
     } else {
-      # one-hot or two-logit label matrix -> take argmax to {1,2} then map to {0,1}
       as.integer(max.col(L, ties.method = "first") - 1L)
     }
     
     # --- Probabilities (1-col sigmoid output) ---
     if (ncol(P) != 1L) {
-      stop("[accuracy_tuned] Binary mode expects 1-column probabilities (sigmoid). Got ", ncol(P), " columns.")
+      stop("[accuracy_precision_recall_f1_tuned] Binary mode expects 1-column probabilities (sigmoid). Got ", ncol(P), " columns.")
     }
     p_pos <- as.numeric(P[,1])
     
@@ -7013,11 +7056,9 @@ accuracy_tuned <- function(
     tuned_now <- FALSE
     
     if (is.na(global_th)) {
-      # Tune on the given split (you should call this on VALIDATION)
-      dbg("[accuracy_tuned] No global threshold set. Tuning on provided data (use validation here).")
+      dbg("[accuracy_precision_recall_f1_tuned] No global threshold set. Tuning on provided data (use validation here).")
       metrics <- c("accuracy","f1","precision","recall")
       if (!(metric_for_tuning %in% metrics)) {
-        # map macro_* to binary equivalents
         metric_for_tuning <- switch(metric_for_tuning,
                                     macro_f1="f1",
                                     macro_precision="precision",
@@ -7025,8 +7066,7 @@ accuracy_tuned <- function(
                                     metric_for_tuning)
       }
       
-      best <- list(th = 0.5, score = -Inf,
-                   acc=NA_real_, prec=NA_real_, rec=NA_real_, f1=NA_real_)
+      best <- list(th = 0.5, score = -Inf)
       for (th in thr_grid) {
         preds <- as.integer(p_pos >= th)
         TP <- sum(preds == 1L & y_true == 1L)
@@ -7041,44 +7081,49 @@ accuracy_tuned <- function(
         
         score <- switch(metric_for_tuning,
                         accuracy = acc, f1 = f1, precision = pre, recall = rec)
-        # tie-breaker: prefer threshold closest to 0.5
         if (score > best$score || (abs(score - best$score) < .Machine$double.eps^0.5 &&
                                    abs(th - 0.5) < abs(best$th - 0.5))) {
-          best <- list(th=th, score=score, acc=acc, prec=pre, rec=rec, f1=f1,
-                       TP=TP, FP=FP, TN=TN, FN=FN)
+          best <- list(th=th, score=score)
         }
       }
       desonn_set_threshold(best$th)
       global_th <- best$th
       tuned_now <- TRUE
-      dbg(sprintf("[accuracy_tuned] Tuned global threshold = %.4f (metric=%s, score=%.6f)",
-                  global_th, metric_for_tuning, best$score))
+      dbg(sprintf("[accuracy_precision_recall_f1_tuned] Tuned global threshold = %.4f (metric=%s)",
+                  global_th, metric_for_tuning))
     } else {
-      dbg(sprintf("[accuracy_tuned] Using existing global threshold = %.4f (no re-tuning on this split).", global_th))
+      dbg(sprintf("[accuracy_precision_recall_f1_tuned] Using existing global threshold = %.4f.", global_th))
     }
     
     # --- Apply chosen threshold (tuned or stored) ---
-    y_pred_class <- as.integer(p_pos >= global_th)
-    TP <- sum(y_pred_class == 1L & y_true == 1L)
-    FP <- sum(y_pred_class == 1L & y_true == 0L)
-    TN <- sum(y_pred_class == 0L & y_true == 0L)
-    FN <- sum(y_pred_class == 0L & y_true == 1L)
+    cm <- confusion_matrix(
+      SONN = SONN,
+      labels = matrix(y_true, ncol = 1),
+      CLASSIFICATION_MODE = "binary",
+      predicted_output = matrix(p_pos, ncol = 1),
+      threshold = global_th,
+      verbose = FALSE
+    )
     
-    acc <- (TP + TN) / length(y_true)
+    TP <- cm$TP; FP <- cm$FP; TN <- cm$TN; FN <- cm$FN
+    
+    total <- length(y_true)
+    acc <- (TP + TN) / total
     pre <- if ((TP + FP) > 0) TP / (TP + FP) else 0
     rec <- if ((TP + FN) > 0) TP / (TP + FN) else 0
     f1  <- if ((pre + rec) > 0) 2 * pre * rec / (pre + rec) else 0
+    
+    y_pred_class <- as.integer(p_pos >= global_th)
     
     return(list(
       accuracy  = as.numeric(acc),
       precision = as.numeric(pre),
       recall    = as.numeric(rec),
       f1        = as.numeric(f1),
+      confusion_matrix = cm,
       details   = list(
         best_threshold = as.numeric(global_th),
         y_pred_class   = y_pred_class,
-        TP = as.integer(TP), FP = as.integer(FP),
-        TN = as.integer(TN), FN = as.integer(FN),
         grid_used      = thr_grid,
         tuned_by       = if (tuned_now) metric_for_tuning else "applied-global"
       )
@@ -7115,11 +7160,11 @@ accuracy_tuned <- function(
   K <- max(true_ids, pred_ids, na.rm = TRUE)
   macro_prec <- macro_rec <- macro_f1 <- numeric(K)
   for (k in seq_len(K)) {
-    TP <- sum(pred_ids == k & true_ids == k)
-    FP <- sum(pred_ids == k & true_ids != k)
-    FN <- sum(pred_ids != k & true_ids == k)
-    prec <- if ((TP + FP) > 0) TP / (TP + FP) else 0
-    rec  <- if ((TP + FN) > 0) TP / (TP + FN) else 0
+    TPk <- sum(pred_ids == k & true_ids == k)
+    FPk <- sum(pred_ids == k & true_ids != k)
+    FNk <- sum(pred_ids != k & true_ids == k)
+    prec <- if ((TPk + FPk) > 0) TPk / (TPk + FPk) else 0
+    rec  <- if ((TPk + FNk) > 0) TPk / (TPk + FNk) else 0
     f1   <- if ((prec + rec) > 0) 2 * prec * rec / (prec + rec) else 0
     macro_prec[k] <- prec; macro_rec[k] <- rec; macro_f1[k] <- f1
   }
@@ -7129,6 +7174,7 @@ accuracy_tuned <- function(
     precision = mean(macro_prec),
     recall    = mean(macro_rec),
     f1        = mean(macro_f1),
+    confusion_matrix = NULL,   # only binary returns list(TP,FP,TN,FN)
     details   = list(
       best_threshold = NA_real_,
       y_pred_class   = pred_ids,
@@ -7137,6 +7183,8 @@ accuracy_tuned <- function(
     )
   )
 }
+
+
 
 
 
@@ -7414,7 +7462,7 @@ custom_relative_error_binned <- function(SONN, Rdata, labels, CLASSIFICATION_MOD
   }
   
   names(mean_precisions) <- bin_names
-  as.list(mean_precisions)
+  list(custom_relative_error_binned = mean_precisions)
 }
 
 

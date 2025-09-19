@@ -3,7 +3,7 @@ source("utils/utils.R")
 source("utils/bootstrap_metadata.R")
 library(readxl)
 library(dplyr)
-set.seed(30)
+
 # # Define parameters
 ## =========================
 ## Classification mode
@@ -73,7 +73,7 @@ dropout_rates <- list(0.10, 0.00) # NULL for output layer
 
 
 threshold_function <- tune_threshold_accuracy
-# threshold <- .98  # Classification threshold (not directly used in Random Forest)
+threshold <- .5  # Classification threshold (not directly used in Random Forest)
 
 dropout_rates_learn <- dropout_rates
 
@@ -1251,900 +1251,7 @@ PREDICT_RDS_DEBUG   <- FALSE     # set TRUE if model_rds shows NA
 ############################################################
 # PREDICT-ONLY MODE (!train) — cleaned & fixed for regression
 ############################################################
-if (!train) {
-  cat("Predict-only mode (train == FALSE).\n")
-  
-  # ------------------------------------------------------------
-  # Common toggles / helpers
-  # ------------------------------------------------------------
-  `%||%` <- function(x, y) if (is.null(x)) y else x
-  
-  DEBUG_PREDICT       <- isTRUE(get0("DEBUG_PREDICT",       inherits=TRUE, ifnotfound=TRUE))
-  DEBUG_RUNPRED       <- isTRUE(get0("DEBUG_RUNPRED",       inherits=TRUE, ifnotfound=FALSE))
-  DEBUG_SAFERUN       <- isTRUE(get0("DEBUG_SAFERUN",       inherits=TRUE, ifnotfound=FALSE))
-  DEBUG_ASPM          <- isTRUE(get0("DEBUG_ASPM",          inherits=TRUE, ifnotfound=FALSE))
-  DEBUG_INVERSE       <- isTRUE(get0("DEBUG_INVERSE",       inherits=TRUE, ifnotfound=TRUE))
-  STRICT_LINEAR_HEAD  <- isTRUE(get0("STRICT_LINEAR_HEAD",  inherits=TRUE, ifnotfound=FALSE))
-  WARN_TINY_RANGE     <- isTRUE(get0("WARN_TINY_RANGE",     inherits=TRUE, ifnotfound=TRUE))
-  
-  # Classification behavior toggles (explicit, no inference)
-  APPLY_CLASS_SOFTMAX           <- isTRUE(get0("APPLY_CLASS_SOFTMAX",           inherits=TRUE, ifnotfound=TRUE))
-  BINARY_USE_SIGMOID_WHEN_1COL  <- isTRUE(get0("BINARY_USE_SIGMOID_WHEN_1COL",  inherits=TRUE, ifnotfound=TRUE))
-  CLASS_THRESHOLD               <- as.numeric(get0("CLASS_THRESHOLD",           inherits=TRUE, ifnotfound=0.5))
-  
-  .dbg <- function(...) if (isTRUE(DEBUG_PREDICT)) cat("[DBG] ", sprintf(...), "\n", sep = "")
-  
-  r6 <- function(x) {
-    if (is.null(x)) return(NA_real_)
-    if (is.list(x)) {
-      x <- unlist(x, recursive = TRUE, use.names = FALSE)
-      if (!length(x)) return(NA_real_)
-    }
-    suppressWarnings({
-      xn <- as.numeric(x[1])
-      if (!is.finite(xn)) return(NA_real_)
-      round(xn, 6)
-    })
-  }
-  
-  # ------------------------------------------------------------
-  # Utilities
-  # ------------------------------------------------------------
-
-  
-  .coerce_to_fn <- function(x) {
-    if (is.function(x)) return(x)
-    if (is.character(x) && length(x) == 1L) {
-      nm <- tolower(trimws(x))
-      if (exists(x, inherits = TRUE) && is.function(get(x, inherits = TRUE))) return(get(x, inherits = TRUE))
-      if (nm %in% c("identity","linear","id")) { f <- function(z) z; attr(f,"name") <- "identity"; return(f) }
-      stop(sprintf("Unknown activation name '%s' (no function found).", x))
-    }
-    if (is.null(x)) { f <- function(z) z; attr(f,"name") <- "identity"; return(f) }
-    stop("Activation entry is neither function nor single character name.")
-  }
-  .normalize_af <- function(af, n_layers) {
-    if (is.null(af)) af <- list()
-    if (!is.list(af)) af <- as.list(af)
-    af <- lapply(af, .coerce_to_fn)
-    if (length(af) < n_layers) {
-      pad <- replicate(n_layers - length(af), { f <- function(z) z; attr(f,"name") <- "identity"; f }, simplify = FALSE)
-      af <- c(af, pad)
-    } else if (length(af) > n_layers) {
-      af <- af[seq_len(n_layers)]
-    }
-    af
-  }
-  .force_linear_head_if_regression <- function(mode, af) {
-    if (identical(tolower(mode %||% ""), "regression") && length(af)) {
-      af[[length(af)]] <- (function(z) z); attr(af[[length(af)]], "name") <- "identity"
-    }
-    af
-  }
-  .resolve_af <- function(model_meta, global_af) {
-    if (!is.null(model_meta$model$activation_functions)) {
-      list(af = model_meta$model$activation_functions, source = "artifact:model$activation_functions")
-    } else if (!is.null(model_meta$activation_functions)) {
-      list(af = model_meta$activation_functions,       source = "artifact:activation_functions")
-    } else {
-      list(af = global_af,                              source = "global activation_functions")
-    }
-  }
-  
-  .get_tt_strict <- function(meta_local) {
-    tt <- meta_local$target_transform %||%
-      (meta_local$preprocessScaledData %||% list())$target_transform %||%
-      (meta_local$model %||% list())$target_transform %||%
-      tryCatch({
-        j <- meta_local$target_transform_json
-        if (length(j) && is.character(j) && nzchar(j)) jsonlite::fromJSON(j) else NULL
-      }, error = function(e) NULL)
-    
-    if (is.null(tt) || is.null(tt$type)) {
-      list(type = "identity", params = list(center = 0, scale = 1))
-    } else {
-      p <- tt$params %||% list()
-      p$center <- p$center %||% 0
-      p$scale  <- p$scale  %||% 1
-      list(type = tolower(as.character(tt$type)), params = p)
-    }
-  }
-  
-  .apply_target_inverse_strict <- function(P_raw_local, meta_local) {
-    tt    <- .get_tt_strict(meta_local)
-    ttype <- tolower(as.character(tt$type %||% "identity"))
-    c0    <- as.numeric(tt$params$center %||% 0)
-    s0    <- as.numeric(tt$params$scale  %||% 1)
-    if (!is.finite(s0) || s0 == 0) s0 <- 1
-    
-    if (isTRUE(DEBUG_INVERSE)) {
-      cat("[INV] ttype=", ttype, " | params=center,scale → ", r6(c0), ",", r6(s0), "\n", sep = "")
-    }
-    
-    if (ttype == "zscore")  return(P_raw_local * s0 + c0)
-    if (ttype == "minmax") {
-      mn <- as.numeric(tt$params$min %||% 0); mx <- as.numeric(tt$params$max %||% 1)
-      return(P_raw_local * (mx - mn) + mn)
-    }
-    if (ttype == "affine") {
-      a <- as.numeric(tt$params$a); b <- as.numeric(tt$params$b)
-      if (!is.finite(a) || !is.finite(b)) stop("predict(): invalid affine params a/b.")
-      return(a + b * P_raw_local)
-    }
-    if (abs(c0) > 1e-12 || abs(s0 - 1) > 1e-12) {
-      warning("target_transform 'identity' has nontrivial center/scale; treating as zscore. (Fix artifact writer.)")
-      return(P_raw_local * s0 + c0)
-    }
-    P_raw_local
-  }
-  
-  # ------------------------------------------------------------
-  # Mode / scope
-  # ------------------------------------------------------------
-  MODE                 <- get0("MODE",           inherits=TRUE, ifnotfound="predict:stateless")
-  PREDICT_SCOPE        <- get0("PREDICT_SCOPE",  inherits=TRUE, ifnotfound="all")
-  INPUT_SPLIT          <- get0("INPUT_SPLIT",    inherits=TRUE, ifnotfound="test")
-  TARGET_METRIC        <- get0("TARGET_METRIC",  inherits=TRUE, ifnotfound="accuracy")
-  CLASSIFICATION_MODE  <- tolower(get0("CLASSIFICATION_MODE", inherits = TRUE, ifnotfound = "regression"))
-  mode_type            <- match.arg(CLASSIFICATION_MODE, c("regression","binary","multiclass"))
-  is_regression        <- identical(mode_type, "regression")
-  is_binary            <- identical(mode_type, "binary")
-  is_multiclass        <- identical(mode_type, "multiclass")
-  is_classif           <- !is_regression
-  
-  predict_mode  <- if (identical(MODE, "predict:stateful")) "stateful" else "stateless"
-  scope_opt_in  <- match.arg(PREDICT_SCOPE, c("one","group-best","all","pick","single"))
-  scope_opt     <- if (identical(scope_opt_in, "single")) "one" else scope_opt_in
-  PICK_INDEX    <- as.integer(get0("PICK_INDEX", inherits=TRUE, ifnotfound=NA_integer_))
-  
-  .dbg("MODE=%s | PREDICT_SCOPE=%s | INPUT_SPLIT=%s | MODE_TYPE=%s",
-       as.character(MODE), as.character(PREDICT_SCOPE), as.character(INPUT_SPLIT), mode_type)
-  
-  # ------------------------------------------------------------
-  # Registry & ranking (RDS metadata only)
-  # ------------------------------------------------------------
-  df_all <- bm_list_all()
-  if (!nrow(df_all)) stop("No models found in RDS registry (bm_list_all() returned 0 rows).")
-  
-  KIND_FILTER  <- get0("KIND_FILTER",  inherits=TRUE, ifnotfound=character())
-  ENS_FILTER   <- get0("ENS_FILTER",   inherits=TRUE, ifnotfound=NULL)
-  MODEL_FILTER <- get0("MODEL_FILTER", inherits=TRUE, ifnotfound=NULL)
-  
-  if (length(KIND_FILTER))    df_all <- df_all[df_all$kind  %in% KIND_FILTER, , drop = FALSE]
-  if (!is.null(ENS_FILTER))   df_all <- df_all[df_all$ens   %in% ENS_FILTER,  , drop = FALSE]
-  if (!is.null(MODEL_FILTER)) df_all <- df_all[df_all$model %in% MODEL_FILTER,, drop = FALSE]
-  if (!nrow(df_all)) stop("No candidates after applying KIND/ENS/MODEL filters.")
-  
-  df_all$metric_value <- vapply(seq_len(nrow(df_all)), function(i) {
-    meta_i <- tryCatch(bm_select_exact(df_all$kind[i], df_all$ens[i], df_all$model[i]),
-                       error = function(e) NULL)
-    if (is.null(meta_i)) return(NA_real_)
-    .get_metric_from_meta(meta_i, TARGET_METRIC)
-  }, numeric(1))
-  
-  minimize <- .metric_minimize(TARGET_METRIC)
-  ok       <- is.finite(df_all$metric_value)
-  df_ranked <- if (any(ok)) {
-    ord <- if (minimize) order(df_all$metric_value) else order(df_all$metric_value, decreasing = TRUE)
-    df_all[ord, , drop = FALSE]
-  } else df_all
-  
-  if (!"source" %in% names(df_ranked)) df_ranked$source <- NA_character_
-  source_priority <- c("rds","file","disk","env","memory","workspace")
-  df_ranked$._src_rank <- match(tolower(df_ranked$source), source_priority)
-  df_ranked$._src_rank[is.na(df_ranked$._src_rank)] <- 99L
-  ord <- with(df_ranked, order(kind, ens, model, ._src_rank, na.last = TRUE))
-  df_ranked <- df_ranked[ord, , drop = FALSE]
-  dups <- duplicated(df_ranked[, c("kind","ens","model")])
-  if (any(dups)) {
-    kept   <- df_ranked[!dups, , drop = FALSE]
-    tossed <- df_ranked[ dups, , drop = FALSE]
-    cat(sprintf("De-duped %d duplicate entries (preferring RDS).\n", sum(dups)))
-    df_ranked <- kept
-  }
-  df_ranked$._src_rank <- NULL
-  if (!nrow(df_ranked)) stop("No candidates available to select scope from.")
-  
-  .best_in_group_idx <- function(idx) {
-    vals <- df_ranked$metric_value[idx]
-    if (all(!is.finite(vals))) return(idx[1L])
-    if (minimize) idx[ which.min(vals) ] else idx[ which.max(vals) ]
-  }
-  
-  scope_rows <- switch(
-    scope_opt,
-    "one" = df_ranked[1L, , drop = FALSE],
-    "group-best" = {
-      key <- paste(df_ranked$kind, df_ranked$ens, sep = ":::")
-      split_idx <- split(seq_len(nrow(df_ranked)), key)
-      pick <- vapply(split_idx, .best_in_group_idx, integer(1))
-      df_ranked[as.integer(pick), , drop = FALSE]
-    },
-    "all"  = df_ranked,
-    "pick" = {
-      if (is.finite(PICK_INDEX) && PICK_INDEX >= 1L && PICK_INDEX <= nrow(df_ranked)) {
-        df_ranked[PICK_INDEX, , drop = FALSE]
-      } else {
-        warning(sprintf("PICK_INDEX=%s out of range; defaulting to top-1.", as.character(PICK_INDEX)))
-        df_ranked[1L, , drop = FALSE]
-      }
-    },
-    { warning(sprintf("Unknown scope '%s'; defaulting to top-1.", scope_opt)); df_ranked[1L, , drop = FALSE] }
-  )
-  rownames(scope_rows) <- NULL
-  cat(sprintf("Scope selection → %s | %d candidate(s)\n", scope_opt, nrow(scope_rows)))
-  
-  # ------------------------------------------------------------
-  # Core predict loop (STRICT: metadata-only)
-  # ------------------------------------------------------------
-  results   <- vector("list", length = nrow(scope_rows))
-  pred_sigs <- character(nrow(scope_rows))
-  P_list    <- vector("list", length = nrow(scope_rows))
-  
-  .digest_or <- function(obj) {
-    if (requireNamespace("digest", quietly=TRUE)) {
-      tryCatch(digest::digest(obj, algo="xxhash64"), error=function(e) "NA")
-    } else "digest_pkg_missing"
-  }
-  .resolve_model_rds <- function(kind, ens, model,
-                                 artifacts_dir = get0("ARTIFACTS_DIR", inherits=TRUE, ifnotfound=file.path(getwd(),"artifacts"))) {
-    out <- list(file = NA_character_, used = FALSE)
-    if (!dir.exists(artifacts_dir)) return(out)
-    files <- tryCatch(list.files(artifacts_dir, pattern="\\.[Rr][Dd][Ss]$", full.names=TRUE, recursive=TRUE, include.dirs=FALSE),
-                      error = function(e) character(0))
-    if (!length(files)) return(out)
-    b <- basename(files)
-    patts <- c(
-      sprintf("^model_%s_%d_%d\\.[Rr][Dd][Ss]$", kind, ens, model),
-      sprintf("^model_%s_%d_%d_.*\\.[Rr][Dd][Ss]$", kind, ens, model),
-      sprintf("^Ensemble_%s_%d_model_%d.*\\.[Rr][Dd][Ss]$", kind, ens, model)
-    )
-    hit_idx <- Reduce(`|`, lapply(patts, function(p) grepl(p, b, ignore.case = FALSE)))
-    hits <- files[hit_idx]
-    if (!length(hits)) return(out)
-    info <- file.info(hits)
-    hits <- hits[order(info$mtime, decreasing = TRUE)]
-    out$file  <- basename(hits[1])
-    out$used  <- TRUE
-    out
-  }
-  
-  .load_model_meta_rds <- function(kind, ens, model, artifacts_dir = NULL) {
-    adir <- artifacts_dir %||% get0(".BM_DIR", inherits = TRUE, ifnotfound = "artifacts")
-    if (!dir.exists(adir)) stop(sprintf("Artifacts dir not found: %s", adir))
-    files <- list.files(adir, pattern = "\\.[Rr][Dd][Ss]$", full.names = TRUE, recursive = TRUE, include.dirs = FALSE)
-    if (!length(files)) return(NULL)
-    b <- basename(files)
-    esc <- function(x) gsub("([][(){}.+*?^$|\\\\-])", "\\\\\\1", x, perl = TRUE)
-    pat_strict <- paste0("(?i)(?:^|_)Ensemble_", esc(kind), "_", ens, "_model_", model, "_metadata_.*\\.[Rr][Dd][Ss]$")
-    hit <- grepl(pat_strict, b, perl = TRUE)
-    if (!any(hit)) {
-      pat_loose <- paste0("(?i)", esc(kind), ".*model[^A-Za-z0-9]+", model, ".*metadata.*\\.[Rr][Dd][Ss]$")
-      hit <- grepl(pat_loose, b, perl = TRUE)
-    }
-    cand <- files[hit]
-    if (!length(cand)) return(NULL)
-    info <- file.info(cand)
-    file <- cand[order(info$mtime, decreasing = TRUE)][1L]
-    tryCatch({
-      m <- readRDS(file); attr(m, "artifact_path") <- file; m
-    }, error = function(e) {
-      warning(sprintf("Failed to read meta RDS: %s (%s)", file, conditionMessage(e))); NULL
-    })
-  }
-  
-  for (i in seq_len(nrow(scope_rows))) {
-    kind  <- as.character(scope_rows$kind[i])
-    ens   <- as.integer(scope_rows$ens[i])
-    model <- as.integer(scope_rows$model[i])
-    
-    # 1) Load metadata (strict)
-    model_meta <- .load_model_meta_rds(kind, ens, model)
-    if (is.null(model_meta)) { warning(sprintf("Skipping %s/%d/%d: no artifact metadata.", kind, ens, model)); next }
-    meta <- model_meta
-    cat(sprintf("[META] loaded from: %s\n", attr(meta, "artifact_path") %||% "<unknown>"))
-    
-    # Echo target transform for this model (after meta is loaded)
-    tt <- meta$target_transform %||%
-      (meta$preprocessScaledData %||% list())$target_transform %||%
-      (meta$model %||% list())$target_transform
-    
-    if (!is.null(tt)) {
-      cat(sprintf("[predict-only] target_transform: type=%s | center=%s | scale=%s\n",
-                  tt$type %||% "?", 
-                  as.character((tt$params %||% list())$center %||% NA_real_),
-                  as.character((tt$params %||% list())$scale  %||% NA_real_)))
-    } else {
-      cat("[predict-only] target_transform: <missing in metadata>\n")
-    }
-    
-    # 2) Resolve activations; enforce linear head only for regression
-    af_global <- get0("activation_functions", inherits = TRUE, ifnotfound = NULL)
-    res_af    <- .resolve_af(meta, af_global)
-    n_layers  <- tryCatch(length(meta$weights), error=function(e) NA_integer_)
-    if (!is.finite(n_layers) || n_layers <= 0L) n_layers <- tryCatch(length(meta$model$weights), error=function(e) NA_integer_)
-    if (!is.finite(n_layers) || n_layers <= 0L) n_layers <- 1L
-    activation_functions_resolved <- .normalize_af(res_af$af, n_layers)
-    activation_functions_resolved <- .force_linear_head_if_regression(mode_type, activation_functions_resolved)
-    last <- activation_functions_resolved[[length(activation_functions_resolved)]]
-    nm   <- tolower(trimws(attr(last, "name") %||% ""))
-    is_lin <- {
-      v <- c(-2,-1,0,1,2); outp <- try(last(v), silent = TRUE)
-      is.numeric(outp) && length(outp) == 5 && all(abs(outp - v) <= 1e-12)
-    } || nm %in% c("identity","linear","id") || identical(last, base::identity)
-    cat(sprintf("[AF-TRACE] resolved from %s | layers=%d | last=%s | last_is_linear=%s\n",
-                res_af$source, n_layers, if (nm=="") "<NULL>" else nm, is_lin))
-    if (STRICT_LINEAR_HEAD && is_regression && !is_lin) stop("Regression requires linear head but last activation is not linear.")
-    
-    # 3) Choose split strictly from meta
-    split_lower <- tolower(INPUT_SPLIT)
-    if (split_lower == "test")       { Xi_raw <- meta$X_test;       yi_raw <- meta$y_test;       split_used <- "test" }
-    else if (split_lower == "validation"){ Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation" }
-    else if (split_lower == "train") { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
-    else {
-      Xi_raw <- meta$X_validation;  yi_raw <- meta$y_validation; split_used <- "validation"
-      if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X_test; yi_raw <- meta$y_test; split_used <- "test" }
-      if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
-    }
-    if (is.null(Xi_raw) || is.null(yi_raw)) { warning(sprintf("Skipping %s/%d/%d: split '%s' not found in metadata.", kind, ens, model, INPUT_SPLIT)); next }
-    
-    # 4) Strict coercion & feature alignment (by names from meta)
-    .as_numeric_vector_strict <- function(v, nm = "y") {
-      # matrix -> numeric vector (column-major), preserve length
-      if (is.matrix(v)) {
-        if (ncol(v) > 1L) stop(sprintf("[coerce:%s] matrix has %d columns; expected 1.", nm, ncol(v)), call. = FALSE)
-        v <- v[, 1L, drop = TRUE]
-      }
-      
-      # data.frame -> first (and only) column
-      if (is.data.frame(v)) {
-        if (ncol(v) != 1L) stop(sprintf("[coerce:%s] data.frame has %d columns; expected 1.", nm, ncol(v)), call. = FALSE)
-        v <- v[[1L]]
-      }
-      
-      # list / list-column -> take first scalar per element
-      if (is.list(v)) {
-        v <- vapply(v, function(x) {
-          if (is.null(x)) return(NA_real_)
-          if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
-          suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
-        }, numeric(1))
-      }
-      
-      # factor / character -> numeric
-      if (is.factor(v)) v <- as.character(v)
-      if (!is.numeric(v)) suppressWarnings(v <- as.numeric(v))
-      
-      if (!is.numeric(v)) stop(sprintf("[coerce:%s] could not coerce to numeric.", nm), call. = FALSE)
-      if (!length(v))     stop(sprintf("[coerce:%s] zero-length after coercion.", nm), call. = FALSE)
-      v
-    }
-
-    .as_numeric_matrix_strict <- function(X, nm = "X") {
-      if (is.matrix(X) && is.numeric(X)) return(X)
-      if (is.vector(X) && !is.list(X))  { X <- matrix(X, ncol = 1L); colnames(X) <- nm }
-      if (is.data.frame(X) || is.matrix(X)) {
-        Xdf <- as.data.frame(X, stringsAsFactors = FALSE)
-        for (cc in names(Xdf)) {
-          col <- Xdf[[cc]]
-          if (is.list(col)) {
-            col <- vapply(col, function(x) {
-              if (is.null(x)) return(NA_real_)
-              if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
-              suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
-            }, numeric(1))
-          } else if (is.factor(col)) {
-            col <- as.numeric(as.character(col))
-          } else if (!is.numeric(col)) {
-            suppressWarnings(col <- as.numeric(col))
-          }
-          Xdf[[cc]] <- col
-        }
-        Xmat <- as.matrix(Xdf); storage.mode(Xmat) <- "double"
-        bad <- which(vapply(seq_len(ncol(Xmat)), function(j) !any(is.finite(Xmat[,j])), logical(1)))
-        if (length(bad)) stop(sprintf("[coerce:%s] columns entirely non-numeric/non-finite: %s", nm, paste(colnames(Xmat)[bad], collapse = ", ")), call. = FALSE)
-        return(Xmat)
-      }
-      stop(sprintf("[coerce:%s] unsupported type: %s", nm, paste(class(X), collapse=",")), call. = FALSE)
-    }
-    
-    if (is.data.frame(Xi_raw)) {
-      has_list <- vapply(Xi_raw, is.list, logical(1))
-      if (any(has_list)) cat(sprintf("[WARN] %d list-column(s) detected in Xi_raw: %s\n", sum(has_list), paste(names(Xi_raw)[has_list], collapse=", ")))
-    }
-    
-    Xi <- .as_numeric_matrix_strict(Xi_raw, nm = "X")
-    yi <- .as_numeric_vector_strict(yi_raw,  nm = "y")
-    
-    if (NROW(Xi_raw) != length(yi))
-      stop(sprintf("[LABEL-CHK] NROW(X)=%d vs len(y)=%d on split '%s'.",
-                   NROW(Xi_raw), length(yi), split_used))
-    
-    
-    expected <- tryCatch({
-      nms <- meta$feature_names %||% meta$input_names %||% meta$colnames
-      if (is.null(nms)) colnames(Xi) else as.character(nms)
-    }, error = function(e) colnames(Xi))
-    
-    
-    orig_cols <- colnames(Xi)
-    miss <- setdiff(expected, orig_cols)
-    if (length(miss)) Xi <- cbind(Xi, matrix(0, nrow = nrow(Xi), ncol = length(miss), dimnames = list(NULL, miss)))
-    Xi <- Xi[, expected, drop = FALSE]
-    .dbg("feature-align(meta-only): +%d missing→0 | -%d dropped | final_cols=%d",
-         length(setdiff(expected %||% character(0), orig_cols %||% character(0))),
-         length(setdiff(orig_cols %||% character(0), expected %||% character(0))),
-         ncol(Xi))
-    
-    input_size <- tryCatch(meta$input_size, error = function(e) NULL)
-    if (!is.null(input_size) && !is.na(input_size) && input_size > 0L && ncol(Xi) != input_size) {
-      stop(sprintf("Input feature count (%d) doesn’t match model’s expected input (%d).", ncol(Xi), input_size))
-    }
-    
-    assign("LAST_APPLIED_X", Xi, .GlobalEnv)
-    
-    # 5) Predict (STRICT path) — with target transform probe
-    `%||%` <- function(x, y) if (is.null(x)) y else x
-    
-    print("hello")
-    
-
-
-    cat("[SAFE-DBG] BEFORE .run_predict | X summary:",
-        sprintf("mean=%f sd=%f min=%f max=%f\n",
-                mean(as.matrix(X)), sd(as.matrix(X)),
-                min(as.matrix(X)), max(as.matrix(X))))
-    
-    out <- .safe_run_predict(
-      X = Xi, meta = meta, model_index = model, ML_NN = TRUE
-    )
-    
-    # --- ALWAYS normalize immediately to a double matrix ---
-    P_raw <- .as_pred_matrix(out, mode = "regression", meta = meta,
-                             DEBUG = get0("DEBUG_ASPM", inherits = TRUE, ifnotfound = FALSE))
-    
-    # (Optional) keep a nice column name
-    if (is.null(colnames(P_raw))) colnames(P_raw) <- "pred"
-    
-    # --- Safe debug prints that don't assume list shape ---
-    str(P_raw)
-    cat("[SAFE-DBG] AFTER .run_predict | head(P_raw):",
-        paste(head(as.numeric(P_raw)), collapse = ", "),
-        "\n")
-    cat("[SAFE-DBG] P_raw summary:",
-        sprintf("dims=%dx%d mean=%f sd=%f min=%f p50=%f max=%f\n",
-                nrow(P_raw), ncol(P_raw),
-                mean(P_raw), stats::sd(P_raw),
-                min(P_raw), as.numeric(stats::median(P_raw)), max(P_raw)))
-    
-    # From here on, ALWAYS use P_raw (matrix). Never use pred_raw$predicted_output.
-    
-    
-    if (!is.matrix(P_raw) || nrow(P_raw) == 0L) {
-      warning(sprintf("Skipping %s/%d/%d: empty predictions.", kind, ens, model))
-      next
-    }
-    
-    assign("LAST_SAFERUN_OUT", P_raw, .GlobalEnv)
-    
-    cat(sprintf("[PRED-ONLY] raw_head: mean=%.6f sd=%.6f min=%.6f p50=%.6f max=%.6f\n",
-                mean(P_raw), stats::sd(P_raw),
-                min(P_raw), stats::median(as.vector(P_raw)), max(P_raw)))
-    
-    # ---- Target transform probe ----
-    tt <- meta$target_transform %||%
-      (meta$preprocessScaledData %||% list())$target_transform %||%
-      (meta$model %||% list())$target_transform %||%
-      list(type = "identity", params = list(center = 0, scale = 1))
-    
-    cat("[PRED-ONLY] target_transform:\n")
-
-
-    
-    
-    # --- Safely fetch target transform from metadata (with fallbacks) ---
-    .safe_tt <- function(meta) {
-      `%||%` <- function(x, y) if (is.null(x)) y else x
-      
-      tt <- meta$target_transform %||%
-        (meta$preprocessScaledData %||% list())$target_transform %||%
-        (meta$model %||% list())$target_transform %||%
-        list(type = "identity", params = list(center = 0, scale = 1))
-      
-      tt$type   <- tolower(tt$type %||% "identity")
-      tt$params <- tt$params %||% list(center = 0, scale = 1)
-      tt
-    }
-    
-    tt  <- .safe_tt(meta)
-    cen <- tt$params$center %||% NA_real_
-    scl <- tt$params$scale  %||% NA_real_
-    
-    cat(sprintf("[PRED-ONLY] target_transform: type=%s | center=%s | scale=%s\n",
-                tt$type, as.character(cen), as.character(scl)))
-    
-   
-    
-    
-    
-    # 6) Mode-specific post-processing (NO inference)
-    if (is_regression) {
-      P <- .apply_target_inverse_strict(P_raw, meta)
-      # ===== LEAKAGE MINIMAL PROBE (post-predict; uses P and yi) =====
-      {
-        yv <- suppressWarnings(as.numeric(yi))
-        pv <- suppressWarnings(as.numeric(P[, 1]))
-        ok <- is.finite(yv) & is.finite(pv)
-        yv <- yv[ok]; pv <- pv[ok]
-        
-        sst <- sum((yv - mean(yv))^2)
-        sse <- sum((pv - yv)^2)
-        r2  <- if (sst > 0) 1 - sse / sst else NA_real_
-        
-        set.seed(42)
-        perm <- sample.int(length(yv))
-        r2_shuf <- if (sst > 0) 1 - sum((yv - pv[perm])^2) / sst else NA_real_
-        
-        cat(sprintf("[LEAK-POST] R2=%.6f | R2(shuffled preds)=%.6f\n", r2, r2_shuf))
-        
-        leak_flag <- is.finite(r2) && r2 > 0.99 && is.finite(r2_shuf) && r2_shuf < 0.20
-        
-        # optional: quick feature->target correlation snapshot
-        top_abs_cor <- tryCatch({
-          Xi_num <- suppressWarnings(as.matrix(Xi))
-          storage.mode(Xi_num) <- "double"
-          cs <- suppressWarnings(cor(Xi_num, yv, use = "pairwise.complete.obs"))
-          o <- order(abs(cs[,1]), decreasing = TRUE)
-          head(setNames(cs[o, 1], colnames(Xi_num)[o]), 5)
-        }, error = function(e) NA)
-        
-        diag <- list(r2 = r2, r2_shuf = r2_shuf, top_abs_cor = top_abs_cor,
-                     n = length(yv), timestamp = Sys.time())
-        fn <- file.path("artifacts", sprintf("leak_probe_%s.rds",
-                                             format(Sys.time(), "%Y%m%d_%H%M%S")))
-        saveRDS(diag, fn)
-        cat("[LEAK-POST] Diagnostics saved to: ", fn, "\n", sep = "")
-        
-        # Enforce via env toggle (default TRUE)
-        STRICT_LEAKAGE_GUARD <- isTRUE(get0("STRICT_LEAKAGE_GUARD", inherits = TRUE, ifnotfound = TRUE))
-        if (STRICT_LEAKAGE_GUARD && leak_flag) {
-          stop("[LEAK-GUARD] High R² + low shuffled R² → likely leakage (target/proxy in features, or prefit on test). Aborting.")
-        }
-      }
-      # ===== END LEAKAGE MINIMAL PROBE =====
-      
-      
-      # === INSERT PROBE HERE ===
-      # probe_preds_vs_labels(P, yi, tag = "PREDICT", save_global = TRUE)
-      # cat("[STOP-PROBE !train] after inverse:\n")
-      
-      # Use the split labels you've already loaded earlier in the loop:
-      #   yi_raw  = labels as loaded from meta (may be df/matrix/vector)
-      #   yi      = numeric vector coerced from yi_raw (you created this above)
-      is_na_count <- sum(is.na(yi), na.rm = TRUE)
-      cat("  yi NA count -> ", is_na_count, "\n", sep = "")
-      
-      # Coerce a clean numeric vector for y summaries
-      y_vec <- suppressWarnings(as.numeric(yi))
-      
-      cat("  preds summary -> min=", min(P, na.rm=TRUE),
-          " mean=", mean(P, na.rm=TRUE),
-          " max=", max(P, na.rm=TRUE), "\n", sep="")
-      
-      cat("  y_vec summary -> min=", min(y_vec, na.rm=TRUE),
-          " mean=", mean(y_vec, na.rm=TRUE),
-          " max=", max(y_vec, na.rm=TRUE), "\n", sep="")
-      
-      # stop("STOP-PROBE !train: checked inverse outputs")
-      
-      
-      if (isTRUE(DEBUG_PREDICT)) cat(sprintf("[DBG] post-inverse P: mean=%.6f sd=%.6f\n", mean(P[,1]), stats::sd(P[,1])))
-      
-      # --- INSERT THIS GUARD + CALIBRATION (regression only) ---
-      # 0) apply saved affine calibration if present
-      if (!is.null(meta$calibration) && identical(meta$calibration$type, "affine")) {
-        a <- as.numeric(meta$calibration$a); b <- as.numeric(meta$calibration$b)
-        P <- a + b * P
-        if (isTRUE(DEBUG_PREDICT)) cat(sprintf("[CAL] applied saved affine: a=%.6f b=%.6f\n", a, b))
-      } else {
-        # 1) detect scale mismatch (huge variance gap) and auto-calibrate once
-        y_vec <- suppressWarnings(as.numeric(yi))
-        p_vec <- suppressWarnings(as.numeric(P[,1]))
-        if (length(y_vec) > 1L && length(p_vec) > 1L) {
-          var_ratio <- stats::var(y_vec, na.rm=TRUE) / max(stats::var(p_vec, na.rm=TRUE), .Machine$double.eps)
-          has_tt <- !is.null(meta$target_transform) || !is.null(meta$preprocessScaledData$target_transform)
-          if (!has_tt && is.finite(var_ratio) && var_ratio > 100) {
-            fit <- stats::lm(y_vec ~ p_vec)  # y ≈ a + b * p
-            a <- unname(stats::coef(fit)[1]); b <- unname(stats::coef(fit)[2])
-            P <- a + b * P
-            if (isTRUE(DEBUG_PREDICT)) cat(sprintf("[AUTO-CAL] a=%.6f b=%.6f | var_ratio=%.1f\n", a, b, var_ratio))
-            # persist so future runs auto-apply (optional; only if you have a path handy)
-            meta$calibration <- list(type="affine", a=a, b=b, note="auto-derived in predict-only")
-            if (exists("META_RDS_PATH", inherits=TRUE)) try(saveRDS(meta, get("META_RDS_PATH", inherits=TRUE)), silent=TRUE)
-          }
-        }
-      }
-      # --- END INSERT ---
-    } else {
-# ------------------------------------------------------------
-# Mode-specific post-processing
-# ------------------------------------------------------------
-if (is_regression) {
-  # Regression: keep raw values, apply inverse if needed
-  P <- .apply_target_inverse_strict(P_raw, meta)
-
-} else if (is_binary) {
-  if (ncol(P_raw) == 1L) {
-    # Binary, 1-col: already sigmoid probabilities
-    P <- P_raw
-    yhat <- as.integer(P[,1] > CLASS_THRESHOLD)
-  } else {
-    # Binary, 2-col: softmax, then column 2 is "positive"
-    mx <- apply(P_raw, 1, max)
-    ex <- exp(P_raw - mx)
-    sm <- rowSums(ex)
-    P  <- ex / sm
-    yhat <- as.integer(max.col(P, ties.method = "first") == 2L)
-  }
-
-} else if (is_multiclass) {
-  # Multiclass: softmax, then argmax
-  mx <- apply(P_raw, 1, max)
-  ex <- exp(P_raw - mx)
-  sm <- rowSums(ex)
-  P  <- ex / sm
-  yhat <- max.col(P, ties.method = "first")
-}
-
-    }      
-    
-    # ---- R2 DEBUG BLOCK (paste right after P is computed) ----
-    cat("\n[R2-DBG] mode=regression? ", isTRUE(identical(mode_type, "regression")), 
-        " | split=", split_used, "\n", sep="")
-    
-    cat(sprintf("[QUICK] rows(X)=%d | len(y)=%d\n",
-                NROW(Xi_raw),
-                if (!is.null(dim(yi_raw))) NROW(yi_raw) else length(yi_raw)))
-    
-    # 1) y checks
-    y <- suppressWarnings(as.numeric(yi))
-    cat(sprintf("[R2-DBG] y: n=%d | anyNA=%s | anyInf=%s | mean=%s | var=%s | range=[%s,%s]\n",
-                length(y), any(is.na(y)), any(!is.finite(y)),
-                format(mean(y, na.rm=TRUE)), format(stats::var(y, na.rm=TRUE)),
-                format(min(y, na.rm=TRUE)), format(max(y, na.rm=TRUE))))
-    
-    # 2) P checks (use the first column if matrix)
-    p <- suppressWarnings(as.numeric(P[,1]))
-    cat(sprintf("[R2-DBG] p: n=%d | anyNA=%s | anyInf=%s | mean=%s | sd=%s | range=[%s,%s]\n",
-                length(p), any(is.na(p)), any(!is.finite(p)),
-                format(mean(p, na.rm=TRUE)), format(stats::sd(p, na.rm=TRUE)),
-                format(min(p, na.rm=TRUE)), format(max(p, na.rm=TRUE))))
-    
-    # 3) shape checks
-    if (length(y) != length(p)) {
-      stop(sprintf("[R2-DBG] length mismatch: y=%d vs p=%d (feature/label split misaligned).", length(y), length(p)))
-    }
-    
-    # 4) SST/SSE and manual R²
-    sst <- sum( (y - mean(y, na.rm=TRUE))^2 )
-    sse <- sum( (p - y)^2 )
-    cat(sprintf("[R2-DBG] sst=%s | sse=%s\n", format(sst), format(sse)))
-    
-    if (!is.finite(sst) || sst <= 0) {
-      cat("[R2-DBG] R² undefined: target variance (SST) <= 0. (Is y constant or degenerate on this split?)\n")
-    } else {
-      r2_manual <- 1 - sse / sst
-      cor_py <- suppressWarnings(stats::cor(p, y, use="complete.obs"))
-      rmse_m <- sqrt(mean((p - y)^2))
-      mae_m  <- mean(abs(p - y))
-      cat(sprintf("[R2-DBG] r2_manual=%s | corr=%s | rmse=%s | mae=%s\n",
-                  format(r2_manual), format(cor_py), format(rmse_m), format(mae_m)))
-    }
-    # ---- END R2 DEBUG BLOCK ----
-    
-    
-    # 7) Metrics
-    SONN          <- get0("SONN", inherits = TRUE, ifnotfound = NULL)
-    verbose_flag  <- isTRUE(get0("verbose", inherits = TRUE, ifnotfound = FALSE))
-    yi_vec        <- if (!is.null(yi)) as.numeric(yi) else NULL
-    
-    if (is_regression) {
-      mse_val   <- tryCatch(MSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),    error = function(e) NA_real_)
-      mae_val   <- tryCatch(MAE(SONN, Xi, yi_vec, "regression", P, verbose_flag),    error = function(e) NA_real_)
-      rmse_val  <- tryCatch(RMSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error = function(e) NA_real_)
-      r2_val    <- tryCatch(R2(SONN, Xi, yi_vec, "regression", P, verbose_flag),     error = function(e) NA_real_)
-      mape_val  <- tryCatch(MAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error = function(e) NA_real_)
-      smape_val <- tryCatch(SMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error = function(e) NA_real_)
-      wmape_val <- tryCatch(WMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error = function(e) NA_real_)
-      mase_val  <- tryCatch(MASE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error = function(e) NA_real_)
-      
-      if (DEBUG_PREDICT && nrow(P) > 0 && length(yi_vec) == nrow(P) && all(is.finite(yi_vec))) {
-        p  <- as.numeric(P[, 1])
-        sse <- sum((p - yi_vec)^2); sst <- sum((yi_vec - mean(yi_vec))^2)
-        r2_manual <- if (is.finite(sst) && sst > 0) 1 - sse/sst else NA_real_
-        cor_py <- suppressWarnings(stats::cor(p, yi_vec))
-        rmse <- sqrt(mean((p - yi_vec)^2)); mae <- mean(abs(p - yi_vec))
-        .dbg("MANUAL: R2=%.6f | corr=%.6f | RMSE=%.6f | MAE=%.6f", r2_manual, cor_py, rmse, mae)
-      }
-      
-      results[[i]] <- list(
-        kind=kind, ens=ens, model=model, data_source=split_used, split_used=split_used, n_pred_rows=nrow(P),
-        quantization_error=NA_real_, topographic_error=NA_real_, clustering_quality_db=NA_real_,
-        accuracy=NA_real_, precision=NA_real_, recall=NA_real_, f1=NA_real_,
-        tuned_threshold=NA_real_, tuned_accuracy=NA_real_, tuned_precision=NA_real_,
-        tuned_recall=NA_real_, tuned_f1=NA_real_,
-        MSE=r6(mse_val), MAE=r6(mae_val), RMSE=r6(rmse_val), R2=r6(r2_val),
-        MAPE=r6(mape_val), SMAPE=r6(smape_val), WMAPE=r6(wmape_val), MASE=r6(mase_val),
-        ndcg=NA_real_, diversity=NA_real_, serendipity=NA_real_, hit_rate=NA_real_,
-        w_sig=.digest_or(meta), pred_sig=.digest_or(round(P[seq_len(min(nrow(P), 2000)), , drop = FALSE], 6)),
-        model_rds=.resolve_model_rds(kind, ens, model)$file,
-        artifact_used=if (.resolve_model_rds(kind, ens, model)$used) "yes" else "no"
-      )
-      
-    } else {
-      # Explicit binary / multiclass path
-      acc <- prec <- rec <- f1s <- NA_real_
-      
-      if (is_binary) {
-        # Thresholding @ CLASS_THRESHOLD (default 0.5)
-        if (ncol(P) == 1L) {
-          yhat <- as.integer(P[,1] >= CLASS_THRESHOLD)
-        } else {
-          # If model outputs 2 logits/probs for binary, take class 2 as "positive"
-          yhat <- as.integer(max.col(P, ties.method="first") == 2L)
-        }
-        ybin <- yi_vec
-        if (!all(ybin %in% c(0,1))) {
-          # Map to 0/1 using max label as positive
-          mx <- suppressWarnings(max(ybin, na.rm = TRUE)); ybin <- as.integer(ybin == mx)
-        }
-        TP <- sum(yhat==1 & ybin==1); FP <- sum(yhat==1 & ybin==0)
-        FN <- sum(yhat==0 & ybin==1); TN <- sum(yhat==0 & ybin==0)
-        acc <- (TP+TN)/length(ybin)
-        prec <- if ((TP+FP)>0) TP/(TP+FP) else NA_real_
-        rec  <- if ((TP+FN)>0) TP/(TP+FN) else NA_real_
-        f1s  <- if (is.finite(prec) && is.finite(rec) && (prec+rec)>0) 2*prec*rec/(prec+rec) else NA_real_
-        
-      } else if (is_multiclass) {
-        yhat <- max.col(P, ties.method="first")
-        ymc  <- if (is.matrix(yi_raw) && ncol(yi_raw)>1) max.col(yi_raw, "first") else as.integer(yi_vec)
-        acc  <- mean(yhat == ymc)
-      }
-      
-      results[[i]] <- list(
-        kind=kind, ens=ens, model=model, data_source=split_used, split_used=split_used, n_pred_rows=nrow(P),
-        quantization_error=NA_real_, topographic_error=NA_real_, clustering_quality_db=NA_real_,
-        accuracy=r6(acc), precision=r6(prec), recall=r6(rec), f1=r6(f1s),
-        tuned_threshold=NA_real_, tuned_accuracy=NA_real_, tuned_precision=NA_real_,
-        tuned_recall=NA_real_, tuned_f1=NA_real_,
-        MSE=NA_real_, MAE=NA_real_, RMSE=NA_real_, R2=NA_real_,
-        MAPE=NA_real_, SMAPE=NA_real_, WMAPE=NA_real_, MASE=NA_real_,
-        ndcg=NA_real_, diversity=NA_real_, serendipity=NA_real_, hit_rate=NA_real_,
-        w_sig=.digest_or(meta), pred_sig=.digest_or(round(P[seq_len(min(nrow(P), 2000)), , drop = FALSE], 6)),
-        model_rds=.resolve_model_rds(kind, ens, model)$file,
-        artifact_used=if (.resolve_model_rds(kind, ens, model)$used) "yes" else "no"
-      )
-    }
-    
-    P_list[[i]] <- P
-    
-    cat(sprintf("→ Model(kind=%s, ens=%d, model=%d) preds=%dx%d\n", kind, ens, model, nrow(P), ncol(P)))
-    cat(sprintf("   · input_source=%s | rows=%d, cols=%d\n", split_used, nrow(Xi), ncol(Xi)))
-    cat(sprintf("   · pred_sig=%s | artifact_rds=%s\n",
-                results[[i]]$pred_sig,
-                if (identical(results[[i]]$artifact_used,"yes")) "yes" else "no"))
-  }
-  
-  results <- Filter(Negate(is.null), results)
-  if (!length(results)) stop("No successful predictions.")
-  
-  rows <- lapply(results, function(z) {
-    data.frame(
-      kind=z$kind, ens=z$ens, model=z$model, data_source=z$data_source, split_used=z$split_used,
-      n_pred_rows=z$n_pred_rows,
-      quantization_error=z$quantization_error, topographic_error=z$topographic_error, clustering_quality_db=z$clustering_quality_db,
-      accuracy=z$accuracy, precision=z$precision, recall=z$recall, f1=z$f1,
-      tuned_threshold=z$tuned_threshold, tuned_accuracy=z$tuned_accuracy, tuned_precision=z$tuned_precision,
-      tuned_recall=z$tuned_recall, tuned_f1=z$tuned_f1,
-      MSE=z$MSE, MAE=z$MAE, RMSE=z$RMSE, R2=z$R2,
-      MAPE=z$MAPE, SMAPE=z$SMAPE, WMAPE=z$WMAPE, MASE=z$MASE,
-      ndcg=z$ndcg, diversity=z$diversity, serendipity=z$serendipity, hit_rate=z$hit_rate,
-      w_sig=z$w_sig, pred_sig=z$pred_sig, model_rds=z$model_rds, artifact_used=z$artifact_used,
-      stringsAsFactors=FALSE
-    )
-  })
-  results_df <- do.call(rbind, rows); rownames(results_df) <- NULL
-  
-  # order columns: keep artifact fields last
-  tail_cols <- c("model_rds","artifact_used")
-  head_cols <- setdiff(names(results_df), tail_cols)
-  results_df <- results_df[, c(head_cols, tail_cols), drop = FALSE]
-  
-  # prune empty columns (but keep identifiers)
-  .col_has_value <- function(v) { if (is.numeric(v)) any(is.finite(v)) else any(!(is.na(v) | v==""), na.rm=TRUE) }
-  keep_cols <- names(results_df)[vapply(results_df, .col_has_value, logical(1))]
-  must_keep <- c("kind","ens","model","data_source","split_used","n_pred_rows","w_sig","pred_sig","model_rds","artifact_used")
-  keep_cols <- union(keep_cols, must_keep)
-  keep_cols <- intersect(c(head_cols, tail_cols), keep_cols)
-  results_df <- results_df[, keep_cols, drop = FALSE]
-  assign("PREDICT_RESULTS_TABLE", results_df, .GlobalEnv)
-  
-  # pretty print
-  PREDICT_FULL_PRINT  <- get0("PREDICT_FULL_PRINT",  inherits = TRUE, ifnotfound = FALSE)
-  PREDICT_HEAD_N      <- as.integer(get0("PREDICT_HEAD_N",      inherits = TRUE, ifnotfound = 50L))
-  PREDICT_PRINT_MAX   <- as.numeric(get0("PREDICT_PRINT_MAX",   inherits = TRUE, ifnotfound = 1e7))
-  PREDICT_PRINT_WIDTH <- as.integer(get0("PREDICT_PRINT_WIDTH", inherits = TRUE, ifnotfound = 200L))
-  PREDICT_USE_TIBBLE  <- get0("PREDICT_USE_TIBBLE",  inherits = TRUE, ifnotfound = TRUE)
-  
-  cat(sprintf("[predict] MODE=%s | SCOPE=%s | METRIC=%s | rows=%d | mode_type=%s\n",
-              predict_mode, scope_opt, TARGET_METRIC, nrow(results_df), mode_type))
-  if (isTRUE(DEBUG_PREDICT) && is_regression) .dbg("Regression path confirmed. (Inverse-transform applied using artifact meta only.)")
-  
-  if (isTRUE(PREDICT_FULL_PRINT)) {
-    old_opts <- options(max.print = PREDICT_PRINT_MAX, width = PREDICT_PRINT_WIDTH)
-    on.exit(options(old_opts), add = TRUE)
-  }
-  if (isTRUE(PREDICT_USE_TIBBLE) && requireNamespace("tibble", quietly = TRUE)) {
-    tb <- tibble::as_tibble(results_df)
-    if (isTRUE(PREDICT_FULL_PRINT)) {
-      print(tb, n = Inf, width = Inf)
-    } else {
-      print(tb, n = PREDICT_HEAD_N, width = Inf)
-      if (nrow(tb) > PREDICT_HEAD_N) {
-        cat(sprintf("... (%d more rows — set PREDICT_FULL_PRINT=TRUE to show all)\n",
-                    nrow(tb) - PREDICT_HEAD_N))
-      }
-    }
-  } else {
-    to_show <- if (isTRUE(PREDICT_FULL_PRINT)) results_df else utils::head(results_df, PREDICT_HEAD_N)
-    print(to_show, row.names = FALSE, right = TRUE)
-    if (!isTRUE(PREDICT_FULL_PRINT) && nrow(results_df) > nrow(to_show)) {
-      cat(sprintf("... (%d more rows — set PREDICT_FULL_PRINT=TRUE to show all)\n",
-                  nrow(results_df) - nrow(to_show)))
-    }
-  }
-  
-  # save compact prediction pack
-  artifacts_dir <- file.path(getwd(), "artifacts")
-  if (!dir.exists(artifacts_dir)) dir.create(artifacts_dir, recursive = TRUE, showWarnings = FALSE)
-  ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  scope_tag <- gsub("[^A-Za-z0-9_-]+", "-", tolower(scope_opt))
-  mode_tag  <- gsub("[^A-Za-z0-9_-]+", "-", tolower(predict_mode))
-  rds_path  <- file.path(artifacts_dir, sprintf("predictions_%s_scope-%s_%s.rds", mode_tag, scope_tag, ts_stamp))
-  
-  pred_named <- list()
-  for (i in seq_along(P_list)) {
-    if (is.null(P_list[[i]])) next
-    tag <- sprintf("%s_%d_%d", scope_rows$kind[i], scope_rows$ens[i], scope_rows$model[i])
-    pred_named[[tag]] <- P_list[[i]]
-  }
-  
-  predict_pack <- list(
-    saved_at        = Sys.time(),
-    predict_mode    = predict_mode,
-    PREDICT_SCOPE   = scope_opt,
-    TARGET_METRIC   = TARGET_METRIC,
-    minimize_metric = minimize,
-    flags = list(
-      MODE = MODE,
-      KIND_FILTER = KIND_FILTER, ENS_FILTER = ENS_FILTER, MODEL_FILTER = MODEL_FILTER,
-      PICK_INDEX = PICK_INDEX,
-      INPUT_SPLIT = INPUT_SPLIT,
-      CLASSIFICATION_MODE = mode_type,
-      APPLY_CLASS_SOFTMAX = APPLY_CLASS_SOFTMAX,
-      BINARY_USE_SIGMOID_WHEN_1COL = BINARY_USE_SIGMOID_WHEN_1COL,
-      CLASS_THRESHOLD = CLASS_THRESHOLD
-    ),
-    candidates_ranked = df_ranked,
-    scope_rows        = scope_rows,
-    results_table     = results_df,
-    prediction_sigs   = pred_sigs,
-    predictions       = pred_named
-  )
-  
-  saveRDS(predict_pack, rds_path)
-  cat(sprintf("[predict] Saved predictions to: %s\n", rds_path))
-} else {
+if(train) {
   ## =========================================================================================
   ## SINGLE-RUN MODE (no logs, no lineage, no temp/prune/add) — covers Scenario A & Scenario B
   ## =========================================================================================
@@ -2197,11 +1304,21 @@ if (is_regression) {
     # ============================
     # Multi-seed (50 runs) section
     # ============================
-    if (!dir.exists("artifacts_runs")) dir.create("artifacts_runs")
+    # if (!dir.exists("artifacts_runs")) dir.create("artifacts_runs")
     
-    seeds    <- 1:10
-
+    seeds <- 1:50
     acc_rows <- vector("list", length(seeds))
+    metrics_rows <- list()
+    
+    # Timestamp for uniqueness
+    ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    
+    # Number of seeds
+    s <- as.character(length(seeds))
+    
+    # File paths with seed count in the name
+    agg_pred_file <- file.path("artifacts", sprintf("predictions_stateless_scope-one_%s_%s_seeds.rds", ts_stamp, s))
+    agg_metrics_file <- file.path("artifacts", sprintf("metrics_test_%s_%s_seeds.rds", ts_stamp, s))
     
     for (i in seq_along(seeds)) {
       s <- seeds[i]
@@ -2258,31 +1375,115 @@ if (is_regression) {
         train=train, viewTables=viewTables, verbose=verbose
       )
       
-      # Extract accuracy for this run (robustly)
-      acc <- tryCatch(
-        as.numeric(model_results$performance_relevance_data$accuracy_percent),
-        error = function(e) NA_real_
+      
+      
+      flat <- tryCatch(
+        rapply(
+          list(
+            performance_metric = model_results$performance_relevance_data$performance_metric,
+            relevance_metric   = model_results$performance_relevance_data$relevance_metric
+          ),
+          f = function(z) z, how = "unlist"
+        ),
+        error = function(e) setNames(vector("list", 0L), character(0))
       )
       
-      acc_rows[[i]] <- data.frame(run_index = i, seed = s, accuracy_percent = acc)
+      # keep only length-1 atomics
+      if (length(flat)) {
+        L <- as.list(flat)
+        flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+      }
       
-      cat(sprintf("Seed %d → accuracy_percent = %s\n",
-                  s, if (is.na(acc)) "NA" else format(acc, digits = 6)))
+      # exclude bulky keys + drop NAs
+      nms <- names(flat)
+      if (length(nms)) {
+        drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
+          grepl("grid_used", nms, fixed = TRUE) |
+          grepl("(^|\\.)details(\\.|$)", nms)   # drop any *.details.*
+        keep <- !drop & !is.na(flat)
+        flat <- flat[keep]
+        nms  <- names(flat)
+      }
       
-      # After the final run, keep that model as main_model for downstream code
-      if (i == length(seeds)) {
-        main_model <- run_model
+      # --- build a named list so column names are metric names (not values) ---
+      if (length(flat) == 0L) {
+        row_df <- data.frame(run_index = i, seed = s, stringsAsFactors = FALSE)
+      } else {
+        out <- setNames(vector("list", length(flat)), nms)
+        # numeric if possible, else character — preserve names
+        num <- suppressWarnings(as.numeric(flat))
+        for (j in seq_along(flat)) {
+          out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
+        }
+        row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
+        row_df <- cbind(data.frame(run_index = i, seed = s, stringsAsFactors = FALSE), row_df)
+      }
+      
+      # --- add best-* fields (robust, no helpers) ---
+      row_df$best_train_acc  <- tryCatch(as.numeric(model_results$best_train_acc),  error = function(e) NA_real_)
+      row_df$best_epoch_train<- tryCatch(as.integer(model_results$best_epoch_train),error = function(e) NA_integer_)
+      row_df$best_val_acc    <- tryCatch(as.numeric(model_results$best_val_acc),    error = function(e) NA_real_)
+      row_df$best_val_epoch  <- tryCatch(as.integer(model_results$best_val_epoch),  error = function(e) NA_integer_)
+      
+      metrics_rows[[i]] <- row_df
+      if (i == length(seeds)) main_model <- run_model
+      cat(sprintf("Seed %d → collected %d metrics\n", s, max(0, ncol(row_df) - 2L)))
+      
+      #RUN TEST RESULTS TABLE
+      # evaluate via ENV (example) or set LOAD_FROM_RDS=TRUE to read artifacts
+      desonn_predict_eval(
+        LOAD_FROM_RDS = FALSE,
+        ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
+        INPUT_SPLIT   = "test",
+        CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+        RUN_INDEX = i,
+        SEED      = s,
+        OUTPUT_DIR = "artifacts",
+        SAVE_METRICS_RDS = FALSE,                             # avoid per-seed metrics files
+        METRICS_PREFIX   = "metrics_test",
+        SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,              # keep lightweight agg file
+        AGG_PREDICTIONS_FILE = agg_pred_file,                # << aggregate here
+        AGG_METRICS_FILE     = agg_metrics_file              # << and here
+      )
+      
+    }
+    
+    # --- bind with base-R fill ---
+    if (length(metrics_rows) == 0L) {
+      results_table <- data.frame()
+    } else {
+      results_table <- metrics_rows[[1]]
+      if (length(metrics_rows) > 1L) {
+        for (k in 2:length(metrics_rows)) {
+          x <- results_table
+          y <- metrics_rows[[k]]
+          for (m in setdiff(names(y), names(x))) x[[m]] <- NA
+          for (m in setdiff(names(x), names(y))) y[[m]] <- NA
+          ord <- union(names(x), names(y))
+          results_table <- rbind(x[, ord, drop = FALSE], y[, ord, drop = FALSE])
+        }
       }
     }
     
-    # Save combined table to RDS
-    results_table <- do.call(rbind, acc_rows)
+    # remove "performance_metric." / "relevance_metric." prefixes
+    colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
+    
+    # keep best_train_acc/epoch + best_val_epoch, but DROP best_val_acc before final table
+    if ("best_val_acc" %in% names(results_table)) results_table$best_val_acc <- NULL
+    
+    
+    # save
+    dir.create("artifacts", showWarnings = FALSE, recursive = TRUE)
     out_path <- file.path(
-      "artifacts_runs",
-      sprintf("accuracy_runs_%s_50seeds.rds", format(Sys.time(), "%Y%m%d_%H%M%S"))
+      "artifacts",
+      sprintf("train_acc_validation_metrics_runs_%s_%s_seeds.rds",
+              format(Sys.time(), "%Y%m%d_%H%M%S"), s)
     )
     saveRDS(results_table, out_path)
-    cat("Saved multi-seed results to: ", out_path, "\n")
+    cat("Saved multi-seed metrics table to:", out_path, " | rows=", nrow(results_table),
+        " cols=", ncol(results_table), "\n")
+  
+    
     
     # Keep the ID on the run object too (belt-and-suspenders)
     main_model$ensemble_number <- 0L
@@ -3235,7 +2436,7 @@ if (is_regression) {
             if (!is.null(md$performance_metric) && is.list(md$performance_metric)) {
               for (mn in names(md$performance_metric)) {
                 val <- md$performance_metric[[mn]]
-                # only take numeric scalars (skip nested lists like accuracy_tuned$details)
+                # only take numeric scalars (skip nested lists like accuracy_precision_recall_f1_tuned$details)
                 if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
                   perf_rows[[length(perf_rows)+1L]] <- data.frame(
                     slot = slot,
@@ -3302,7 +2503,498 @@ if (is_regression) {
 
 
 
-saveToDisk <- TRUE
+desonn_predict_eval <- function(
+    LOAD_FROM_RDS = FALSE,                            # if TRUE, load meta RDS; else from ENV object
+    ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
+    INPUT_SPLIT   = "test",                           # "test" | "validation" | "train"
+    CLASSIFICATION_MODE,                              # "binary" | "multiclass" | "regression"
+    RUN_INDEX,
+    SEED,
+    OUTPUT_DIR = "artifacts",                         # files saved here
+    SAVE_METRICS_RDS = TRUE,                          # write the flattened metrics table RDS (unless AGG_METRICS_FILE provided)
+    METRICS_PREFIX = "metrics_test",                  # artifacts/<prefix>_runXXX_seedY_YYYYmmdd_HHMMSS.rds
+    SAVE_PREDICTIONS_COLUMN_IN_RDS = get0("SAVE_PREDICTIONS_COLUMN_IN_RDS", inherits=TRUE, ifnotfound=FALSE),
+    AGG_PREDICTIONS_FILE = NULL,                      # if provided, append all seeds into one predictions RDS here
+    AGG_METRICS_FILE     = NULL                       # if provided, append all seeds into one metrics RDS table here
+) {
+  # ---------------- helpers ----------------
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+  r6 <- function(x) {
+    if (is.null(x)) return(NA_real_)
+    if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
+    suppressWarnings({
+      xn <- as.numeric(x[1]); if (!is.finite(xn)) return(NA_real_); round(xn, 6)
+    })
+  }
+  digest_safe <- function(x) {
+    if (!requireNamespace("digest", quietly=TRUE)) return(NA_character_)
+    tryCatch(digest::digest(x, algo="xxhash64"), error=function(e) NA_character_)
+  }
+  .as_numeric_vector_strict <- function(v, nm = "y") {
+    if (is.matrix(v)) {
+      if (ncol(v) > 1L) stop(sprintf("[coerce:%s] matrix has %d cols (expect 1)", nm, ncol(v)))
+      v <- v[,1L, drop=TRUE]
+    }
+    if (is.data.frame(v)) {
+      if (ncol(v) != 1L) stop(sprintf("[coerce:%s] data.frame has %d cols (expect 1)", nm, ncol(v)))
+      v <- v[[1L]]
+    }
+    if (is.list(v)) {
+      v <- vapply(v, function(x) {
+        if (is.null(x)) return(NA_real_)
+        if (is.list(x)) x <- unlist(x, recursive=TRUE, use.names=FALSE)
+        suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
+      }, numeric(1))
+    }
+    if (is.factor(v)) v <- as.character(v)
+    if (!is.numeric(v)) suppressWarnings(v <- as.numeric(v))
+    if (!is.numeric(v)) stop(sprintf("[coerce:%s] cannot coerce to numeric", nm))
+    if (!length(v)) stop(sprintf("[coerce:%s] zero-length", nm))
+    v
+  }
+  .as_numeric_matrix_strict <- function(X, nm = "X") {
+    if (is.matrix(X) && is.numeric(X)) return(X)
+    if (is.vector(X) && !is.list(X)) { X <- matrix(X, ncol=1L); colnames(X) <- nm }
+    if (is.data.frame(X) || is.matrix(X)) {
+      Xdf <- as.data.frame(X, stringsAsFactors=FALSE)
+      for (cc in names(Xdf)) {
+        col <- Xdf[[cc]]
+        if (is.list(col)) {
+          col <- vapply(col, function(x) {
+            if (is.null(x)) return(NA_real_)
+            if (is.list(x)) x <- unlist(x, recursive=TRUE, use.names=FALSE)
+            suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
+          }, numeric(1))
+        } else if (is.factor(col)) {
+          col <- as.numeric(as.character(col))
+        } else if (!is.numeric(col)) {
+          suppressWarnings(col <- as.numeric(col))
+        }
+        Xdf[[cc]] <- col
+      }
+      Xmat <- as.matrix(Xdf); storage.mode(Xmat) <- "double"
+      bad <- which(vapply(seq_len(ncol(Xmat)), function(j) !any(is.finite(Xmat[,j])), logical(1)))
+      if (length(bad)) stop(sprintf("[coerce:%s] entirely non-numeric cols: %s", nm, paste(colnames(Xmat)[bad], collapse=", ")))
+      return(Xmat)
+    }
+    stop(sprintf("[coerce:%s] unsupported type: %s", nm, paste(class(X), collapse=",")))
+  }
+  .get_tt_strict <- function(meta_local) {
+    tt <- meta_local$target_transform %||%
+      (meta_local$preprocessScaledData %||% list())$target_transform %||%
+      (meta_local$model %||% list())$target_transform %||%
+      tryCatch({
+        j <- meta_local$target_transform_json
+        if (length(j) && is.character(j) && nzchar(j)) jsonlite::fromJSON(j) else NULL
+      }, error=function(e) NULL)
+    if (is.null(tt) || is.null(tt$type)) {
+      list(type="identity", params=list(center=0, scale=1))
+    } else {
+      p <- tt$params %||% list(); p$center <- p$center %||% 0; p$scale <- p$scale %||% 1
+      list(type=tolower(as.character(tt$type)), params=p)
+    }
+  }
+  .apply_target_inverse_strict <- function(P_raw_local, meta_local) {
+    tt <- .get_tt_strict(meta_local)
+    ttype <- tolower(tt$type %||% "identity")
+    c0 <- as.numeric(tt$params$center %||% 0)
+    s0 <- as.numeric(tt$params$scale  %||% 1)
+    if (!is.finite(s0) || s0 == 0) s0 <- 1
+    if (ttype == "zscore")  return(P_raw_local * s0 + c0)
+    if (ttype == "minmax")  { mn <- as.numeric(tt$params$min %||% 0); mx <- as.numeric(tt$params$max %||% 1); return(P_raw_local * (mx - mn) + mn) }
+    if (ttype == "affine")  { a <- as.numeric(tt$params$a); b <- as.numeric(tt$params$b); if (!is.finite(a) || !is.finite(b)) stop("invalid affine"); return(a + b * P_raw_local) }
+    if (abs(c0) > 1e-12 || abs(s0 - 1) > 1e-12) {
+      warning("target_transform 'identity' has nontrivial center/scale; treating as zscore."); return(P_raw_local * s0 + c0)
+    }
+    P_raw_local
+  }
+  
+  # ---------- safe, mode-aware predict shims ----------
+  .safe_run_predict <- function(X, meta, model_index = 1L, ML_NN = TRUE, verbose = FALSE, debug = FALSE) {
+    if (exists(".run_predict", inherits = TRUE)) {
+      return(tryCatch(
+        .run_predict(X = X, meta = meta, model_index = model_index, ML_NN = ML_NN,
+                     verbose = verbose, debug = debug),
+        error = function(e) { message("[.run_predict] failed, falling back: ", conditionMessage(e)); NULL }
+      ))
+    }
+    mdl <- meta$model %||% NULL
+    if (!is.null(mdl) && is.function(mdl$predict)) {
+      return(tryCatch(mdl$predict(Rdata = X, weights = meta$weights_record %||% meta$weights,
+                                  biases = meta$biases_record %||% meta$biases,
+                                  activation_functions = meta$activation_functions %||% NULL,
+                                  verbose = verbose, debug = debug),
+                      error=function(e) NULL))
+    }
+    SONN_local <- get0("SONN", inherits = TRUE, ifnotfound = NULL)
+    if (!is.null(SONN_local) && is.function(SONN_local$predict)) {
+      return(tryCatch(SONN_local$predict(Rdata = X, weights = meta$weights_record %||% meta$weights,
+                                         biases = meta$biases_record %||% meta$biases,
+                                         activation_functions = meta$activation_functions %||% NULL,
+                                         verbose = verbose, debug = debug),
+                      error=function(e) NULL))
+    }
+    stop("No available predict method (.run_predict / meta$model$predict / SONN$predict).")
+  }
+  
+  .as_pred_matrix <- function(pred_obj, mode = c("binary","multiclass","regression"), meta, DEBUG = FALSE) {
+    mode <- match.arg(mode)
+    if (is.list(pred_obj) && !is.null(pred_obj$predicted_output)) {
+      P <- pred_obj$predicted_output
+    } else if (is.matrix(pred_obj)) {
+      P <- pred_obj
+    } else if (is.data.frame(pred_obj)) {
+      P <- as.matrix(pred_obj)
+    } else {
+      stop("[as_pred] Unsupported prediction object type.")
+    }
+    storage.mode(P) <- "double"
+    if (!is.matrix(P) || nrow(P) == 0L) stop("[as_pred] empty prediction matrix")
+    if (mode == "regression" && ncol(P) > 1L) { if (DEBUG) message("[as_pred] regression but >1 cols; using col 1"); P <- P[,1,drop=FALSE] }
+    P
+  }
+  
+  # ---------------- config + env bits ----------------
+  CLASSIFICATION_MODE <- tolower(CLASSIFICATION_MODE)
+  stopifnot(CLASSIFICATION_MODE %in% c("binary","multiclass","regression"))
+  CLASS_THRESHOLD <- as.numeric(get0("CLASS_THRESHOLD", inherits=TRUE, ifnotfound=0.5))
+  SONN           <- get0("SONN",     inherits=TRUE, ifnotfound=NULL)
+  verbose_flag   <- isTRUE(get0("verbose", inherits=TRUE, ifnotfound=FALSE))
+  
+  cat("[CFG] SPLIT=", INPUT_SPLIT, " | CLASS_MODE=", CLASSIFICATION_MODE,
+      " | RUN_INDEX=", RUN_INDEX, " | SEED=", SEED, " | OUT=", OUTPUT_DIR, "\n", sep="")
+  
+  # ---------------- load meta ----------------
+  meta <- NULL
+  if (LOAD_FROM_RDS) {
+    adir <- get0(".BM_DIR", inherits=TRUE, ifnotfound="artifacts")
+    if (!dir.exists(adir)) stop(sprintf("Artifacts dir not found: %s", adir))
+    patt <- paste0("(?i)(?:^|_)Ensemble_Main_0_model_1_metadata_.*\\.[Rr][Dd][Ss]$")
+    files <- list.files(adir, pattern="\\.[Rr][Dd][Ss]$", full.names=TRUE, recursive=TRUE, include.dirs=FALSE)
+    hit <- grepl(paste0(patt), basename(files), perl=TRUE)
+    if (!any(hit)) stop("No RDS metadata found for Ensemble_Main_0_model_1_metadata in '", adir, "'.")
+    cand <- files[hit]; info <- file.info(cand)
+    file <- cand[order(info$mtime, decreasing=TRUE)][1L]
+    meta <- tryCatch({ m <- readRDS(file); attr(m,"artifact_path") <- file; m }, error=function(e) NULL)
+    if (is.null(meta)) stop("Failed to read metadata RDS: ", file)
+    cat("[LOAD] meta: RDS → ", attr(meta,"artifact_path"), "\n", sep="")
+  } else {
+    if (!exists(ENV_META_NAME, inherits=TRUE)) stop("ENV meta object not found: ", ENV_META_NAME)
+    meta <- get(ENV_META_NAME, inherits=TRUE)
+    cat("[LOAD] meta: ENV → ", ENV_META_NAME, "\n", sep="")
+  }
+  
+  # ---------------- pick split strictly from meta ----------------
+  sl <- tolower(INPUT_SPLIT)
+  if (sl == "test")            { Xi_raw <- meta$X_test;       yi_raw <- meta$y_test;       split_used <- "test" }
+  else if (sl == "validation") { Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation" }
+  else if (sl == "train")      { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
+  else {
+    Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation"
+    if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X_test; yi_raw <- meta$y_test; split_used <- "test" }
+    if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
+  }
+  if (is.null(Xi_raw) || is.null(yi_raw)) stop("Requested split not present in metadata: ", INPUT_SPLIT)
+  cat(sprintf("[SPLIT] %s | rows(X)=%d | cols(X)=%d\n", split_used, NROW(Xi_raw), NCOL(Xi_raw)))
+  
+  # ---------------- coerce + align ----------------
+  if (is.data.frame(Xi_raw)) {
+    has_list <- vapply(Xi_raw, is.list, logical(1))
+    if (any(has_list)) cat(sprintf("[WARN] %d list-cols in X: %s\n", sum(has_list), paste(names(Xi_raw)[has_list], collapse=", ")))
+  }
+  Xi <- .as_numeric_matrix_strict(Xi_raw, nm="X")
+  yi <- .as_numeric_vector_strict(yi_raw,  nm="y")
+  if (NROW(Xi_raw) != length(yi)) stop(sprintf("[LABEL-CHK] NROW(X)=%d vs len(y)=%d", NROW(Xi_raw), length(yi)))
+  expected <- tryCatch({ nms <- meta$feature_names %||% meta$input_names %||% meta$colnames; if (is.null(nms)) colnames(Xi) else as.character(nms) }, error=function(e) colnames(Xi))
+  orig_cols <- colnames(Xi); miss <- setdiff(expected, orig_cols)
+  if (length(miss)) Xi <- cbind(Xi, matrix(0, nrow=nrow(Xi), ncol=length(miss), dimnames=list(NULL, miss)))
+  Xi <- Xi[, expected, drop=FALSE]
+  
+  # ---------------- predict (safe + stateless) ----------------
+  t0 <- proc.time()
+  out <- .safe_run_predict(
+    X = Xi, meta = meta, model_index = 1L, ML_NN = TRUE,
+    verbose = isTRUE(get0("VERBOSE_RUNPRED", inherits=TRUE, ifnotfound=FALSE)),
+    debug   = isTRUE(get0("DEBUG_RUNPRED",   inherits=TRUE, ifnotfound=FALSE))
+  )
+  P_raw <- .as_pred_matrix(
+    out, mode = if (CLASSIFICATION_MODE=="regression") "regression" else "binary",
+    meta = meta, DEBUG = isTRUE(get0("DEBUG_ASPM", inherits=TRUE, ifnotfound=FALSE))
+  )
+  if (is.null(colnames(P_raw))) colnames(P_raw) <- "pred"
+  if (!is.matrix(P_raw) || nrow(P_raw) == 0L) stop("Empty predictions from model.")
+  t_pred <- as.numeric((proc.time() - t0)[["elapsed"]])
+  
+  cat(sprintf("[PRED] dims=%dx%d | mean=%f sd=%f | min=%f p50=%f max=%f\n",
+              nrow(P_raw), ncol(P_raw), mean(P_raw), stats::sd(P_raw),
+              min(P_raw), as.numeric(stats::median(P_raw)), max(P_raw)))
+  
+  # ---------------- post-process per mode ----------------
+  if (CLASSIFICATION_MODE == "regression") {
+    P <- .apply_target_inverse_strict(P_raw, meta)
+  } else if (CLASSIFICATION_MODE == "binary") {
+    if (ncol(P_raw) == 1L) {
+      P <- P_raw
+    } else {
+      mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex)
+      P  <- matrix((ex / sm)[, 2L], ncol=1L)  # positive class prob
+    }
+  } else { # multiclass
+    mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex)
+    P  <- ex / sm
+  }
+  
+  # ---------------- metrics ----------------
+  yi_vec <- as.numeric(yi)
+  acc <- prec <- rec <- f1s <- NA_real_; cm_base <- NULL
+  if (CLASSIFICATION_MODE == "binary") {
+    y_true <- if (all(yi_vec %in% c(0,1))) as.integer(yi_vec) else as.integer(yi_vec >= 0.5)
+    p_pos  <- as.numeric(P[,1]); thr <- CLASS_THRESHOLD
+    yhat   <- as.integer(p_pos >= thr)
+    TP <- sum(yhat==1 & y_true==1); FP <- sum(yhat==1 & y_true==0)
+    TN <- sum(yhat==0 & y_true==0); FN <- sum(yhat==0 & y_true==1)
+    acc <- (TP + TN) / length(y_true)
+    prec <- if ((TP+FP)>0) TP/(TP+FP) else 0
+    rec  <- if ((TP+FN)>0) TP/(TP+FN) else 0
+    f1s  <- if ((prec+rec)>0) 2*prec*rec/(prec+rec) else 0
+    cm_base <- list(TP=TP, FP=FP, TN=TN, FN=FN)
+  } else if (CLASSIFICATION_MODE == "multiclass") {
+    yhat <- max.col(P, ties.method="first")
+    ymc  <- if (is.matrix(yi_raw) && ncol(yi_raw)>1) max.col(yi_raw, "first") else as.integer(yi_vec)
+    acc  <- mean(yhat == ymc)
+    K <- max(yhat, ymc, na.rm=TRUE)
+    macro_prec <- macro_rec <- macro_f1 <- numeric(K)
+    for (k in seq_len(K)) {
+      TPk <- sum(yhat==k & ymc==k)
+      FPk <- sum(yhat==k & ymc!=k)
+      FNk <- sum(yhat!=k & ymc==k)
+      pk <- if ((TPk+FPk)>0) TPk/(TPk+FPk) else 0
+      rk <- if ((TPk+FNk)>0) TPk/(TPk+FNk) else 0
+      fk <- if ((pk+rk)>0) 2*pk*rk/(pk+rk) else 0
+      macro_prec[k] <- pk; macro_rec[k] <- rk; macro_f1[k] <- fk
+    }
+    prec <- mean(macro_prec); rec <- mean(macro_rec); f1s <- mean(macro_f1)
+  }
+  
+  # regression-style metrics (NA where not applicable)
+  mse_val   <- tryCatch(MSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error=function(e) NA_real_)
+  mae_val   <- tryCatch(MAE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error=function(e) NA_real_)
+  rmse_val  <- tryCatch(RMSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
+  r2_val    <- tryCatch(R2(SONN, Xi, yi_vec, "regression", P, verbose_flag),    error=function(e) NA_real_)
+  mape_val  <- tryCatch(MAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
+  smape_val <- tryCatch(SMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
+  wmape_val <- tryCatch(WMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
+  mase_val  <- tryCatch(MASE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
+  
+  tuned <- tryCatch(
+    accuracy_precision_recall_f1_tuned(
+      SONN = SONN, Rdata = Xi, labels = yi_vec,
+      CLASSIFICATION_MODE = CLASSIFICATION_MODE, predicted_output = P,
+      metric_for_tuning = get0("METRIC_FOR_TUNING", inherits=TRUE, ifnotfound="accuracy"),
+      threshold_grid    = get0("THRESHOLD_GRID",    inherits=TRUE, ifnotfound=seq(0.05,0.95,by=0.01)),
+      verbose = isTRUE(get0("TUNED_VERBOSE", inherits=TRUE, ifnotfound=FALSE))
+    ),
+    error=function(e) {
+      message("[tuned] failed: ", conditionMessage(e))
+      list(accuracy=NA_real_, precision=NA_real_, recall=NA_real_, f1=NA_real_,
+           confusion_matrix=NULL, details=list(best_threshold=NA_real_, tuned_by="error"))
+    }
+  )
+  
+  mem_bytes <- tryCatch(as.numeric(utils::object.size(list(Xi=Xi,P=P,meta=meta))), error=function(e) NA_real_)
+  
+  cat(sprintf("[METR] acc=%.6f | prec=%.6f | rec=%.6f | f1=%.6f | tuned_thr=%s | tuned_f1=%s | RMSE=%s\n",
+              r6(acc), r6(prec), r6(rec), r6(f1s), r6(tuned$details$best_threshold), r6(tuned$f1), r6(rmse_val)))
+  
+  # ---------------- build flattened row like training ----------------
+  performance_metric <- list(
+    quantization_error    = NA_real_,
+    topographic_error     = NA_real_,
+    clustering_quality_db = NA_real_,
+    MSE   = r6(mse_val),  MAE = r6(mae_val),  RMSE = r6(rmse_val),  R2   = r6(r2_val),
+    MAPE  = r6(mape_val), SMAPE = r6(smape_val), WMAPE = r6(wmape_val), MASE = r6(mase_val),
+    accuracy  = r6(acc), precision = r6(prec), recall = r6(rec), f1_score = r6(f1s),
+    confusion_matrix = cm_base,
+    accuracy_precision_recall_f1_tuned = tuned,
+    speed = r6(t_pred), speed_learn = NA_real_, memory_usage = r6(mem_bytes), robustness = NA_real_,
+    custom_relative_error_binned = NA
+  )
+  relevance_metric <- list(
+    hit_rate=NA_real_, ndcg=NA_real_, diversity=NA_real_, serendipity=NA_real_,
+    precision_boolean=NA_real_, recall=NA_real_, f1_score=NA_real_, mean_precision=NA_real_,
+    novelty=NA_real_
+  )
+  
+  flat <- tryCatch(
+    rapply(list(performance_metric=performance_metric, relevance_metric=relevance_metric),
+           f=function(z) z, how="unlist"),
+    error=function(e) setNames(vector("list",0L), character(0))
+  )
+  if (length(flat)) {
+    L <- as.list(flat)
+    flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+  }
+  nms <- names(flat)
+  if (length(nms)) {
+    drop <- grepl("custom_relative_error_binned", nms, fixed=TRUE) |
+      grepl("grid_used", nms, fixed=TRUE) |
+      grepl("(^|\\.)details(\\.|$)", nms)
+    keep <- !drop & !is.na(flat)
+    flat <- flat[keep]; nms <- names(flat)
+  }
+  if (length(flat) == 0L) {
+    row_df <- data.frame(run_index=RUN_INDEX, seed=SEED, stringsAsFactors=FALSE)
+  } else {
+    out <- setNames(vector("list", length(flat)), nms)
+    num <- suppressWarnings(as.numeric(flat))
+    for (j in seq_along(flat)) out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
+    row_df <- cbind(data.frame(run_index=RUN_INDEX, seed=SEED, stringsAsFactors=FALSE),
+                    as.data.frame(out, check.names=TRUE, stringsAsFactors=FALSE))
+  }
+  colnames(row_df) <- sub("^performance_metric\\.", "", colnames(row_df))
+  colnames(row_df) <- sub("^relevance_metric\\.",   "", colnames(row_df))
+  
+  # ---------------- compact summary (results_df) ----------------
+  pred_hash <- tryCatch(digest_safe(round(P[seq_len(min(nrow(P), 2000)), , drop=FALSE], 6)), error=function(e) NA_character_)
+  results_df <- data.frame(
+    kind = if (LOAD_FROM_RDS) "RDS" else "ENV", ens = 0L, model = 1L,
+    split_used = split_used, n_pred_rows = nrow(P),
+    accuracy=r6(acc), precision=r6(prec), recall=r6(rec), f1=r6(f1s),
+    tuned_threshold = r6(tuned$details$best_threshold),
+    tuned_accuracy  = r6(tuned$accuracy), tuned_precision=r6(tuned$precision),
+    tuned_recall    = r6(tuned$recall),   tuned_f1      = r6(tuned$f1),
+    MSE=r6(mse_val), MAE=r6(mae_val), RMSE=r6(rmse_val), R2=r6(r2_val),
+    MAPE=r6(mape_val), SMAPE=r6(smape_val), WMAPE=r6(wmape_val), MASE=r6(mase_val),
+    pred_sig = pred_hash,
+    model_rds = if (LOAD_FROM_RDS) basename(attr(meta,"artifact_path") %||% NA_character_) else NA_character_,
+    artifact_used = if (LOAD_FROM_RDS) "yes" else "no",
+    stringsAsFactors=FALSE
+  )
+  
+  cat(sprintf("[RESULTS] rows=%d | cols=%d | mode=%s\n", nrow(results_df), ncol(results_df), CLASSIFICATION_MODE))
+  print(utils::head(results_df, 10))
+  
+  # ---------------- save files ----------------
+  dir.create(OUTPUT_DIR, recursive=TRUE, showWarnings=FALSE)
+  ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  
+  # ---- PREDICTIONS: aggregate-or-file ----
+  if (!is.null(AGG_PREDICTIONS_FILE)) {
+    # Create or append
+    pack <- if (file.exists(AGG_PREDICTIONS_FILE)) {
+      tryCatch(readRDS(AGG_PREDICTIONS_FILE), error=function(e) NULL)
+    } else NULL
+    if (is.null(pack) || !is.list(pack) || is.null(pack$entries)) {
+      pack <- list(
+        schema_version = "pred-agg-v1",
+        created_at     = Sys.time(),
+        flags          = list(CLASSIFICATION_MODE=CLASSIFICATION_MODE),
+        meta_source    = if (LOAD_FROM_RDS) (attr(meta,"artifact_path") %||% NA_character_) else ENV_META_NAME,
+        entries        = list(),    # per-seed entries
+        seeds          = integer(0)
+      )
+    }
+    key <- sprintf("seed_%s_run_%03d", as.character(SEED), as.integer(RUN_INDEX))
+    entry <- list(
+      run_index   = RUN_INDEX,
+      seed        = SEED,
+      results_df  = results_df,
+      prediction_sig = pred_hash
+    )
+    if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
+      entry$predictions <- list(Ensemble_Main_0_model_1 = P)
+    }
+    pack$entries[[key]] <- entry
+    if (!(SEED %in% pack$seeds)) pack$seeds <- sort(unique(c(pack$seeds, SEED)))
+    saveRDS(pack, AGG_PREDICTIONS_FILE)
+    cat("[SAVE] predictions (aggregate) → ", AGG_PREDICTIONS_FILE,
+        if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) " (payload omitted)" else "",
+        " | appended key=", key, "\n", sep="")
+    predictions_path <- AGG_PREDICTIONS_FILE
+  } else {
+    predictions_path <- file.path(
+      OUTPUT_DIR,
+      sprintf("predictions_stateless_scope-one_src-%s_%s.rds", if (LOAD_FROM_RDS) "rds" else "env", ts_stamp)
+    )
+    predict_pack <- list(
+      schema_version = "pred-v2",
+      saved_at       = Sys.time(),
+      predict_mode   = "stateless",
+      flags = list(
+        INPUT_SPLIT                   = INPUT_SPLIT,
+        CLASSIFICATION_MODE           = CLASSIFICATION_MODE,
+        CLASS_THRESHOLD               = CLASS_THRESHOLD,
+        SAVE_PREDICTIONS_COLUMN_IN_RDS = isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)
+      ),
+      meta_source     = if (LOAD_FROM_RDS) (attr(meta,"artifact_path") %||% NA_character_) else ENV_META_NAME,
+      results_table   = results_df,
+      prediction_sigs = results_df$pred_sig
+    )
+    if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
+      predict_pack$predictions <- list(Ensemble_Main_0_model_1 = P)
+    }
+    # Hard safety strip
+    if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS) && !is.null(predict_pack$predictions)) predict_pack$predictions <- NULL
+    saveRDS(predict_pack, predictions_path)
+    cat("[SAVE] predictions → ", predictions_path,
+        if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) " (payload omitted)" else "",
+        "\n", sep="")
+  }
+  
+  # ---- METRICS: aggregate-or-file ----
+  if (!is.null(AGG_METRICS_FILE)) {
+    met <- if (file.exists(AGG_METRICS_FILE)) {
+      tryCatch(readRDS(AGG_METRICS_FILE), error=function(e) NULL)
+    } else NULL
+    if (is.null(met) || !is.data.frame(met)) met <- row_df[0, , drop=FALSE]
+    # align columns
+    common <- union(colnames(met), colnames(row_df))
+    if (!all(common %in% colnames(met)))  for (cc in setdiff(common, colnames(met)))  met[[cc]] <- NA
+    if (!all(common %in% colnames(row_df)))for (cc in setdiff(common, colnames(row_df)))row_df[[cc]] <- NA
+    met <- rbind(met[,common,drop=FALSE], row_df[,common,drop=FALSE])
+    saveRDS(met, AGG_METRICS_FILE)
+    cat("[SAVE] metrics (aggregate)    → ", AGG_METRICS_FILE, " | total_rows=", nrow(met), "\n", sep="")
+    metrics_path <- AGG_METRICS_FILE
+  } else {
+    metrics_path <- file.path(
+      OUTPUT_DIR,
+      sprintf("%s_run%03d_seed%s_%s.rds", METRICS_PREFIX,
+              ifelse(is.na(RUN_INDEX), 0L, RUN_INDEX),
+              ifelse(is.na(SEED), "NA", SEED),
+              ts_stamp)
+    )
+    if (SAVE_METRICS_RDS) {
+      saveRDS(row_df, metrics_path)
+      cat("[SAVE] metrics     → ", metrics_path, " | rows=", nrow(row_df), " cols=", ncol(row_df), "\n", sep="")
+    } else {
+      metrics_path <- NA_character_
+    }
+  }
+  
+  invisible(list(
+    results_df      = results_df,
+    flat_table      = row_df,
+    predictions_rds = predictions_path,
+    metrics_rds     = metrics_path
+  ))
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+saveToDisk <- FALSE
 
 if (saveToDisk) {
   # ---- ensure output dir ----

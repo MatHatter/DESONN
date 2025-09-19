@@ -774,32 +774,42 @@ if (!exists("LAST_DEBUG", inherits = TRUE)) {
 
 
 ## ------------------------------------------------------------------------
-## Predict shim (stateless, uses extract_best_records)
+## Predict shim (stateless, uses extract_best_records) — MODE-AWARE
 ## ------------------------------------------------------------------------
 if (!exists(".run_predict", inherits = TRUE)) {
   .run_predict <- function(
     X, meta,
-    model_index = 1L,
-    ML_NN = TRUE,
+    model_index   = 1L,
+    ML_NN         = TRUE,
+    expected_mode = NULL,
     ...,
     verbose = get0("VERBOSE_RUNPRED", inherits = TRUE, ifnotfound = FALSE),
     debug   = get0("DEBUG_RUNPRED",   inherits = TRUE, ifnotfound = FALSE)
   ) {
     `%||%` <- function(x, y) if (is.null(x)) y else x
+    near <- function(a, b, tol = 1e-12) all(is.finite(a)) && all(is.finite(b)) && max(abs(a - b)) <= tol
     
     if (is.null(meta)) stop(".run_predict: 'meta' is NULL")
     X <- as.matrix(X); storage.mode(X) <- "double"
-    if (nrow(X) == 0) {
-      return(list(predicted_output = matrix(numeric(0), nrow = 0, ncol = 1)))
-    }
+    if (nrow(X) == 0) return(list(predicted_output = matrix(numeric(0), nrow = 0, ncol = 1)))
     
-    vrb   <- isTRUE(verbose)
-    dbg   <- isTRUE(debug)
+    vrb <- isTRUE(verbose)
+    dbg <- isTRUE(debug)
     stamp <- format(Sys.time(), "%H:%M:%S")
     
-    # ---- Always pull weights/biases via extract_best_records ----
+    ## ---- Resolve expected mode ----
+    if (is.null(expected_mode) || !nzchar(expected_mode)) {
+      expected_mode <- tolower(get0("CLASSIFICATION_MODE", inherits = TRUE,
+                                    ifnotfound = meta$CLASSIFICATION_MODE %||% "regression"))
+    } else {
+      expected_mode <- tolower(expected_mode)
+    }
+    if (!expected_mode %in% c("binary", "multiclass", "regression")) expected_mode <- "regression"
+    if (dbg) cat(sprintf("[MODE-DBG %s] expected_mode='%s'\n", stamp, expected_mode))
+    
+    ## ---- Extract best weights/biases ----
     rec <- extract_best_records(meta, ML_NN = ML_NN, model_index = model_index)
-    probe_last_layer(rec$weights, rec$biases, meta$y, tag = "PREDICT-ONLY")
+    
     if (dbg) {
       wdims <- tryCatch(dim(rec$weights[[1]]), error = function(e) NULL)
       cat("[RUNPRED-DBG] have weights/biases: ",
@@ -807,7 +817,7 @@ if (!exists(".run_predict", inherits = TRUE)) {
           " | W1 dims=", if (is.null(wdims)) "NA" else paste(wdims, collapse = "x"), "\n", sep = "")
     }
     
-    # ---- Model configuration (meta always first) ----
+    ## ---- Model config ----
     input_size   <- ncol(X)
     hidden_sizes <- meta$hidden_sizes %||% meta$model$hidden_sizes
     output_size  <- as.integer(meta$output_size %||% 1L)
@@ -817,30 +827,36 @@ if (!exists(".run_predict", inherits = TRUE)) {
     init_method  <- meta$init_method %||% "xavier"
     custom_scale <- meta$custom_scale %||% NULL
     
-    # ---- FIX: activation_functions must come from meta ----
-    if (dbg) {
-      cat("[RUNPRED-DBG] meta names:", paste(names(meta), collapse=","), "\n")
-    }
-    
+    if (dbg) cat("[RUNPRED-DBG] meta names:", paste(names(meta), collapse=","), "\n")
     activation_functions <- meta$activation_functions %||%
-      (meta$model$activation_functions %||%
-         (meta$preprocessScaledData$activation_functions %||% NULL))
-    
+      (meta$model$activation_functions %||% (meta$preprocessScaledData$activation_functions %||% NULL))
     if (is.null(activation_functions)) {
-      stop("[RUNPRED-ERR] activation_functions not found in meta (checked top-level, $model, and $preprocessScaledData).")
+      stop("[RUNPRED-ERR] activation_functions not found in meta.")
     }
     
     ML_NN <- isTRUE(meta$ML_NN) || isTRUE(ML_NN)
     
+    # Last activation quick probe (debug-only)
+    last_af <- tryCatch(activation_functions[[length(activation_functions)]], error = function(e) NULL)
+    last_nm <- tolower(tryCatch(attr(last_af, "name"), error = function(e) NULL) %||% "")
+    is_linear <- FALSE
+    if (is.function(last_af)) {
+      v <- c(-2,-1,0,1,2)
+      outp <- try(last_af(v), silent = TRUE)
+      if (!inherits(outp, "try-error") && is.numeric(outp) && length(outp) == length(v)) {
+        is_linear <- near(as.numeric(outp), v, tol = 1e-12) || identical(last_af, base::identity) ||
+          last_nm %in% c("identity","linear","id")
+      }
+    }
     if (dbg) {
-      cat("[RUNPRED-PROBE] hidden_sizes:", paste(hidden_sizes, collapse = ","), "\n")
-      cat("[RUNPRED-PROBE] output_size:", output_size, "\n")
-      cat("[RUNPRED-PROBE] activation_functions:",
-          paste(sapply(activation_functions, function(f) attr(f, "name") %||% "??"),
-                collapse = ","), "\n")
+      cat(sprintf("[HEAD-DBG %s] last_activation='%s' | last_is_linear=%s | mode=%s\n",
+                  stamp, if (nzchar(last_nm)) last_nm else "<unknown>", is_linear, expected_mode))
+      if (!is_linear && expected_mode != "regression") {
+        cat("[ACT-DBG] Non-linear head is correct for classification — no regression flattening concern.\n")
+      }
     }
     
-    # ---- Model skeleton ----
+    ## ---- Build a single-SONN wrapper and predict ----
     main_model <- DESONN$new(
       num_networks    = num_networks,
       input_size      = input_size,
@@ -857,7 +873,6 @@ if (!exists(".run_predict", inherits = TRUE)) {
     sonn_idx  <- min(model_index, length(main_model$ensemble))
     model_obj <- main_model$ensemble[[sonn_idx]]
     
-    # ---- Call SONN$predict with extracted weights ----
     call_args <- list(
       Rdata   = X,
       weights = rec$weights,
@@ -867,19 +882,40 @@ if (!exists(".run_predict", inherits = TRUE)) {
       debug   = dbg
     )
     
-    out <- do.call(model_obj$predict, call_args)
+    # WARNING HANDLER: be silent unless dbg==TRUE
+    out <- withCallingHandlers(
+      do.call(model_obj$predict, call_args),
+      warning = function(w) {
+        msg <- conditionMessage(w)
+        if (grepl("\\[ACT-DBG\\].*Last activation is NOT linear", msg)) {
+          if (identical(expected_mode, "regression")) {
+            # let it through for true regression
+            return(invokeRestart("muffleWarning"))  # or comment this to show the original warning
+          } else {
+            if (dbg) message(sprintf("[ACT-DBG] Non-linear last activation during predict; expected for '%s'. Silencing.", expected_mode))
+            invokeRestart("muffleWarning")
+            return(invisible())
+          }
+        }
+        # otherwise, do nothing and let other warnings behave normally
+      }
+    )
     
-    # ---- Normalize output types ----
+    ## ---- Normalize output ----
     pred <- out$predicted_output %||% out
     if (is.list(pred) && length(pred) == 1L && !is.matrix(pred)) pred <- pred[[1]]
     if (is.data.frame(pred)) pred <- as.matrix(pred)
     if (is.vector(pred))     pred <- matrix(as.numeric(pred), ncol = 1)
     pred <- as.matrix(pred); storage.mode(pred) <- "double"
     
-    if (dbg) cat(sprintf("[RUNPRED-DBG %s] raw model out: %dx%d\n",
-                         stamp, nrow(pred), ncol(pred)))
+    if (dbg) cat(sprintf("[RUNPRED-DBG %s] raw model out: %dx%d\n", stamp, nrow(pred), ncol(pred)))
     
-    assign("LAST_RUNPRED_OUT", pred, envir = LAST_DEBUG)
+    # optional capture hook (silent)
+    try({
+      env <- get("LAST_DEBUG", inherits = TRUE)
+      assign("LAST_RUNPRED_OUT", pred, envir = env)
+    }, silent = TRUE)
+    
     list(predicted_output = pred)
   }
 }
