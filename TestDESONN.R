@@ -11,7 +11,10 @@ library(dplyr)
 # CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "regression"
 CLASSIFICATION_MODE <- "binary"
 # CLASSIFICATION_MODE <- "regression"
-
+set.seed(111)
+#number of seeds;if doing seed loop
+x <- 2
+test <- TRUE
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
 lookahead_step <- 5
@@ -35,7 +38,6 @@ num_epochs <- 200
 validation_metrics <- TRUE
 test_metrics <- TRUE
 custom_scale <- 1.04349
-
 
 
 ML_NN <- TRUE
@@ -273,8 +275,9 @@ if (USE_TIME_SPLIT) {
               nrow(X_train), nrow(X_validation), nrow(X_test)))
 } else {
   ## -------------------------
-  ## Old robust random split
+  ## Alternative random split (⚠ may cause data leakage)
   ## -------------------------
+  
   total_num_samples <- nrow(X)
   desired_val  <- 800L
   desired_test <- 800L
@@ -975,13 +978,13 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-do_ensemble         <- FALSE
-num_networks        <- 1L
-num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+# do_ensemble         <- FALSE
+# num_networks        <- 1L
+# num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
 # do_ensemble         <- FALSE
-# num_networks        <- 30L          # e.g., run 5 models in one DESONN instance
+# num_networks        <- 2L          # e.g., run 5 models in one DESONN instance
 # num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
@@ -990,9 +993,9 @@ num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 # num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
-# do_ensemble         <- TRUE
-# num_networks        <- 5L          # example main size
-# num_temp_iterations <- 6L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
+do_ensemble         <- TRUE
+num_networks        <- 5L          # example main size
+num_temp_iterations <- 1L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
 #
 ## You can set the above variables BEFORE sourcing this file. The defaults below are fallbacks.
 
@@ -1306,7 +1309,7 @@ if(train) {
     # ============================
     # if (!dir.exists("artifacts_runs")) dir.create("artifacts_runs")
     
-    seeds <- 1:50
+    seeds <- 1:x
     acc_rows <- vector("list", length(seeds))
     metrics_rows <- list()
     
@@ -1315,10 +1318,10 @@ if(train) {
     
     # Number of seeds
     s <- as.character(length(seeds))
-    
+
     # File paths with seed count in the name
-    agg_pred_file <- file.path("artifacts", sprintf("predictions_stateless_scope-one_%s_%s_seeds.rds", ts_stamp, s))
-    agg_metrics_file <- file.path("artifacts", sprintf("metrics_test_%s_%s_seeds.rds", ts_stamp, s))
+    agg_pred_file <- file.path("artifacts", sprintf("SingleRun_Pretty_Test_Metrics_%s_seeds_%s.rds", s, ts_stamp))
+    agg_metrics_file <- file.path("artifacts", sprintf("SingleRun_Test_Metrics_%s_seeds_%s.rds", s, ts_stamp))
     
     for (i in seq_along(seeds)) {
       s <- seeds[i]
@@ -1429,6 +1432,7 @@ if(train) {
       if (i == length(seeds)) main_model <- run_model
       cat(sprintf("Seed %d → collected %d metrics\n", s, max(0, ncol(row_df) - 2L)))
       
+      if(test){
       #RUN TEST RESULTS TABLE
       # evaluate via ENV (example) or set LOAD_FROM_RDS=TRUE to read artifacts
       desonn_predict_eval(
@@ -1445,6 +1449,7 @@ if(train) {
         AGG_PREDICTIONS_FILE = agg_pred_file,                # << aggregate here
         AGG_METRICS_FILE     = agg_metrics_file              # << and here
       )
+      }
       
     }
     
@@ -1476,8 +1481,7 @@ if(train) {
     dir.create("artifacts", showWarnings = FALSE, recursive = TRUE)
     out_path <- file.path(
       "artifacts",
-      sprintf("train_acc_validation_metrics_runs_%s_%s_seeds.rds",
-              format(Sys.time(), "%Y%m%d_%H%M%S"), s)
+      sprintf("SingleRun_Train_Acc_Val_Metrics_%s_seeds_%s.rds", s, format(Sys.time(), "%Y%m%d_%H%M%S"))
     )
     saveRDS(results_table, out_path)
     cat("Saved multi-seed metrics table to:", out_path, " | rows=", nrow(results_table),
@@ -1512,280 +1516,156 @@ if(train) {
   }
   else {
     ## ==========================================================
-    ## SINGLE-RUN or ENSEMBLE MODE
+    ## ENSEMBLE MODE (multi-seed via x)
+    ##  - Scenario C: do_ensemble=TRUE,  num_temp_iterations == 0
+    ##  - Scenario D: do_ensemble=TRUE,  num_temp_iterations > 0
     ## ==========================================================
     
-    # ---------- stable-slot placeholder ----------
-    EMPTY_SLOT <- structure(list(.empty_slot = TRUE), class = "EMPTY_SLOT")
-    
-    # ---------- metadata compose helpers (for both modes) ----------
+    ## -------------------------
+    ## Minimal helpers
+    ## -------------------------
     '%||%' <- get0("%||%", ifnotfound = function(x, y) if (is.null(x)) y else x)
     
     main_meta_var <- function(i) sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(i))
     temp_meta_var <- function(e,i) sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(e), as.integer(i))
     
-    .list_main_vars <- function() {
-      v <- grep("^Ensemble_Main_(0|1)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-      if (!length(v)) v <- grep("^Ensemble_Main_1_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-      v
-    }
-    .get_vars_as_list <- function(vars) {
-      vars <- vars[nzchar(vars) & vapply(vars, exists, logical(1), envir = .GlobalEnv)]
-      setNames(lapply(vars, get, envir = .GlobalEnv), vars)
-    }
-    .serial_to_var <- function(s) {
-      if (!is.character(s) || !nzchar(s)) return(NA_character_)
-      p <- strsplit(s, "\\.")[[1]]
-      e <- suppressWarnings(as.integer(p[1])); i <- suppressWarnings(as.integer(p[3]))
-      if (!is.finite(e) || !is.finite(i)) return(NA_character_)
-      if (e == 1L) {
-        v1 <- main_meta_var(i)
-        if (exists(v1, envir = .GlobalEnv)) return(v1)
-        v0 <- sprintf("Ensemble_Main_0_model_%d_metadata", i)
-        if (exists(v0, envir = .GlobalEnv)) return(v0)
-        return(NA_character_)
-      } else temp_meta_var(e, i)
-    }
-    .snapshot_main_serials_safe <- function() {
-      if (exists("snapshot_main_serials_meta", mode = "function")) {
-        s <- try(snapshot_main_serials_meta(), silent = TRUE)
-        if (!inherits(s, "try-error") && length(s)) return(s)
-      }
-      mv <- .list_main_vars()
-      if (!length(mv)) return(character())
-      ord <- suppressWarnings(as.integer(sub("^Ensemble_Main_(0|1)_model_(\\d+)_metadata$", "\\2", mv)))
-      mv <- mv[order(ord)]
-      vapply(mv, function(v) {
-        md <- get(v, envir = .GlobalEnv)
-        as.character(md$model_serial_num %||% NA_character_)
-      }, character(1))
-    }
-    .latest_temp_e <- function() {
-      vs <- grep("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-      if (!length(vs)) return(NA_integer_)
-      max(suppressWarnings(as.integer(sub("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", "\\1", vs))))
-    }
-    compose_metadata_views <- function(ensembles) {
-      if (is.null(ensembles$original)) ensembles$original <- list()
-      
-      # Originals (all MAIN & all TEMP waves)
-      main_vars <- .list_main_vars()
-      ensembles$original$main_1 <- .get_vars_as_list(main_vars)
-      
-      t_all <- grep("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-      if (length(t_all)) {
-        Es <- sort(unique(as.integer(sub("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", "\\1", t_all))))
-        for (e in Es) {
-          vars_e <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e), t_all, value = TRUE)
-          ensembles$original[[sprintf("temp_%d", e)]] <- .get_vars_as_list(vars_e)
-        }
-      }
-      
-      # MAIN — current composition by slot (after prune/add if any)
-      cur_main_serials <- .snapshot_main_serials_safe()
-      if (length(cur_main_serials)) {
-        cur_vars <- vapply(cur_main_serials, .serial_to_var, character(1))
-        cur_vars <- cur_vars[nzchar(cur_vars)]
-        ensembles$main <- .get_vars_as_list(cur_vars)
-      } else {
-        # single-run fallback: current == originals
-        ensembles$main <- .get_vars_as_list(main_vars)
-      }
-      
-      # TEMP — latest wave only
-      e_last <- .latest_temp_e()
-      if (is.finite(e_last)) {
-        vars_e <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e_last),
-                       ls(.GlobalEnv), value = TRUE)
-        ensembles$temp <- .get_vars_as_list(vars_e)
-      } else {
-        ensembles$temp <- list()
-      }
-      
-      # conveniences
-      ensembles$main_names     <- names(ensembles$main)
-      ensembles$temp_names     <- names(ensembles$temp)
-      ensembles$original_names <- lapply(ensembles$original, names)
-      
-      ensembles
-    }
-    
-    # =====================================================================
-    # >>>>>>>>>>>>>>>  MAIN LOG (Resulting MAIN winners)  <<<<<<<<<<<<<<<<<
-    # =====================================================================
-    # Safe null-coalescing already set; bring small shims here so both branches can call them
-    .is_real_serial <- get0("is_real_serial",
-                            ifnotfound = function(s) is.character(s) && length(s) == 1 && nzchar(s))
-    
-    # Prefer your existing snapshot function if defined (used inside append)
-    snapshot_main_serials_meta <- get0("snapshot_main_serials_meta", ifnotfound = function() {
+    snapshot_main_serials_meta <- function() {
       vars <- grep("^Ensemble_Main_(0|1)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
       if (!length(vars)) return(character())
-      ord <- suppressWarnings(as.integer(sub("^Ensemble_Main_(0|1)_model_(\\d+)_metadata$", "\\1", vars)))
+      ord  <- suppressWarnings(as.integer(sub("^Ensemble_Main_(0|1)_model_(\\d+)_metadata$", "\\1", vars)))
       vars <- vars[order(ord)]
       vapply(vars, function(v) {
         md <- get(v, envir = .GlobalEnv)
         as.character(md$model_serial_num %||% NA_character_)
       }, character(1))
-    })
+    }
     
-    # Use your .collect_vals if present, otherwise safe fallback
-    .collect_vals_safe <- local({
-      cv <- get0(".collect_vals", inherits = TRUE)
-      if (is.function(cv)) {
-        function(serials, metric_name) cv(serials, metric_name)
+    compose_metadata_views <- function(ensembles) {
+      if (is.null(ensembles$original)) ensembles$original <- list()
+      main_vars <- grep("^Ensemble_Main_(0|1)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
+      if (length(main_vars)) {
+        ord <- as.integer(sub("^Ensemble_Main_(0|1)_model_(\\d+)_metadata$", "\\1", main_vars))
+        main_vars <- main_vars[order(ord)]
+        ensembles$original$main_1 <- setNames(lapply(main_vars, get, envir = .GlobalEnv), main_vars)
       } else {
-        function(serials, metric_name) {
-          get_metric_by_serial <- get0("get_metric_by_serial", inherits = TRUE)
-          if (!is.function(get_metric_by_serial)) {
-            stop("get_metric_by_serial() not found and .collect_vals() not available.")
-          }
-          data.frame(
-            serial = as.character(serials),
-            value  = vapply(as.character(serials),
-                            function(s) suppressWarnings(as.numeric(get_metric_by_serial(s, metric_name))),
-                            numeric(1)),
-            stringsAsFactors = FALSE
-          )
-        }
+        ensembles$original$main_1 <- list()
       }
-    })
-    
-    # lineage shims (no-ops if lineage not used)
-    .lineage_current <- get0("lineage_current", ifnotfound = function(slot) NA_character_)
-    .ensure_lineage_columns <- get0("ensure_lineage_columns", ifnotfound = function() {})
-    
-    ensure_main_log_init <- function() {
-      if (is.null(ensembles$tables)) ensembles$tables <<- list()
-      if (is.null(ensembles$tables$main_log)) {
-        ensembles$tables$main_log <<- data.frame(
-          iteration    = integer(),
-          phase        = character(),
-          slot         = integer(),
-          serial       = character(),
-          metric_name  = character(),
-          metric_value = numeric(),
-          current_serial = character(),
-          message      = character(),
-          timestamp    = as.POSIXct(character()),
-          stringsAsFactors = FALSE
-        )
-        rownames(ensembles$tables$main_log) <<- character(0)
+      ensembles$main <- ensembles$original$main_1
+      
+      t_all <- grep("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
+      if (length(t_all)) {
+        Es <- sort(unique(as.integer(sub("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", "\\1", t_all))))
+        e_last <- tail(Es, 1)
+        vars_e <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e_last), t_all, value = TRUE)
+        ord <- as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e_last), "\\1", vars_e))
+        vars_e <- vars_e[order(ord)]
+        ensembles$temp <- setNames(lapply(vars_e, get, envir = .GlobalEnv), vars_e)
+      } else {
+        ensembles$temp <- list()
       }
-      if (is.null(ensembles$tables$main_log_path)) {
-        ensembles$tables$main_log_path <<- file.path(
-          getwd(), sprintf("main_log_%s.rds", format(Sys.time(), "%Y%m%d_%H%M%S"))
-        )
+      ensembles
+    }
+    
+    .metric_minimize <- function(metric) {
+      isTRUE(get0(paste0("MINIMIZE_", metric), ifnotfound = FALSE, inherits = TRUE))
+    }
+    
+    .reset_ensemble_globals <- function() {
+      vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                   ls(.GlobalEnv), value = TRUE)
+      if (length(vars)) rm(list = vars, envir = .GlobalEnv)
+      if (exists("ensembles", inherits = TRUE)) {
+        try(rm(ensembles, inherits = TRUE), silent = TRUE)
       }
     }
-    .align_rows_to_main_log <- function(rows) {
-      logdf  <- ensembles$tables$main_log
-      target <- names(logdf)
-      nlog   <- nrow(logdf)
-      nrows  <- nrow(rows)
-      add_missing <- setdiff(target, names(rows))
-      if (length(add_missing)) {
-        for (nm in add_missing) {
-          if (nm %in% c("iteration","slot")) rows[[nm]] <- rep(NA_integer_, nrows)
-          else if (nm %in% c("metric_value")) rows[[nm]] <- rep(NA_real_, nrows)
-          else if (nm %in% c("timestamp")) rows[[nm]] <- as.POSIXct(rep(NA, nrows))
-          else rows[[nm]] <- rep(NA_character_, nrows)
-        }
-      }
-      extras <- setdiff(names(rows), target)
-      if (length(extras)) {
-        for (nm in extras) {
-          col <- rows[[nm]]
-          if (is.integer(col)) {
-            ensembles$tables$main_log[[nm]] <<- if (nlog) rep(NA_integer_, nlog) else integer(0)
-          } else if (is.numeric(col)) {
-            ensembles$tables$main_log[[nm]] <<- if (nlog) rep(NA_real_, nlog) else numeric(0)
-          } else if (inherits(col, "POSIXct")) {
-            ensembles$tables$main_log[[nm]] <<- if (nlog) as.POSIXct(rep(NA, nlog)) else as.POSIXct(character())
-          } else {
-            ensembles$tables$main_log[[nm]] <<- if (nlog) rep(NA_character_, nlog) else character(0)
+    
+    .collect_grouped_from_main <- function(ens) {
+      perf_rows <- list(); relev_rows <- list()
+      if (!is.null(ens$main) && length(ens$main)) {
+        nm <- names(ens$main)
+        for (i in seq_along(ens$main)) {
+          md <- ens$main[[i]]; if (is.null(md) || !is.list(md)) next
+          serial <- as.character(md$model_serial_num %||% NA_character_)
+          slot   <- suppressWarnings(as.integer(sub(".*model_(\\d+)_metadata$", "\\1", nm[i]))); if (!is.finite(slot)) slot <- i
+          if (is.list(md$performance_metric)) {
+            for (mn in names(md$performance_metric)) {
+              val <- md$performance_metric[[mn]]
+              if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
+                perf_rows[[length(perf_rows)+1L]] <- data.frame(slot=slot, serial=serial, metric_name=mn, metric_value=as.numeric(val), stringsAsFactors=FALSE)
+              }
+            }
           }
-        }
-        target <- names(ensembles$tables$main_log)
-      }
-      rows <- rows[, target, drop = FALSE]
-      rownames(rows) <- NULL
-      rows
-    }
-    append_main_log_snapshot <- function(phase, iteration = NA_integer_, message = "") {
-      ensure_main_log_init()
-      .ensure_lineage_columns()
-      main_serials <- snapshot_main_serials_meta()
-      metric_name  <- get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
-      ts_now <- Sys.time()
-      if (!length(main_serials)) {
-        empty_row <- data.frame(
-          iteration     = as.integer(iteration),
-          phase         = as.character(phase),
-          slot          = NA_integer_,
-          serial        = NA_character_,
-          metric_name   = as.character(metric_name),
-          metric_value  = NA_real_,
-          current_serial= NA_character_,
-          message       = as.character(message),
-          timestamp     = ts_now,
-          stringsAsFactors = FALSE
-        )
-        empty_row <- .align_rows_to_main_log(empty_row)
-        ensembles$tables$main_log <<- rbind(ensembles$tables$main_log, empty_row)
-        saveRDS(ensembles$tables$main_log, ensembles$tables$main_log_path)
-        return(invisible())
-      }
-      vals <- .collect_vals_safe(main_serials, metric_name)
-      rows <- data.frame(
-        iteration     = rep_len(as.integer(iteration), length(main_serials)),
-        phase         = rep_len(as.character(phase),   length(main_serials)),
-        slot          = seq_along(main_serials),
-        serial        = as.character(main_serials),
-        metric_name   = rep_len(as.character(metric_name), length(main_serials)),
-        metric_value  = as.numeric(vals$value),
-        current_serial= NA_character_,
-        message       = rep_len(as.character(message), length(main_serials)),
-        timestamp     = rep(ts_now, length(main_serials)),
-        stringsAsFactors = FALSE
-      )
-      if (!is.null(ensembles$tables$lineage) && length(ensembles$tables$lineage)) {
-        max_depth <- 0L
-        for (v in ensembles$tables$lineage) max_depth <- max(max_depth, length(v))
-        if (max_depth > 0L) {
-          for (k in seq_len(max_depth)) {
-            nm <- sprintf("lineage_%d", k)
-            if (!(nm %in% names(rows))) rows[[nm]] <- NA_character_
-          }
-        }
-        for (i in seq_len(nrow(rows))) {
-          s <- rows$slot[i]
-          rows$current_serial[i] <- .lineage_current(s)
-          v <- ensembles$tables$lineage[[s]] %||% character(0)
-          if (length(v)) {
-            for (k in seq_along(v)) {
-              nm <- sprintf("lineage_%d", k)
-              rows[[nm]][i] <- v[k]
+          if (is.list(md$relevance_metric)) {
+            for (mn in names(md$relevance_metric)) {
+              val <- md$relevance_metric[[mn]]
+              if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
+                relev_rows[[length(relev_rows)+1L]] <- data.frame(slot=slot, serial=serial, metric_name=mn, metric_value=as.numeric(val), stringsAsFactors=FALSE)
+              }
             }
           }
         }
       }
-      rows <- .align_rows_to_main_log(rows)
-      ensembles$tables$main_log <<- rbind(ensembles$tables$main_log, rows)
-      saveRDS(ensembles$tables$main_log, ensembles$tables$main_log_path)
-      invisible()
+      list(
+        perf_df  = if (length(perf_rows))  do.call(rbind, perf_rows)  else NULL,
+        relev_df = if (length(relev_rows)) do.call(rbind, relev_rows) else NULL
+      )
     }
-    # =====================================================================
-    # <<<<<<<<<<<<<<<<<<<<<<<<<  MAIN LOG ENDS  >>>>>>>>>>>>>>>>>>>>>>>>>>>
-    # =====================================================================
     
-    # =========================================================================================
-    # Branch A: SINGLE-RUN (no ensembles/prune/add)  — your Scenario A/B
-    # =========================================================================================
-    if (!isTRUE(do_ensemble)) {
-      cat(sprintf("Single-run mode → training %d model%s inside one DESONN instance, skipping ensemble logic.\n",
-                  as.integer(num_networks), if (num_networks == 1L) "" else "s"))
+    get_temp_serials_meta <- function(iter_j) {
+      e <- iter_j + 1L
+      vars <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e), ls(.GlobalEnv), value = TRUE)
+      if (!length(vars)) return(character())
+      ord <- as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e), "\\1", vars))
+      vars <- vars[order(ord)]
+      vapply(vars, function(v) {
+        md <- get(v, envir = .GlobalEnv)
+        s  <- md$model_serial_num
+        if (!is.null(s) && nzchar(as.character(s))) as.character(s) else NA_character_
+      }, character(1))
+    }
+    
+    ## -------------------------
+    ## New helper: resolve_env_meta
+    ## -------------------------
+    resolve_env_meta <- function(slot = 1L, prefer = c("main","temp"), temp_iter_fallback = 1L) {
+      prefer <- match.arg(prefer)
+      cand <- if (prefer == "main") {
+        c(sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(slot)),
+          sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(temp_iter_fallback), as.integer(slot)))
+      } else {
+        c(sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(temp_iter_fallback), as.integer(slot)),
+          sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(slot)))
+      }
+      hit <- cand[vapply(cand, exists, logical(1), envir = .GlobalEnv, inherits = TRUE)]
+      if (length(hit)) return(hit[[1L]])
+      stop(sprintf("resolve_env_meta: No MAIN/TEMP metadata found for slot=%d (tried: %s)",
+                   as.integer(slot), paste(cand, collapse = ", ")))
+    }
+    
+    ## -------------------------
+    ## Seed loop
+    ## -------------------------
+    seeds <- 1:x
+    metrics_rows <- vector("list", length(seeds))
+    ens_rows     <- vector("list", length(seeds))
+    ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    
+    TARGET_METRIC <- get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
+    num_temp_iterations <- as.integer(num_temp_iterations %||% 0L)
+    
+    total_seeds_chr <- as.character(length(seeds))
+    agg_pred_file   <- file.path("artifacts", sprintf("Ensemble_Pretty_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    agg_metrics_file<- file.path("artifacts", sprintf("Ensemble_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    
+    for (ii in seq_along(seeds)) {
+      s <- seeds[ii]
+      set.seed(s)
+      cat(sprintf("[ENSEMBLE] Seed %d/%d\n", s, length(seeds)))
       
+      .reset_ensemble_globals()
+      ensembles <- list(main_ensemble = list(), temp_ensemble = list(), tables = NULL)
+      
+      ## ===== MAIN model (common to C & D) =====
       main_model <- DESONN$new(
         num_networks    = max(1L, as.integer(num_networks)),
         input_size      = input_size,
@@ -1793,37 +1673,15 @@ if(train) {
         output_size     = output_size,
         N               = N,
         lambda          = lambda,
-        ensemble_number = 0L,
-        ensembles       = NULL,
+        ensemble_number = 1L,
+        ensembles       = ensembles,
         ML_NN           = ML_NN,
         method          = init_method,
         custom_scale    = custom_scale
       )
-      
-      # Apply per-SONN plotting flags
-      if (length(main_model$ensemble)) {
-        for (m in seq_along(main_model$ensemble)) {
-          main_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
-            accuracy_plot   = isTRUE(accuracy_plot),
-            saturation_plot = isTRUE(saturation_plot),
-            max_weight_plot = isTRUE(max_weight_plot),
-            viewAllPlots    = isTRUE(viewAllPlots),
-            verbose         = isTRUE(verbose)
-          )
-          main_model$ensemble[[m]]$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
-            performance_high_mean_plots = isTRUE(performance_high_mean_plots),
-            performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
-            relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
-            relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
-            viewAllPlots                = isTRUE(viewAllPlots),
-            verbose                     = isTRUE(verbose)
-          )
-        }
-      }
-      
-      invisible(main_model$train(
+      model_results_main <- main_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
-        lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs, use_biases=use_biases,
+        lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs, use_biases=use_biases,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
         activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
         dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
@@ -1833,441 +1691,34 @@ if(train) {
         shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights, preprocessScaledData=preprocessScaledData,
         X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
         train=train, viewTables=viewTables, verbose=verbose
-      ))
-      
-      # tuck the run into the container (compat with downstream)
-      if (is.null(ensembles$main_ensemble)) ensembles$main_ensemble <- list()
+      )
       ensembles$main_ensemble[[1]] <- main_model
       
-      # mirror metadata views (original/main/temp)
-      ensembles <- compose_metadata_views(ensembles)
-      
-      # optional: quick summary
-      if (exists("print_ensembles_summary", mode = "function")) {
-        print_ensembles_summary(ensembles)
-      }
-      
-      # >>> MAIN winners snapshot for SINGLE-RUN
-      append_main_log_snapshot(phase = "single_final", iteration = NA_integer_, message = "Single-run MAIN composition")
-      
-    } 
-    else {
-      
-      # =======================================================================================
-      # Branch B: ENSEMBLE MODE (MAIN + TEMP prune/add)
-      # =======================================================================================
-      
-      # ------- logging helpers -------
-      snapshot_main_serials_meta <- function() {
-        vars <- grep("^Ensemble_Main_1_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-        if (!length(vars)) return(character())
-        ord <- as.integer(sub("^Ensemble_Main_1_model_(\\d+)_metadata$", "\\1", vars))
-        vars <- vars[order(ord)]
-        vapply(vars, function(v) {
-          md <- get(v, envir = .GlobalEnv)
-          s  <- md$model_serial_num
-          if (!is.null(s) && nzchar(as.character(s))) as.character(s) else NA_character_
-        }, character(1))
-      }
-      get_temp_serials_meta <- function(j) {
-        e <- j + 1
-        vars <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e), ls(.GlobalEnv), value = TRUE)
-        if (!length(vars)) return(character())
-        ord <- as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e), "\\1", vars))
-        vars <- vars[order(ord)]
-        vapply(vars, function(v) {
-          md <- get(v, envir = .GlobalEnv)
-          s  <- md$model_serial_num
-          if (!is.null(s) && nzchar(as.character(s))) as.character(s) else NA_character_
-        }, character(1))
-      }
-      
-      if (is.null(ensembles$tables)) ensembles$tables <- list()
-      
-      if (is.null(ensembles$tables$movement_log)) {
-        ensembles$tables$movement_log <- data.frame(
-          iteration      = integer(),
-          phase          = character(),
-          slot           = integer(),
-          role           = character(),
-          serial         = character(),
-          metric_name    = character(),
-          metric_value   = numeric(),
-          current_serial = character(),
-          message        = character(),
-          timestamp      = as.POSIXct(character()),
-          stringsAsFactors = FALSE
-        )
-        rownames(ensembles$tables$movement_log) <- character(0)
-      }
-      if (is.null(ensembles$tables$movement_log_path)) {
-        ensembles$tables$movement_log_path <- file.path(getwd(), sprintf("movement_log_%s.rds", format(Sys.time(), "%Y%m%d_%H%M%S")))
-      }
-      if (is.null(ensembles$tables$change_log)) {
-        ensembles$tables$change_log <- data.frame(
-          iteration    = integer(),
-          role         = character(),
-          serial       = character(),
-          metric_name  = character(),
-          metric_value = numeric(),
-          message      = character(),
-          timestamp    = as.POSIXct(character()),
-          stringsAsFactors = FALSE
-        )
-      }
-      if (is.null(ensembles$tables$change_log_path)) {
-        ensembles$tables$change_log_path <- file.path(getwd(), sprintf("change_log_%s.rds", format(Sys.time(), "%Y%m%d_%H%M%S")))
-      }
-      if (is.null(ensembles$tables$lineage)) ensembles$tables$lineage <- vector("list", length = 0)
-      
-      init_lineage_if_needed <- function(main_serials) {
-        n <- length(main_serials)
-        if (length(ensembles$tables$lineage) < n) {
-          length(ensembles$tables$lineage) <<- n
-        }
-        for (i in seq_len(n)) {
-          if (is.null(ensembles$tables$lineage[[i]]) || !length(ensembles$tables$lineage[[i]])) {
-            s <- main_serials[i]
-            if (is_real_serial(s)) ensembles$tables$lineage[[i]] <<- c(as.character(s))
-          }
-        }
-      }
-      lineage_append <- function(slot, new_serial) {
-        if (slot <= 0) return()
-        if (is.null(ensembles$tables$lineage[[slot]])) ensembles$tables$lineage[[slot]] <<- character(0)
-        ensembles$tables$lineage[[slot]] <<- c(ensembles$tables$lineage[[slot]], as.character(new_serial))
-      }
-      lineage_current <- function(slot) {
-        v <- ensembles$tables$lineage[[slot]]
-        if (!length(v)) return(NA_character_)
-        v[length(v)]
-      }
-      ensure_lineage_columns <- function() {
-        max_depth <- 0L
-        for (v in ensembles$tables$lineage) max_depth <- max(max_depth, length(v))
-        for (k in seq_len(max_depth)) {
-          nm <- sprintf("lineage_%d", k)
-          if (!nm %in% names(ensembles$tables$movement_log)) {
-            if (nrow(ensembles$tables$movement_log))
-              ensembles$tables$movement_log[[nm]] <- rep(NA_character_, nrow(ensembles$tables$movement_log))
-            else
-              ensembles$tables$movement_log[[nm]] <- character(0)
-          }
-        }
-      }
-      .align_rows_to_log <- function(rows) {
-        logdf  <- ensembles$tables$movement_log
-        target <- names(logdf)
-        nlog   <- nrow(logdf)
-        nrows  <- nrow(rows)
-        add_missing_to_rows <- setdiff(target, names(rows))
-        if (length(add_missing_to_rows)) {
-          for (nm in add_missing_to_rows) {
-            if (nm %in% c("iteration","slot")) rows[[nm]] <- rep(NA_integer_, nrows)
-            else if (nm %in% c("metric_value")) rows[[nm]] <- rep(NA_real_, nrows)
-            else if (nm %in% c("timestamp")) rows[[nm]] <- as.POSIXct(rep(NA, nrows))
-            else rows[[nm]] <- rep(NA_character_, nrows)
-          }
-        }
-        extra_cols <- setdiff(names(rows), target)
-        if (length(extra_cols)) {
-          for (nm in extra_cols) {
-            col <- rows[[nm]]
-            if (is.integer(col)) {
-              ensembles$tables$movement_log[[nm]] <<- if (nlog) rep(NA_integer_, nlog) else integer(0)
-            } else if (is.numeric(col)) {
-              ensembles$tables$movement_log[[nm]] <<- if (nlog) rep(NA_real_, nlog) else numeric(0)
-            } else if (inherits(col, "POSIXct")) {
-              ensembles$tables$movement_log[[nm]] <<- if (nlog) as.POSIXct(rep(NA, nlog)) else as.POSIXct(character())
-            } else {
-              ensembles$tables$movement_log[[nm]] <<- if (nlog) rep(NA_character_, nlog) else character(0)
-            }
-          }
-        }
-        rows <- rows[, names(ensembles$tables$movement_log), drop = FALSE]
-        rownames(rows) <- NULL
-        rows
-      }
-      append_movement_block_named <- function(rows, row_ids, fill_lineage_for_slots = NULL) {
-        if (!NROW(rows)) return(invisible())
-        ensure_lineage_columns()
-        line_cols <- grep("^lineage_\\d+$", names(ensembles$tables$movement_log), value = TRUE)
-        for (nm in line_cols) if (!(nm %in% names(rows))) rows[[nm]] <- NA_character_
-        if (!("current_serial" %in% names(rows))) rows$current_serial <- NA_character_
-        if (!is.null(fill_lineage_for_slots)) {
-          fs <- rep_len(fill_lineage_for_slots, nrow(rows))
-          for (idx in seq_len(nrow(rows))) {
-            slot <- fs[idx]
-            if (!is.na(slot) && slot > 0) {
-              rows$current_serial[idx] <- lineage_current(slot)
-              v <- ensembles$tables$lineage[[slot]] %||% character(0)
-              if (length(v)) {
-                for (k in seq_along(v)) {
-                  nm <- sprintf("lineage_%d", k)
-                  if (!(nm %in% names(rows))) rows[[nm]] <- NA_character_
-                  rows[[nm]][idx] <- v[k]
-                }
-              }
-            }
-          }
-        }
-        rows <- .align_rows_to_log(rows)
-        rn <- as.character(row_ids)
-        rn[rn == ""] <- paste0("ChangeRow_", seq_len(sum(rn == "")), "_", format(Sys.time(), "%H%M%S%OS3"))
-        rownames(rows) <- rn
-        ensembles$tables$movement_log <<- rbind(ensembles$tables$movement_log, rows)
-        saveRDS(ensembles$tables$movement_log, ensembles$tables$movement_log_path)
-      }
-      append_change_rows <- function(rows) {
-        if (!NROW(rows)) return(invisible())
-        ensembles$tables$change_log <<- rbind(ensembles$tables$change_log, rows)
-        saveRDS(ensembles$tables$change_log, ensembles$tables$change_log_path)
-      }
-      
-      # ---------- PRUNE ----------
-      prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
-        minimize     <- .metric_minimize(target_metric_name_worst)
-        main_serials <- snapshot_main_serials_meta()
-        main_vals    <- if (length(main_serials)) vapply(main_serials, get_metric_by_serial, numeric(1), target_metric_name_worst) else numeric(0)
-        
-        tbl <- data.frame(slot = seq_along(main_serials), serial = main_serials, value = main_vals, stringsAsFactors = FALSE)
-        cat("\n==== PRUNE DIAGNOSTICS ====\n")
-        cat("Metric:", target_metric_name_worst, " | Direction:", if (minimize) "MINIMIZE (lower better)" else "MAXIMIZE (higher better)", "\n")
-        if (!NROW(tbl)) { cat("(no main rows)\n"); return(NULL) }
-        print(tbl, row.names = FALSE)
-        if (all(!is.finite(tbl$value))) { cat("No finite main values; abort prune.\n"); return(NULL) }
-        
-        worst_idx  <- if (minimize) which.max(tbl$value) else which.min(tbl$value)
-        worst_row  <- tbl[worst_idx, , drop = FALSE]
-        worst_slot <- as.integer(worst_row$slot)
-        cat(sprintf("Chosen WORST serial = %s | value=%.6f | slot=%d\n", worst_row$serial, worst_row$value, worst_slot))
-        
-        if (!(length(ensembles$main_ensemble) >= 1L)) { cat("No main container; abort.\n"); return(NULL) }
-        main_container <- ensembles$main_ensemble[[1]]
-        if (is.null(main_container$ensemble) || !length(main_container$ensemble)) { cat("Main has no models; abort.\n"); return(NULL) }
-        if (worst_slot < 1L || worst_slot > length(main_container$ensemble)) { cat("Worst slot OOB; abort.\n"); return(NULL) }
-        
-        removed_model <- main_container$ensemble[[worst_slot]]
-        main_container$ensemble[[worst_slot]] <- EMPTY_SLOT
-        ensembles$main_ensemble[[1]] <- main_container
-        
-        list(
-          removed_network     = removed_model,
-          updated_ensembles   = ensembles,
-          worst_model_index   = worst_slot,
-          worst_slot          = worst_slot,
-          worst_serial        = as.character(worst_row$serial),
-          worst_value         = as.numeric(worst_row$value)
-        )
-      }
-      
-      # ---------- ADD ----------
-      add_network_to_ensemble <- function(ensembles, target_metric_name_best,
-                                          removed_network, ensemble_number,
-                                          worst_model_index, removed_serial, removed_value) {
-        minimize     <- .metric_minimize(target_metric_name_best)
-        temp_serials <- get_temp_serials_meta(ensemble_number)
-        temp_vals    <- if (length(temp_serials)) vapply(temp_serials, get_metric_by_serial, numeric(1), target_metric_name_best) else numeric(0)
-        
-        cat("\n==== ADD DIAGNOSTICS ====\n")
-        if (!length(temp_serials)) {
-          cat("No TEMP serials; abort add.\n")
-          return(list(
-            updated_ensembles = ensembles,
-            removed_network   = removed_network,
-            added_network     = NULL,
-            added_serial      = NA_character_,
-            added_value       = NA_real_,
-            worst_slot        = worst_model_index
-          ))
-        }
-        
-        temp_tbl <- data.frame(temp_serial = temp_serials, value = temp_vals, stringsAsFactors = FALSE)
-        print(temp_tbl, row.names = FALSE)
-        
-        best_idx <- if (minimize) which.min(temp_tbl$value) else which.max(temp_tbl$value)
-        best_row <- temp_tbl[best_idx, , drop = FALSE]
-        best_val <- as.numeric(best_row$value)
-        
-        removed_val <- removed_value
-        if (!is.finite(removed_val) && is_real_serial(removed_serial)) {
-          removed_val <- get_metric_by_serial(removed_serial, target_metric_name_best)
-        }
-        
-        cat(sprintf("Compare TEMP(best) %s=%.6f vs REMOVED %s on %s (%s better)\n",
-                    best_row$temp_serial, best_val,
-                    if (is.finite(removed_val)) sprintf("%.6f", removed_val) else "NA",
-                    target_metric_name_best, if (minimize) "lower" else "higher"))
-        
-        if (!is.finite(best_val) || !is.finite(removed_val) ||
-            !(if (minimize) best_val < removed_val else best_val > removed_val)) {
-          cat("→ KEEP REMOVED (TEMP not better or NA).\n")
-          return(list(
-            updated_ensembles = ensembles,
-            removed_network   = removed_network,
-            added_network     = NULL,
-            added_serial      = NA_character_,
-            added_value       = NA_real_,
-            worst_slot        = worst_model_index
-          ))
-        }
-        
-        worst_slot <- as.integer(worst_model_index)
-        if (!(length(ensembles$main_ensemble) >= 1L)) { cat("No main container; abort add.\n"); return(invisible()) }
-        main_container <- ensembles$main_ensemble[[1]]
-        if (is.null(main_container$ensemble) || !length(main_container$ensemble)) { cat("Main has no models; abort add.\n"); return(invisible()) }
-        if (worst_slot < 1L || worst_slot > length(main_container$ensemble)) { cat("Worst slot OOB; abort add.\n"); return(invisible()) }
-        
-        temp_parts <- strsplit(best_row$temp_serial, "\\.")[[1]]
-        temp_model_index <- suppressWarnings(as.integer(temp_parts[3]))
-        if (!is.finite(temp_model_index) || is.na(temp_model_index)) {
-          cat("Could not parse TEMP model index; abort add.\n")
-          return(list(
-            updated_ensembles = ensembles,
-            removed_network   = removed_network,
-            added_network     = NULL,
-            added_serial      = NA_character_,
-            added_value       = NA_real_,
-            worst_slot        = worst_slot
-          ))
-        }
-        
-        if (!(length(ensembles$temp_ensemble) >= 1L) || is.null(ensembles$temp_ensemble[[1]]$ensemble)) {
-          cat("TEMP container not available; abort add.\n")
-          return(list(
-            updated_ensembles = ensembles,
-            removed_network   = removed_network,
-            added_network     = NULL,
-            added_serial      = NA_character_,
-            added_value       = NA_real_,
-            worst_slot        = worst_slot
-          ))
-        }
-        temp_container <- ensembles$temp_ensemble[[1]]
-        if (temp_model_index < 1L || temp_model_index > length(temp_container$ensemble)) {
-          cat("TEMP model index OOB; abort add.\n")
-          return(list(
-            updated_ensembles = ensembles,
-            removed_network   = removed_network,
-            added_network     = NULL,
-            added_serial      = NA_character_,
-            added_value       = NA_real_,
-            worst_slot        = worst_slot
-          ))
-        }
-        
-        candidate_model <- temp_container$ensemble[[temp_model_index]]
-        main_container$ensemble[[worst_slot]] <- candidate_model
-        ensembles$main_ensemble[[1]] <- main_container
-        
-        # metadata swap to reflect move
-        temp_e  <- suppressWarnings(as.integer(temp_parts[1]))
-        tvar <- temp_meta_var(temp_e, temp_model_index)
-        mvar <- main_meta_var(worst_slot)
-        if (exists(tvar, envir = .GlobalEnv)) {
-          tmd <- get(tvar, envir = .GlobalEnv)
-          tmd$model_serial_num <- as.character(best_row$temp_serial)
-          assign(mvar, tmd, envir = .GlobalEnv)
-        }
-        
-        lineage_append(worst_slot, best_row$temp_serial)
-        cat(sprintf("→ REPLACED MAIN model slot %d: %s -> %s (and updated metadata)\n",
-                    worst_slot, removed_serial, best_row$temp_serial))
-        
-        list(
-          updated_ensembles = ensembles,
-          removed_network   = removed_network,
-          added_network     = candidate_model,
-          added_serial      = as.character(best_row$temp_serial),
-          added_value       = best_val,
-          worst_slot        = worst_slot
-        )
-      }
-      
-      ## ====== PHASE 1: build MAIN holder ======
-      if (isTRUE(firstRun)) {
-        cat("First run: initializing main_ensemble\n")
-        main_model <- DESONN$new(
-          num_networks    = max(1L, as.integer(num_networks)),
-          input_size      = input_size,
-          hidden_sizes    = hidden_sizes,
-          output_size     = output_size,
-          N               = N,
-          lambda          = lambda,
-          ensemble_number = 1L,
-          ensembles       = ensembles,
-          ML_NN           = ML_NN,
-          method          = init_method,
-          custom_scale    = custom_scale
-        )
-        
-        if (length(main_model$ensemble)) {
-          for (m in seq_along(main_model$ensemble)) {
-            main_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
-              accuracy_plot   = isTRUE(accuracy_plot),
-              saturation_plot = isTRUE(saturation_plot),
-              max_weight_plot = isTRUE(max_weight_plot),
-              viewAllPlots    = isTRUE(viewAllPlots),
-              verbose         = isTRUE(verbose)
-            )
-            main_model$ensemble[[m]]$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
-              performance_high_mean_plots = isTRUE(performance_high_mean_plots),
-              performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
-              relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
-              relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
-              viewAllPlots                = isTRUE(viewAllPlots),
-              verbose                     = isTRUE(verbose)
-            )
-          }
-        }
-        
-        invisible(main_model$train(
-          Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
-          lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs, use_biases=use_biases,
-          threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns,
-          activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
-          dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
-          beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
-          batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
-          epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
-          shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights, preprocessScaledData=preprocessScaledData,
-          X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
-          train=train, viewTables=viewTables, verbose=verbose
-        ))
-        ensembles$main_ensemble[[1]] <- main_model
-        firstRun <- FALSE
-        
-        # mirror metadata views immediately
+      ## ===== Scenario C =====
+      if (num_temp_iterations == 0L) {
         ensembles <- compose_metadata_views(ensembles)
+        if (isTRUE(test)) {
+          ENV_META_NAME <- resolve_env_meta(1, "main", 1L)
+          desonn_predict_eval(
+            LOAD_FROM_RDS = FALSE,
+            ENV_META_NAME = ENV_META_NAME,
+            INPUT_SPLIT   = "test",
+            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+            RUN_INDEX = ii,
+            SEED      = s,
+            OUTPUT_DIR = "artifacts",
+            SAVE_METRICS_RDS = FALSE,
+            METRICS_PREFIX   = "metrics_test",
+            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,
+            AGG_PREDICTIONS_FILE = agg_pred_file,
+            AGG_METRICS_FILE     = agg_metrics_file
+          )
+        }
       }
       
-      ## ====== PHASE 2: TEMP iterations (prune/add) ======
-      debug_prune <- TRUE
-      num_temp_iterations <- as.integer(num_temp_iterations %||% 0L)
-      
-      if (num_temp_iterations > 0L) {
+      ## ===== Scenario D =====
+      else {
         for (j in seq_len(num_temp_iterations)) {
-          cat("\n— TEMP Iteration", j, ": build TEMP and run prune/add —\n")
-          ts_iter <- Sys.time()
-          
-          main_before <- snapshot_main_serials_meta()
-          init_lineage_if_needed(main_before)
-          main_tbl_before <- .collect_vals(main_before, metric_name)
-          rows_before <- if (length(main_before)) {
-            data.frame(
-              iteration = j, phase = "main_before", slot = seq_along(main_before),
-              role = "main", serial = main_before, metric_name = metric_name,
-              metric_value = main_tbl_before$value, current_serial = NA_character_,
-              message = "", timestamp = ts_iter, stringsAsFactors = FALSE
-            )
-          } else data.frame()
-          ids_before <- if (length(main_before)) vapply(seq_along(main_before), function(i) main_meta_var(i), character(1)) else character(0)
-          append_movement_block_named(rows_before, ids_before, fill_lineage_for_slots = if (length(main_before)) seq_along(main_before) else NULL)
-          
-          # >>> MAIN winners snapshot BEFORE prune/add
-          append_main_log_snapshot(phase = "main_before", iteration = j, message = "Pre TEMP/prune-add MAIN composition")
-          
-          ensembles$temp_ensemble <- vector("list", 1L)
           temp_model <- DESONN$new(
             num_networks    = max(1L, as.integer(num_networks)),
             input_size      = input_size,
@@ -2281,703 +1732,116 @@ if(train) {
             method          = init_method,
             custom_scale    = custom_scale
           )
-          ensembles$temp_ensemble[[1]] <- temp_model
-          
-          if (length(temp_model$ensemble)) {
-            for (m in seq_along(temp_model$ensemble)) {
-              temp_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
-                accuracy_plot   = isTRUE(accuracy_plot),
-                saturation_plot = isTRUE(saturation_plot),
-                max_weight_plot = isTRUE(max_weight_plot),
-                viewAllPlots    = isTRUE(viewAllPlots),
-                verbose         = isTRUE(verbose)
-              )
-              temp_model$ensemble[[m]]$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
-                performance_high_mean_plots = isTRUE(performance_high_mean_plots),
-                performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
-                relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
-                relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
-                viewAllPlots                = isTRUE(viewAllPlots),
-                verbose                     = isTRUE(verbose)
-              )
-            }
-          }
-          
           invisible(temp_model$train(
-            Rdata=X, labels=y, lr=lr, ensemble_number=j+1L, num_epochs=num_epochs,
+            Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
+            lr_min=lr_min, ensemble_number=j+1L, num_epochs=num_epochs, use_biases=use_biases,
             threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
             activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
             dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
             beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
             batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
             epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
-            shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights,
+            shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights, preprocessScaledData=preprocessScaledData,
             X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
             train=train, viewTables=viewTables, verbose=verbose
           ))
-          
-          t_sers <- get_temp_serials_meta(j)
-          t_vals <- if (length(t_sers)) vapply(t_sers, get_metric_by_serial, numeric(1), metric_name) else numeric(0)
-          rows_temp <- if (length(t_sers)) {
-            data.frame(
-              iteration = j, phase = "temp", slot = NA_integer_,
-              role = "temp", serial = t_sers, metric_name = metric_name,
-              metric_value = t_vals, current_serial = NA_character_,
-              message = "", timestamp = ts_iter, stringsAsFactors = FALSE
-            )
-          } else data.frame()
-          ids_temp <- if (length(t_sers)) vapply(seq_along(t_sers), function(i) temp_meta_var(j+1L, i), character(1)) else character(0)
-          append_movement_block_named(rows_temp, ids_temp)
-          
-          pruned <- prune_network_from_ensemble(ensembles, metric_name)
-          removed_serial <- NA_character_
-          added_serial   <- NA_character_
-          worst_slot     <- NA_integer_
-          
-          if (!is.null(pruned)) {
-            added <- add_network_to_ensemble(
-              ensembles               = pruned$updated_ensembles,
-              target_metric_name_best = metric_name,
-              removed_network         = pruned$removed_network,
-              ensemble_number         = j,
-              worst_model_index       = pruned$worst_model_index,
-              removed_serial          = pruned$worst_serial,
-              removed_value           = pruned$worst_value
-            )
-            
-            ensembles      <- added$updated_ensembles
-            removed_serial <- pruned$worst_serial
-            added_serial   <- added$added_serial %||% NA_character_
-            worst_slot     <- added$worst_slot   %||% pruned$worst_slot %||% NA_integer_
-            
-            removed_val_cached <- pruned$worst_value
-            added_val_cached   <- added$added_value
-            
-            if (is_real_serial(removed_serial) && is_real_serial(added_serial)) {
-              rrow <- data.frame(
-                iteration     = j, phase = "removed", slot = worst_slot, role = "removed",
-                serial        = removed_serial, metric_name = metric_name,
-                metric_value  = removed_val_cached,
-                current_serial= NA_character_,
-                message       = sprintf("%s replaced by %s", removed_serial, added_serial),
-                timestamp     = ts_iter, stringsAsFactors = FALSE
-              )
-              arow <- data.frame(
-                iteration     = j, phase = "added", slot = worst_slot, role = "added",
-                serial        = added_serial, metric_name = metric_name,
-                metric_value  = added_val_cached,
-                current_serial= NA_character_,
-                message       = sprintf("%s replaced by %s", removed_serial, added_serial),
-                timestamp     = ts_iter, stringsAsFactors = FALSE
-              )
-              append_movement_block_named(rrow, "", fill_lineage_for_slots = worst_slot)
-              append_movement_block_named(arow, "", fill_lineage_for_slots = worst_slot)
-              
-              append_change_rows(rbind(
-                data.frame(iteration=j, role="removed", serial=removed_serial,
-                           metric_name=metric_name, metric_value=removed_val_cached,
-                           message=sprintf("%s replaced by %s", removed_serial, added_serial),
-                           timestamp=ts_iter, stringsAsFactors=FALSE),
-                data.frame(iteration=j, role="added",   serial=added_serial,
-                           metric_name=metric_name, metric_value=added_val_cached,
-                           message=sprintf("%s replaced by %s", removed_serial, added_serial),
-                           timestamp=ts_iter, stringsAsFactors=FALSE)
-              ))
-            }
-          }
-          
-          main_after <- snapshot_main_serials_meta()
-          main_tbl_after <- .collect_vals(main_after, metric_name)
-          rows_after <- if (length(main_after)) {
-            data.frame(
-              iteration = j, phase = "main_after", slot = seq_along(main_after),
-              role = "main", serial = main_after, metric_name = metric_name,
-              metric_value = main_tbl_after$value, current_serial = NA_character_,
-              message = if (is_real_serial(removed_serial) && is_real_serial(added_serial))
-                sprintf("%s replaced by %s", removed_serial, added_serial) else "",
-              timestamp = ts_iter, stringsAsFactors = FALSE
-            )
-          } else data.frame()
-          ids_after <- if (length(main_after)) vapply(seq_along(main_after), function(i) main_meta_var(i), character(1)) else character(0)
-          append_movement_block_named(rows_after, ids_after, fill_lineage_for_slots = if (length(main_after)) seq_along(main_after) else NULL)
-          
-          # >>> MAIN winners snapshot AFTER prune/add
-          append_main_log_snapshot(phase = "main_after", iteration = j, message = "Post TEMP/prune-add MAIN composition")
-          
-          # refresh metadata mirrors after each iteration
           ensembles <- compose_metadata_views(ensembles)
         }
-      }
-      
-      # final refresh (even if no temp iters)
-      ensembles <- compose_metadata_views(ensembles)
-      
-      # >>> FINAL MAIN winners snapshot
-      append_main_log_snapshot(phase = "final", iteration = NA_integer_, message = "Final MAIN composition")
-      
-      # =======================================================================================
-      # NEW: Build grouped metrics from MAIN metadata (no dependency on viewTables/train return)
-      # =======================================================================================
-      collect_grouped_from_main <- function(ens) {
-        perf_rows <- list()
-        relev_rows <- list()
-        
-        # ens$main is a named list of metadata lists like "Ensemble_Main_1_model_k_metadata"
-        if (!is.null(ens$main) && length(ens$main)) {
-          nm <- names(ens$main)
-          for (i in seq_along(ens$main)) {
-            md <- ens$main[[i]]
-            if (is.null(md) || !is.list(md)) next
-            serial <- as.character(md$model_serial_num %||% NA_character_)
-            slot   <- suppressWarnings(as.integer(sub(".*model_(\\d+)_metadata$", "\\1", nm[i])))
-            if (!is.finite(slot)) slot <- i
-            
-            # performance_metric: a named list of numerics or sublists; flatten shallow numerics only
-            if (!is.null(md$performance_metric) && is.list(md$performance_metric)) {
-              for (mn in names(md$performance_metric)) {
-                val <- md$performance_metric[[mn]]
-                # only take numeric scalars (skip nested lists like accuracy_precision_recall_f1_tuned$details)
-                if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
-                  perf_rows[[length(perf_rows)+1L]] <- data.frame(
-                    slot = slot,
-                    serial = serial,
-                    metric_name = mn,
-                    metric_value = as.numeric(val),
-                    stringsAsFactors = FALSE
-                  )
-                }
-              }
-            }
-            
-            # relevance_metric: similar handling
-            if (!is.null(md$relevance_metric) && is.list(md$relevance_metric)) {
-              for (mn in names(md$relevance_metric)) {
-                val <- md$relevance_metric[[mn]]
-                if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
-                  relev_rows[[length(relev_rows)+1L]] <- data.frame(
-                    slot = slot,
-                    serial = serial,
-                    metric_name = mn,
-                    metric_value = as.numeric(val),
-                    stringsAsFactors = FALSE
-                  )
-                }
-              }
-            }
-          }
+        if (isTRUE(test)) {
+          ENV_META_NAME <- resolve_env_meta(1, "main", num_temp_iterations)
+          desonn_predict_eval(
+            LOAD_FROM_RDS = FALSE,
+            ENV_META_NAME = ENV_META_NAME,
+            INPUT_SPLIT   = "test",
+            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+            RUN_INDEX = ii,
+            SEED      = s,
+            OUTPUT_DIR = "artifacts",
+            SAVE_METRICS_RDS = FALSE,
+            METRICS_PREFIX   = "metrics_test",
+            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,
+            AGG_PREDICTIONS_FILE = agg_pred_file,
+            AGG_METRICS_FILE     = agg_metrics_file
+          )
         }
-        
-        perf_df  <- if (length(perf_rows))  do.call(rbind, perf_rows)  else NULL
-        relev_df <- if (length(relev_rows)) do.call(rbind, relev_rows) else NULL
-        
-        list(perf_df = perf_df, relev_df = relev_df)
       }
       
-      grouped <- collect_grouped_from_main(ensembles)
-      
-      if (is.null(ensembles$tables)) ensembles$tables <- list()
-      if (!is.null(grouped$perf_df) && NROW(grouped$perf_df)) {
-        ensembles$tables$performance_grouped_main <- grouped$perf_df
-      } else {
-        ensembles$tables$performance_grouped_main <- NULL
-      }
-      if (!is.null(grouped$relev_df) && NROW(grouped$relev_df)) {
-        ensembles$tables$relevance_grouped_main <- grouped$relev_df
-      } else {
-        ensembles$tables$relevance_grouped_main <- NULL
-      }
-      
-    }
-    
-    
-    
-    
-    
-    
-  }
-  
-  
-  
-  
-}
-
-
-
-desonn_predict_eval <- function(
-    LOAD_FROM_RDS = FALSE,                            # if TRUE, load meta RDS; else from ENV object
-    ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
-    INPUT_SPLIT   = "test",                           # "test" | "validation" | "train"
-    CLASSIFICATION_MODE,                              # "binary" | "multiclass" | "regression"
-    RUN_INDEX,
-    SEED,
-    OUTPUT_DIR = "artifacts",                         # files saved here
-    SAVE_METRICS_RDS = TRUE,                          # write the flattened metrics table RDS (unless AGG_METRICS_FILE provided)
-    METRICS_PREFIX = "metrics_test",                  # artifacts/<prefix>_runXXX_seedY_YYYYmmdd_HHMMSS.rds
-    SAVE_PREDICTIONS_COLUMN_IN_RDS = get0("SAVE_PREDICTIONS_COLUMN_IN_RDS", inherits=TRUE, ifnotfound=FALSE),
-    AGG_PREDICTIONS_FILE = NULL,                      # if provided, append all seeds into one predictions RDS here
-    AGG_METRICS_FILE     = NULL                       # if provided, append all seeds into one metrics RDS table here
-) {
-  # ---------------- helpers ----------------
-  `%||%` <- function(x, y) if (is.null(x)) y else x
-  r6 <- function(x) {
-    if (is.null(x)) return(NA_real_)
-    if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
-    suppressWarnings({
-      xn <- as.numeric(x[1]); if (!is.finite(xn)) return(NA_real_); round(xn, 6)
-    })
-  }
-  digest_safe <- function(x) {
-    if (!requireNamespace("digest", quietly=TRUE)) return(NA_character_)
-    tryCatch(digest::digest(x, algo="xxhash64"), error=function(e) NA_character_)
-  }
-  .as_numeric_vector_strict <- function(v, nm = "y") {
-    if (is.matrix(v)) {
-      if (ncol(v) > 1L) stop(sprintf("[coerce:%s] matrix has %d cols (expect 1)", nm, ncol(v)))
-      v <- v[,1L, drop=TRUE]
-    }
-    if (is.data.frame(v)) {
-      if (ncol(v) != 1L) stop(sprintf("[coerce:%s] data.frame has %d cols (expect 1)", nm, ncol(v)))
-      v <- v[[1L]]
-    }
-    if (is.list(v)) {
-      v <- vapply(v, function(x) {
-        if (is.null(x)) return(NA_real_)
-        if (is.list(x)) x <- unlist(x, recursive=TRUE, use.names=FALSE)
-        suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
-      }, numeric(1))
-    }
-    if (is.factor(v)) v <- as.character(v)
-    if (!is.numeric(v)) suppressWarnings(v <- as.numeric(v))
-    if (!is.numeric(v)) stop(sprintf("[coerce:%s] cannot coerce to numeric", nm))
-    if (!length(v)) stop(sprintf("[coerce:%s] zero-length", nm))
-    v
-  }
-  .as_numeric_matrix_strict <- function(X, nm = "X") {
-    if (is.matrix(X) && is.numeric(X)) return(X)
-    if (is.vector(X) && !is.list(X)) { X <- matrix(X, ncol=1L); colnames(X) <- nm }
-    if (is.data.frame(X) || is.matrix(X)) {
-      Xdf <- as.data.frame(X, stringsAsFactors=FALSE)
-      for (cc in names(Xdf)) {
-        col <- Xdf[[cc]]
-        if (is.list(col)) {
-          col <- vapply(col, function(x) {
-            if (is.null(x)) return(NA_real_)
-            if (is.list(x)) x <- unlist(x, recursive=TRUE, use.names=FALSE)
-            suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
-          }, numeric(1))
-        } else if (is.factor(col)) {
-          col <- as.numeric(as.character(col))
-        } else if (!is.numeric(col)) {
-          suppressWarnings(col <- as.numeric(col))
-        }
-        Xdf[[cc]] <- col
-      }
-      Xmat <- as.matrix(Xdf); storage.mode(Xmat) <- "double"
-      bad <- which(vapply(seq_len(ncol(Xmat)), function(j) !any(is.finite(Xmat[,j])), logical(1)))
-      if (length(bad)) stop(sprintf("[coerce:%s] entirely non-numeric cols: %s", nm, paste(colnames(Xmat)[bad], collapse=", ")))
-      return(Xmat)
-    }
-    stop(sprintf("[coerce:%s] unsupported type: %s", nm, paste(class(X), collapse=",")))
-  }
-  .get_tt_strict <- function(meta_local) {
-    tt <- meta_local$target_transform %||%
-      (meta_local$preprocessScaledData %||% list())$target_transform %||%
-      (meta_local$model %||% list())$target_transform %||%
-      tryCatch({
-        j <- meta_local$target_transform_json
-        if (length(j) && is.character(j) && nzchar(j)) jsonlite::fromJSON(j) else NULL
-      }, error=function(e) NULL)
-    if (is.null(tt) || is.null(tt$type)) {
-      list(type="identity", params=list(center=0, scale=1))
-    } else {
-      p <- tt$params %||% list(); p$center <- p$center %||% 0; p$scale <- p$scale %||% 1
-      list(type=tolower(as.character(tt$type)), params=p)
-    }
-  }
-  .apply_target_inverse_strict <- function(P_raw_local, meta_local) {
-    tt <- .get_tt_strict(meta_local)
-    ttype <- tolower(tt$type %||% "identity")
-    c0 <- as.numeric(tt$params$center %||% 0)
-    s0 <- as.numeric(tt$params$scale  %||% 1)
-    if (!is.finite(s0) || s0 == 0) s0 <- 1
-    if (ttype == "zscore")  return(P_raw_local * s0 + c0)
-    if (ttype == "minmax")  { mn <- as.numeric(tt$params$min %||% 0); mx <- as.numeric(tt$params$max %||% 1); return(P_raw_local * (mx - mn) + mn) }
-    if (ttype == "affine")  { a <- as.numeric(tt$params$a); b <- as.numeric(tt$params$b); if (!is.finite(a) || !is.finite(b)) stop("invalid affine"); return(a + b * P_raw_local) }
-    if (abs(c0) > 1e-12 || abs(s0 - 1) > 1e-12) {
-      warning("target_transform 'identity' has nontrivial center/scale; treating as zscore."); return(P_raw_local * s0 + c0)
-    }
-    P_raw_local
-  }
-  
-  # ---------- safe, mode-aware predict shims ----------
-  .safe_run_predict <- function(X, meta, model_index = 1L, ML_NN = TRUE, verbose = FALSE, debug = FALSE) {
-    if (exists(".run_predict", inherits = TRUE)) {
-      return(tryCatch(
-        .run_predict(X = X, meta = meta, model_index = model_index, ML_NN = ML_NN,
-                     verbose = verbose, debug = debug),
-        error = function(e) { message("[.run_predict] failed, falling back: ", conditionMessage(e)); NULL }
-      ))
-    }
-    mdl <- meta$model %||% NULL
-    if (!is.null(mdl) && is.function(mdl$predict)) {
-      return(tryCatch(mdl$predict(Rdata = X, weights = meta$weights_record %||% meta$weights,
-                                  biases = meta$biases_record %||% meta$biases,
-                                  activation_functions = meta$activation_functions %||% NULL,
-                                  verbose = verbose, debug = debug),
-                      error=function(e) NULL))
-    }
-    SONN_local <- get0("SONN", inherits = TRUE, ifnotfound = NULL)
-    if (!is.null(SONN_local) && is.function(SONN_local$predict)) {
-      return(tryCatch(SONN_local$predict(Rdata = X, weights = meta$weights_record %||% meta$weights,
-                                         biases = meta$biases_record %||% meta$biases,
-                                         activation_functions = meta$activation_functions %||% NULL,
-                                         verbose = verbose, debug = debug),
-                      error=function(e) NULL))
-    }
-    stop("No available predict method (.run_predict / meta$model$predict / SONN$predict).")
-  }
-  
-  .as_pred_matrix <- function(pred_obj, mode = c("binary","multiclass","regression"), meta, DEBUG = FALSE) {
-    mode <- match.arg(mode)
-    if (is.list(pred_obj) && !is.null(pred_obj$predicted_output)) {
-      P <- pred_obj$predicted_output
-    } else if (is.matrix(pred_obj)) {
-      P <- pred_obj
-    } else if (is.data.frame(pred_obj)) {
-      P <- as.matrix(pred_obj)
-    } else {
-      stop("[as_pred] Unsupported prediction object type.")
-    }
-    storage.mode(P) <- "double"
-    if (!is.matrix(P) || nrow(P) == 0L) stop("[as_pred] empty prediction matrix")
-    if (mode == "regression" && ncol(P) > 1L) { if (DEBUG) message("[as_pred] regression but >1 cols; using col 1"); P <- P[,1,drop=FALSE] }
-    P
-  }
-  
-  # ---------------- config + env bits ----------------
-  CLASSIFICATION_MODE <- tolower(CLASSIFICATION_MODE)
-  stopifnot(CLASSIFICATION_MODE %in% c("binary","multiclass","regression"))
-  CLASS_THRESHOLD <- as.numeric(get0("CLASS_THRESHOLD", inherits=TRUE, ifnotfound=0.5))
-  SONN           <- get0("SONN",     inherits=TRUE, ifnotfound=NULL)
-  verbose_flag   <- isTRUE(get0("verbose", inherits=TRUE, ifnotfound=FALSE))
-  
-  cat("[CFG] SPLIT=", INPUT_SPLIT, " | CLASS_MODE=", CLASSIFICATION_MODE,
-      " | RUN_INDEX=", RUN_INDEX, " | SEED=", SEED, " | OUT=", OUTPUT_DIR, "\n", sep="")
-  
-  # ---------------- load meta ----------------
-  meta <- NULL
-  if (LOAD_FROM_RDS) {
-    adir <- get0(".BM_DIR", inherits=TRUE, ifnotfound="artifacts")
-    if (!dir.exists(adir)) stop(sprintf("Artifacts dir not found: %s", adir))
-    patt <- paste0("(?i)(?:^|_)Ensemble_Main_0_model_1_metadata_.*\\.[Rr][Dd][Ss]$")
-    files <- list.files(adir, pattern="\\.[Rr][Dd][Ss]$", full.names=TRUE, recursive=TRUE, include.dirs=FALSE)
-    hit <- grepl(paste0(patt), basename(files), perl=TRUE)
-    if (!any(hit)) stop("No RDS metadata found for Ensemble_Main_0_model_1_metadata in '", adir, "'.")
-    cand <- files[hit]; info <- file.info(cand)
-    file <- cand[order(info$mtime, decreasing=TRUE)][1L]
-    meta <- tryCatch({ m <- readRDS(file); attr(m,"artifact_path") <- file; m }, error=function(e) NULL)
-    if (is.null(meta)) stop("Failed to read metadata RDS: ", file)
-    cat("[LOAD] meta: RDS → ", attr(meta,"artifact_path"), "\n", sep="")
-  } else {
-    if (!exists(ENV_META_NAME, inherits=TRUE)) stop("ENV meta object not found: ", ENV_META_NAME)
-    meta <- get(ENV_META_NAME, inherits=TRUE)
-    cat("[LOAD] meta: ENV → ", ENV_META_NAME, "\n", sep="")
-  }
-  
-  # ---------------- pick split strictly from meta ----------------
-  sl <- tolower(INPUT_SPLIT)
-  if (sl == "test")            { Xi_raw <- meta$X_test;       yi_raw <- meta$y_test;       split_used <- "test" }
-  else if (sl == "validation") { Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation" }
-  else if (sl == "train")      { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
-  else {
-    Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation"
-    if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X_test; yi_raw <- meta$y_test; split_used <- "test" }
-    if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
-  }
-  if (is.null(Xi_raw) || is.null(yi_raw)) stop("Requested split not present in metadata: ", INPUT_SPLIT)
-  cat(sprintf("[SPLIT] %s | rows(X)=%d | cols(X)=%d\n", split_used, NROW(Xi_raw), NCOL(Xi_raw)))
-  
-  # ---------------- coerce + align ----------------
-  if (is.data.frame(Xi_raw)) {
-    has_list <- vapply(Xi_raw, is.list, logical(1))
-    if (any(has_list)) cat(sprintf("[WARN] %d list-cols in X: %s\n", sum(has_list), paste(names(Xi_raw)[has_list], collapse=", ")))
-  }
-  Xi <- .as_numeric_matrix_strict(Xi_raw, nm="X")
-  yi <- .as_numeric_vector_strict(yi_raw,  nm="y")
-  if (NROW(Xi_raw) != length(yi)) stop(sprintf("[LABEL-CHK] NROW(X)=%d vs len(y)=%d", NROW(Xi_raw), length(yi)))
-  expected <- tryCatch({ nms <- meta$feature_names %||% meta$input_names %||% meta$colnames; if (is.null(nms)) colnames(Xi) else as.character(nms) }, error=function(e) colnames(Xi))
-  orig_cols <- colnames(Xi); miss <- setdiff(expected, orig_cols)
-  if (length(miss)) Xi <- cbind(Xi, matrix(0, nrow=nrow(Xi), ncol=length(miss), dimnames=list(NULL, miss)))
-  Xi <- Xi[, expected, drop=FALSE]
-  
-  # ---------------- predict (safe + stateless) ----------------
-  t0 <- proc.time()
-  out <- .safe_run_predict(
-    X = Xi, meta = meta, model_index = 1L, ML_NN = TRUE,
-    verbose = isTRUE(get0("VERBOSE_RUNPRED", inherits=TRUE, ifnotfound=FALSE)),
-    debug   = isTRUE(get0("DEBUG_RUNPRED",   inherits=TRUE, ifnotfound=FALSE))
-  )
-  P_raw <- .as_pred_matrix(
-    out, mode = if (CLASSIFICATION_MODE=="regression") "regression" else "binary",
-    meta = meta, DEBUG = isTRUE(get0("DEBUG_ASPM", inherits=TRUE, ifnotfound=FALSE))
-  )
-  if (is.null(colnames(P_raw))) colnames(P_raw) <- "pred"
-  if (!is.matrix(P_raw) || nrow(P_raw) == 0L) stop("Empty predictions from model.")
-  t_pred <- as.numeric((proc.time() - t0)[["elapsed"]])
-  
-  cat(sprintf("[PRED] dims=%dx%d | mean=%f sd=%f | min=%f p50=%f max=%f\n",
-              nrow(P_raw), ncol(P_raw), mean(P_raw), stats::sd(P_raw),
-              min(P_raw), as.numeric(stats::median(P_raw)), max(P_raw)))
-  
-  # ---------------- post-process per mode ----------------
-  if (CLASSIFICATION_MODE == "regression") {
-    P <- .apply_target_inverse_strict(P_raw, meta)
-  } else if (CLASSIFICATION_MODE == "binary") {
-    if (ncol(P_raw) == 1L) {
-      P <- P_raw
-    } else {
-      mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex)
-      P  <- matrix((ex / sm)[, 2L], ncol=1L)  # positive class prob
-    }
-  } else { # multiclass
-    mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex)
-    P  <- ex / sm
-  }
-  
-  # ---------------- metrics ----------------
-  yi_vec <- as.numeric(yi)
-  acc <- prec <- rec <- f1s <- NA_real_; cm_base <- NULL
-  if (CLASSIFICATION_MODE == "binary") {
-    y_true <- if (all(yi_vec %in% c(0,1))) as.integer(yi_vec) else as.integer(yi_vec >= 0.5)
-    p_pos  <- as.numeric(P[,1]); thr <- CLASS_THRESHOLD
-    yhat   <- as.integer(p_pos >= thr)
-    TP <- sum(yhat==1 & y_true==1); FP <- sum(yhat==1 & y_true==0)
-    TN <- sum(yhat==0 & y_true==0); FN <- sum(yhat==0 & y_true==1)
-    acc <- (TP + TN) / length(y_true)
-    prec <- if ((TP+FP)>0) TP/(TP+FP) else 0
-    rec  <- if ((TP+FN)>0) TP/(TP+FN) else 0
-    f1s  <- if ((prec+rec)>0) 2*prec*rec/(prec+rec) else 0
-    cm_base <- list(TP=TP, FP=FP, TN=TN, FN=FN)
-  } else if (CLASSIFICATION_MODE == "multiclass") {
-    yhat <- max.col(P, ties.method="first")
-    ymc  <- if (is.matrix(yi_raw) && ncol(yi_raw)>1) max.col(yi_raw, "first") else as.integer(yi_vec)
-    acc  <- mean(yhat == ymc)
-    K <- max(yhat, ymc, na.rm=TRUE)
-    macro_prec <- macro_rec <- macro_f1 <- numeric(K)
-    for (k in seq_len(K)) {
-      TPk <- sum(yhat==k & ymc==k)
-      FPk <- sum(yhat==k & ymc!=k)
-      FNk <- sum(yhat!=k & ymc==k)
-      pk <- if ((TPk+FPk)>0) TPk/(TPk+FPk) else 0
-      rk <- if ((TPk+FNk)>0) TPk/(TPk+FNk) else 0
-      fk <- if ((pk+rk)>0) 2*pk*rk/(pk+rk) else 0
-      macro_prec[k] <- pk; macro_rec[k] <- rk; macro_f1[k] <- fk
-    }
-    prec <- mean(macro_prec); rec <- mean(macro_rec); f1s <- mean(macro_f1)
-  }
-  
-  # regression-style metrics (NA where not applicable)
-  mse_val   <- tryCatch(MSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error=function(e) NA_real_)
-  mae_val   <- tryCatch(MAE(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error=function(e) NA_real_)
-  rmse_val  <- tryCatch(RMSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
-  r2_val    <- tryCatch(R2(SONN, Xi, yi_vec, "regression", P, verbose_flag),    error=function(e) NA_real_)
-  mape_val  <- tryCatch(MAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
-  smape_val <- tryCatch(SMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
-  wmape_val <- tryCatch(WMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
-  mase_val  <- tryCatch(MASE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
-  
-  tuned <- tryCatch(
-    accuracy_precision_recall_f1_tuned(
-      SONN = SONN, Rdata = Xi, labels = yi_vec,
-      CLASSIFICATION_MODE = CLASSIFICATION_MODE, predicted_output = P,
-      metric_for_tuning = get0("METRIC_FOR_TUNING", inherits=TRUE, ifnotfound="accuracy"),
-      threshold_grid    = get0("THRESHOLD_GRID",    inherits=TRUE, ifnotfound=seq(0.05,0.95,by=0.01)),
-      verbose = isTRUE(get0("TUNED_VERBOSE", inherits=TRUE, ifnotfound=FALSE))
-    ),
-    error=function(e) {
-      message("[tuned] failed: ", conditionMessage(e))
-      list(accuracy=NA_real_, precision=NA_real_, recall=NA_real_, f1=NA_real_,
-           confusion_matrix=NULL, details=list(best_threshold=NA_real_, tuned_by="error"))
-    }
-  )
-  
-  mem_bytes <- tryCatch(as.numeric(utils::object.size(list(Xi=Xi,P=P,meta=meta))), error=function(e) NA_real_)
-  
-  cat(sprintf("[METR] acc=%.6f | prec=%.6f | rec=%.6f | f1=%.6f | tuned_thr=%s | tuned_f1=%s | RMSE=%s\n",
-              r6(acc), r6(prec), r6(rec), r6(f1s), r6(tuned$details$best_threshold), r6(tuned$f1), r6(rmse_val)))
-  
-  # ---------------- build flattened row like training ----------------
-  performance_metric <- list(
-    quantization_error    = NA_real_,
-    topographic_error     = NA_real_,
-    clustering_quality_db = NA_real_,
-    MSE   = r6(mse_val),  MAE = r6(mae_val),  RMSE = r6(rmse_val),  R2   = r6(r2_val),
-    MAPE  = r6(mape_val), SMAPE = r6(smape_val), WMAPE = r6(wmape_val), MASE = r6(mase_val),
-    accuracy  = r6(acc), precision = r6(prec), recall = r6(rec), f1_score = r6(f1s),
-    confusion_matrix = cm_base,
-    accuracy_precision_recall_f1_tuned = tuned,
-    speed = r6(t_pred), speed_learn = NA_real_, memory_usage = r6(mem_bytes), robustness = NA_real_,
-    custom_relative_error_binned = NA
-  )
-  relevance_metric <- list(
-    hit_rate=NA_real_, ndcg=NA_real_, diversity=NA_real_, serendipity=NA_real_,
-    precision_boolean=NA_real_, recall=NA_real_, f1_score=NA_real_, mean_precision=NA_real_,
-    novelty=NA_real_
-  )
-  
-  flat <- tryCatch(
-    rapply(list(performance_metric=performance_metric, relevance_metric=relevance_metric),
-           f=function(z) z, how="unlist"),
-    error=function(e) setNames(vector("list",0L), character(0))
-  )
-  if (length(flat)) {
-    L <- as.list(flat)
-    flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
-  }
-  nms <- names(flat)
-  if (length(nms)) {
-    drop <- grepl("custom_relative_error_binned", nms, fixed=TRUE) |
-      grepl("grid_used", nms, fixed=TRUE) |
-      grepl("(^|\\.)details(\\.|$)", nms)
-    keep <- !drop & !is.na(flat)
-    flat <- flat[keep]; nms <- names(flat)
-  }
-  if (length(flat) == 0L) {
-    row_df <- data.frame(run_index=RUN_INDEX, seed=SEED, stringsAsFactors=FALSE)
-  } else {
-    out <- setNames(vector("list", length(flat)), nms)
-    num <- suppressWarnings(as.numeric(flat))
-    for (j in seq_along(flat)) out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
-    row_df <- cbind(data.frame(run_index=RUN_INDEX, seed=SEED, stringsAsFactors=FALSE),
-                    as.data.frame(out, check.names=TRUE, stringsAsFactors=FALSE))
-  }
-  colnames(row_df) <- sub("^performance_metric\\.", "", colnames(row_df))
-  colnames(row_df) <- sub("^relevance_metric\\.",   "", colnames(row_df))
-  
-  # ---------------- compact summary (results_df) ----------------
-  pred_hash <- tryCatch(digest_safe(round(P[seq_len(min(nrow(P), 2000)), , drop=FALSE], 6)), error=function(e) NA_character_)
-  results_df <- data.frame(
-    kind = if (LOAD_FROM_RDS) "RDS" else "ENV", ens = 0L, model = 1L,
-    split_used = split_used, n_pred_rows = nrow(P),
-    accuracy=r6(acc), precision=r6(prec), recall=r6(rec), f1=r6(f1s),
-    tuned_threshold = r6(tuned$details$best_threshold),
-    tuned_accuracy  = r6(tuned$accuracy), tuned_precision=r6(tuned$precision),
-    tuned_recall    = r6(tuned$recall),   tuned_f1      = r6(tuned$f1),
-    MSE=r6(mse_val), MAE=r6(mae_val), RMSE=r6(rmse_val), R2=r6(r2_val),
-    MAPE=r6(mape_val), SMAPE=r6(smape_val), WMAPE=r6(wmape_val), MASE=r6(mase_val),
-    pred_sig = pred_hash,
-    model_rds = if (LOAD_FROM_RDS) basename(attr(meta,"artifact_path") %||% NA_character_) else NA_character_,
-    artifact_used = if (LOAD_FROM_RDS) "yes" else "no",
-    stringsAsFactors=FALSE
-  )
-  
-  cat(sprintf("[RESULTS] rows=%d | cols=%d | mode=%s\n", nrow(results_df), ncol(results_df), CLASSIFICATION_MODE))
-  print(utils::head(results_df, 10))
-  
-  # ---------------- save files ----------------
-  dir.create(OUTPUT_DIR, recursive=TRUE, showWarnings=FALSE)
-  ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  
-  # ---- PREDICTIONS: aggregate-or-file ----
-  if (!is.null(AGG_PREDICTIONS_FILE)) {
-    # Create or append
-    pack <- if (file.exists(AGG_PREDICTIONS_FILE)) {
-      tryCatch(readRDS(AGG_PREDICTIONS_FILE), error=function(e) NULL)
-    } else NULL
-    if (is.null(pack) || !is.list(pack) || is.null(pack$entries)) {
-      pack <- list(
-        schema_version = "pred-agg-v1",
-        created_at     = Sys.time(),
-        flags          = list(CLASSIFICATION_MODE=CLASSIFICATION_MODE),
-        meta_source    = if (LOAD_FROM_RDS) (attr(meta,"artifact_path") %||% NA_character_) else ENV_META_NAME,
-        entries        = list(),    # per-seed entries
-        seeds          = integer(0)
+      ## ---- Flatten per-seed metrics (like !do_ensemble) ----
+      flat <- tryCatch(
+        rapply(
+          list(
+            performance_metric = model_results_main$performance_relevance_data$performance_metric,
+            relevance_metric   = model_results_main$performance_relevance_data$relevance_metric
+          ),
+          f = function(z) z, how = "unlist"
+        ),
+        error = function(e) setNames(vector("list", 0L), character(0))
       )
+      if (length(flat)) {
+        L <- as.list(flat)
+        flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+      }
+      nms <- names(flat)
+      if (length(nms)) {
+        drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
+          grepl("grid_used", nms, fixed = TRUE) |
+          grepl("(^|\\.)details(\\.|$)", nms)
+        keep <- !drop & !is.na(flat)
+        flat <- flat[keep]; nms <- names(flat)
+      }
+      if (length(flat) == 0L) {
+        row_df <- data.frame(run_index = ii, seed = s, stringsAsFactors = FALSE)
+      } else {
+        out <- setNames(vector("list", length(flat)), nms)
+        num <- suppressWarnings(as.numeric(flat))
+        for (j in seq_along(flat)) out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
+        row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
+        row_df <- cbind(data.frame(run_index = ii, seed = s, stringsAsFactors = FALSE), row_df)
+      }
+      row_df$best_train_acc   <- tryCatch(as.numeric(model_results_main$best_train_acc),    error = function(e) NA_real_)
+      row_df$best_epoch_train <- tryCatch(as.integer(model_results_main$best_epoch_train),  error = function(e) NA_integer_)
+      row_df$best_val_acc     <- tryCatch(as.numeric(model_results_main$best_val_acc),      error = function(e) NA_real_)
+      row_df$best_val_epoch   <- tryCatch(as.integer(model_results_main$best_val_epoch),    error = function(e) NA_integer_)
+      
+      metrics_rows[[ii]] <- row_df
     }
-    key <- sprintf("seed_%s_run_%03d", as.character(SEED), as.integer(RUN_INDEX))
-    entry <- list(
-      run_index   = RUN_INDEX,
-      seed        = SEED,
-      results_df  = results_df,
-      prediction_sig = pred_hash
-    )
-    if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
-      entry$predictions <- list(Ensemble_Main_0_model_1 = P)
-    }
-    pack$entries[[key]] <- entry
-    if (!(SEED %in% pack$seeds)) pack$seeds <- sort(unique(c(pack$seeds, SEED)))
-    saveRDS(pack, AGG_PREDICTIONS_FILE)
-    cat("[SAVE] predictions (aggregate) → ", AGG_PREDICTIONS_FILE,
-        if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) " (payload omitted)" else "",
-        " | appended key=", key, "\n", sep="")
-    predictions_path <- AGG_PREDICTIONS_FILE
-  } else {
-    predictions_path <- file.path(
-      OUTPUT_DIR,
-      sprintf("predictions_stateless_scope-one_src-%s_%s.rds", if (LOAD_FROM_RDS) "rds" else "env", ts_stamp)
-    )
-    predict_pack <- list(
-      schema_version = "pred-v2",
-      saved_at       = Sys.time(),
-      predict_mode   = "stateless",
-      flags = list(
-        INPUT_SPLIT                   = INPUT_SPLIT,
-        CLASSIFICATION_MODE           = CLASSIFICATION_MODE,
-        CLASS_THRESHOLD               = CLASS_THRESHOLD,
-        SAVE_PREDICTIONS_COLUMN_IN_RDS = isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)
-      ),
-      meta_source     = if (LOAD_FROM_RDS) (attr(meta,"artifact_path") %||% NA_character_) else ENV_META_NAME,
-      results_table   = results_df,
-      prediction_sigs = results_df$pred_sig
-    )
-    if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
-      predict_pack$predictions <- list(Ensemble_Main_0_model_1 = P)
-    }
-    # Hard safety strip
-    if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS) && !is.null(predict_pack$predictions)) predict_pack$predictions <- NULL
-    saveRDS(predict_pack, predictions_path)
-    cat("[SAVE] predictions → ", predictions_path,
-        if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) " (payload omitted)" else "",
-        "\n", sep="")
-  }
-  
-  # ---- METRICS: aggregate-or-file ----
-  if (!is.null(AGG_METRICS_FILE)) {
-    met <- if (file.exists(AGG_METRICS_FILE)) {
-      tryCatch(readRDS(AGG_METRICS_FILE), error=function(e) NULL)
-    } else NULL
-    if (is.null(met) || !is.data.frame(met)) met <- row_df[0, , drop=FALSE]
-    # align columns
-    common <- union(colnames(met), colnames(row_df))
-    if (!all(common %in% colnames(met)))  for (cc in setdiff(common, colnames(met)))  met[[cc]] <- NA
-    if (!all(common %in% colnames(row_df)))for (cc in setdiff(common, colnames(row_df)))row_df[[cc]] <- NA
-    met <- rbind(met[,common,drop=FALSE], row_df[,common,drop=FALSE])
-    saveRDS(met, AGG_METRICS_FILE)
-    cat("[SAVE] metrics (aggregate)    → ", AGG_METRICS_FILE, " | total_rows=", nrow(met), "\n", sep="")
-    metrics_path <- AGG_METRICS_FILE
-  } else {
-    metrics_path <- file.path(
-      OUTPUT_DIR,
-      sprintf("%s_run%03d_seed%s_%s.rds", METRICS_PREFIX,
-              ifelse(is.na(RUN_INDEX), 0L, RUN_INDEX),
-              ifelse(is.na(SEED), "NA", SEED),
-              ts_stamp)
-    )
-    if (SAVE_METRICS_RDS) {
-      saveRDS(row_df, metrics_path)
-      cat("[SAVE] metrics     → ", metrics_path, " | rows=", nrow(row_df), " cols=", ncol(row_df), "\n", sep="")
+    
+    ## ---- Aggregate TRAIN metrics ----
+    if (length(metrics_rows) == 0L) {
+      results_table <- data.frame()
     } else {
-      metrics_path <- NA_character_
+      results_table <- metrics_rows[[1]]
+      if (length(metrics_rows) > 1L) {
+        for (k in 2:length(metrics_rows)) {
+          x <- results_table; y <- metrics_rows[[k]]
+          for (m in setdiff(names(y), names(x))) x[[m]] <- NA
+          for (m in setdiff(names(x), names(y))) y[[m]] <- NA
+          ord <- union(names(x), names(y))
+          results_table <- rbind(x[, ord, drop = FALSE], y[, ord, drop = FALSE])
+        }
+      }
     }
+    colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
+    if ("best_val_acc" %in% names(results_table)) results_table$best_val_acc <- NULL
+    
+    out_path_train <- file.path("artifacts",
+                                sprintf("Ensembles_Train_Acc_Val_Metrics_%s_seeds_%s.rds", length(seeds), ts_stamp))
+    saveRDS(results_table, out_path_train)
+    cat("Saved ENSEMBLE per-seed TRAIN metrics table to:", out_path_train,
+        " | rows=", nrow(results_table), " cols=", ncol(results_table), "\n")
   }
   
-  invisible(list(
-    results_df      = results_df,
-    flat_table      = row_df,
-    predictions_rds = predictions_path,
-    metrics_rds     = metrics_path
-  ))
+  
+  
+  
+  
+  
+  
 }
+
+
+
+
 
 
 

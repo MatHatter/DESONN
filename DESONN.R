@@ -732,7 +732,7 @@ SONN <- R6Class(
                      activation_functions_learn, dropout_rates_learn, sample_weights) {
       print("------------------------learn-begin-------------------------------------------------")
       start_time <- Sys.time()
-      
+
       `%||%` <- function(x, y) if (is.null(x)) y else x
       .safe_get <- function(lst, idx) {
         if (is.list(lst) && length(lst) >= idx && idx >= 1) lst[[idx]] else NULL
