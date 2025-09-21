@@ -1317,11 +1317,18 @@ if(train) {
     seeds <- 1:x
     metrics_rows <- list()
     
-    # Filenames
+    # Run folder (artifacts/SingleRuns/<timestamp>)
     ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    OUT_ROOT <- file.path("artifacts", "SingleRuns")
+    RUN_DIR  <- file.path(OUT_ROOT, ts_stamp)
+    dir.create(RUN_DIR, recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(RUN_DIR, "fused"), recursive = TRUE, showWarnings = FALSE)
+    assign(".BM_DIR", RUN_DIR, envir = .GlobalEnv)  # for any loaders
+    
+    # Filenames
     s_chr <- as.character(length(seeds))
-    agg_pred_file    <- file.path("artifacts", sprintf("SingleRun_Pretty_Test_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp))
-    agg_metrics_file <- file.path("artifacts", sprintf("SingleRun_Test_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp))
+    agg_pred_file    <- file.path(RUN_DIR, sprintf("SingleRun_Pretty_Test_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp))
+    agg_metrics_file <- file.path(RUN_DIR, sprintf("SingleRun_Test_Metrics_%s_seeds_%s.rds",    s_chr, ts_stamp))
     
     for (i in seq_along(seeds)) {
       s <- seeds[i]
@@ -1417,11 +1424,13 @@ if(train) {
       cat(sprintf("Seed %d → collected %d metrics\n", s, max(0, ncol(row_df) - 2L)))
       
       # ============================
-      # TEST EVAL (per-slot, per-seed) — publish ENV meta per slot (no helper)
+      # TEST EVAL (per-slot, per-seed) — single-run, Main-only
       # ============================
       if (isTRUE(test)) {
-        K <- max(1L, as.integer(num_networks))
-        for (k in seq_len(K)) {
+        # Save per-slot predictions only if we'll fuse later
+        SAVE_PREDICTIONS_COLUMN_IN_RDS <- (num_networks > 1L)
+        
+        for (k in seq_len(num_networks)) {
           env_name <- sprintf("Ensemble_Main_0_model_%d_metadata", as.integer(k))
           
           # Expect metadata present on each submodel like in do_ensemble:
@@ -1440,16 +1449,43 @@ if(train) {
             CLASSIFICATION_MODE = CLASSIFICATION_MODE,
             RUN_INDEX = i,
             SEED      = s,
-            OUTPUT_DIR = "artifacts",
+            OUTPUT_DIR = RUN_DIR,
             SAVE_METRICS_RDS = FALSE,
             METRICS_PREFIX   = "metrics_test",
-            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,
+            SAVE_PREDICTIONS_COLUMN_IN_RDS = SAVE_PREDICTIONS_COLUMN_IN_RDS,  # TRUE only if num_networks > 1
             AGG_PREDICTIONS_FILE = agg_pred_file,
             AGG_METRICS_FILE     = agg_metrics_file,
             MODEL_SLOT           = k
           )
         }
+        
+        # ---- Optional fusion step (only if multiple slots) ----
+        if (num_networks > 1L) {
+          yi <- get0("y_test", inherits = TRUE, ifnotfound = NULL)
+          if (is.null(yi)) stop("y_test not found for fusion metrics.")
+          
+          fused <- desonn_fuse_from_agg(
+            AGG_PREDICTIONS_FILE = agg_pred_file,
+            RUN_INDEX = i,
+            SEED = s,
+            y_true = yi,
+            methods = c("avg","wavg","vote_soft","vote_hard"),
+            weight_column = "tuned_f1",
+            use_tuned_threshold_for_vote = TRUE,
+            default_threshold = 0.5,
+            classification_mode = CLASSIFICATION_MODE
+          )
+          
+          cat("\n[FUSE] Ensemble metrics (single-run, num_networks>1):\n")
+          print(fused$metrics)
+          
+          fused_path <- file.path(RUN_DIR, "fused",
+                                  sprintf("fused_single_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+          saveRDS(fused, fused_path)
+          cat("[SAVE] fused → ", fused_path, "\n", sep = "")
+        }
       }
+      
     }
     
     # --- bind all TRAIN metrics (unchanged) ---
@@ -1472,10 +1508,9 @@ if(train) {
     colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
     if ("best_val_acc" %in% names(results_table)) results_table$best_val_acc <- NULL
     
-    dir.create("artifacts", showWarnings = FALSE, recursive = TRUE)
     out_path <- file.path(
-      "artifacts",
-      sprintf("SingleRun_Train_Acc_Val_Metrics_%s_seeds_%s.rds", s_chr, format(Sys.time(), "%Y%m%d_%H%M%S"))
+      RUN_DIR,
+      sprintf("SingleRun_Train_Acc_Val_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp)
     )
     saveRDS(results_table, out_path)
     cat("Saved multi-seed metrics table to:", out_path, " | rows=", nrow(results_table),
@@ -1678,12 +1713,19 @@ if(train) {
     per_slot_rows <- list()
     ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
     
+    ## Run folder for ensembles
+    OUT_ROOT <- file.path("artifacts", "EnsembleRuns")
+    RUN_DIR  <- file.path(OUT_ROOT, ts_stamp)
+    dir.create(RUN_DIR, recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(RUN_DIR, "fused"), recursive = TRUE, showWarnings = FALSE)
+    assign(".BM_DIR", RUN_DIR, envir = .GlobalEnv)
+    
     TARGET_METRIC <- get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
     num_temp_iterations <- as.integer(num_temp_iterations %||% 0L)
     
     total_seeds_chr <- as.character(length(seeds))
-    agg_pred_file    <- file.path("artifacts", sprintf("Ensemble_Pretty_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
-    agg_metrics_file <- file.path("artifacts", sprintf("Ensemble_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    agg_pred_file    <- file.path(RUN_DIR, sprintf("Ensemble_Pretty_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    agg_metrics_file <- file.path(RUN_DIR, sprintf("Ensemble_Test_Metrics_%s_seeds_%s.rds",       total_seeds_chr, ts_stamp))
     
     row_ptr <- 0L
     for (i in seq_along(seeds)) {
@@ -1729,8 +1771,7 @@ if(train) {
       best_val_epoch_ret     <- try(model_results_main$predicted_outputAndTime$best_val_epoch,           silent = TRUE); if (inherits(best_val_epoch_ret, "try-error")) best_val_epoch_ret <- NA_integer_
       best_val_pred_time_ret <- try(model_results_main$predicted_outputAndTime$best_val_prediction_time, silent = TRUE); if (inherits(best_val_pred_time_ret, "try-error")) best_val_pred_time_ret <- NA_real_
       
-      K <- max(1L, as.integer(num_networks))
-      for (k in seq_len(K)) {
+      for (k in seq_len(num_networks)) {
         mvar <- main_meta_var(k)
         if (!exists(mvar, envir = .GlobalEnv)) next
         md <- get(mvar, envir = .GlobalEnv)
@@ -1747,12 +1788,12 @@ if(train) {
       
       ## Scenario C test eval
       if (num_temp_iterations == 0L && isTRUE(test)) {
-        for (k in seq_len(K)) {
+        for (k in seq_len(num_networks)) {
           ENV_META_NAME <- resolve_env_meta(k, "main", 1L)
           desonn_predict_eval(
             LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
             CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
-            OUTPUT_DIR = "artifacts", SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
+            OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
             SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE, AGG_PREDICTIONS_FILE = agg_pred_file,
             AGG_METRICS_FILE = agg_metrics_file, MODEL_SLOT = k
           )
@@ -1791,7 +1832,7 @@ if(train) {
           best_val_epoch_tmp     <- try(temp_model$train_last_result$best_val_epoch,           silent = TRUE); if (inherits(best_val_epoch_tmp, "try-error")) best_val_epoch_tmp <- NA_integer_
           best_val_pred_time_tmp <- try(temp_model$train_last_result$best_val_prediction_time, silent = TRUE); if (inherits(best_val_pred_time_tmp, "try-error")) best_val_pred_time_tmp <- NA_real_
           
-          for (k in seq_len(K)) {
+          for (k in seq_len(num_networks)) {
             tvar <- temp_meta_var(j + 1L, k)
             if (!exists(tvar, envir = .GlobalEnv)) next
             tmd <- get(tvar, envir = .GlobalEnv)
@@ -1824,16 +1865,44 @@ if(train) {
         }
         
         if (isTRUE(test)) {
-          K <- max(1L, as.integer(num_networks))
-          for (k in seq_len(K)) {
+          SAVE_PREDICTIONS_COLUMN_IN_RDS <- TRUE
+          
+          for (k in seq_len(num_networks)) {
             ENV_META_NAME <- resolve_env_meta(k, "main", num_temp_iterations)
             desonn_predict_eval(
               LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
               CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
-              OUTPUT_DIR = "artifacts", SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
-              SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE, AGG_PREDICTIONS_FILE = agg_pred_file,
-              AGG_METRICS_FILE = agg_metrics_file, MODEL_SLOT = k
+              OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
+              SAVE_PREDICTIONS_COLUMN_IN_RDS = TRUE,
+              AGG_PREDICTIONS_FILE = agg_pred_file, AGG_METRICS_FILE = agg_metrics_file,
+              MODEL_SLOT = k
             )
+          }
+          
+          # Fusion only makes sense if multiple slots
+          if (num_networks > 1L) {
+            yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL)
+            stopifnot(!is.null(yi))
+            
+            fused <- desonn_fuse_from_agg(
+              AGG_PREDICTIONS_FILE = agg_pred_file,
+              RUN_INDEX = i,
+              SEED = s,
+              y_true = yi,
+              methods = c("avg","wavg","vote_soft","vote_hard"),
+              weight_column = "tuned_f1",
+              use_tuned_threshold_for_vote = TRUE,
+              default_threshold = 0.5,
+              classification_mode = CLASSIFICATION_MODE
+            )
+            
+            cat("\n[FUSE] Ensemble metrics (num_networks>1):\n")
+            print(fused$metrics)
+            
+            fused_path <- file.path(RUN_DIR, "fused",
+                                    sprintf("fused_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+            saveRDS(fused, fused_path)
+            cat("[SAVE] fused → ", fused_path, "\n", sep="")
           }
         }
       }
@@ -1841,8 +1910,7 @@ if(train) {
       ## ==========================
       ## Per-SLOT rows for this seed
       ## ==========================
-      K <- max(1L, as.integer(num_networks))
-      for (k in seq_len(K)) {
+      for (k in seq_len(num_networks)) {
         mvar <- main_meta_var(k)
         if (!exists(mvar, envir = .GlobalEnv)) next
         md <- get(mvar, envir = .GlobalEnv)
@@ -1940,7 +2008,7 @@ if(train) {
     ## strip leading namespaces like "performance_metric." / "relevance_metric."
     colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
     
-    out_path_train <- file.path("artifacts",
+    out_path_train <- file.path(RUN_DIR,
                                 sprintf("Ensembles_Train_Acc_Val_Metrics_%s_seeds_%s.rds", length(seeds), ts_stamp))
     saveRDS(results_table, out_path_train)
     cat("Saved ENSEMBLE per-slot TRAIN metrics table to:", out_path_train,
@@ -1981,6 +2049,7 @@ if(train) {
       cat("Reindexed (by serial) AGG file:", agg_path, " | rows=", nrow(df), "\n")
     }
   }
+  
   
 
   

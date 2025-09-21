@@ -2100,21 +2100,34 @@ desonn_predict_eval <- function(
   # ---------------- load meta ----------------
   meta <- NULL
   if (LOAD_FROM_RDS) {
-    adir <- get0(".BM_DIR", inherits=TRUE, ifnotfound="artifacts")
+    adir <- get0(".BM_DIR", inherits = TRUE, ifnotfound = "artifacts")
     if (!dir.exists(adir)) stop(sprintf("Artifacts dir not found: %s", adir))
-    patt <- paste0("(?i)(?:^|_)Ensemble_Main_0_model_1_metadata_.*\\.[Rr][Dd][Ss]$")
-    files <- list.files(adir, pattern="\\.[Rr][Dd][Ss]$", full.names=TRUE, recursive=TRUE, include.dirs=FALSE)
-    hit <- grepl(paste0(patt), basename(files), perl=TRUE)
-    if (!any(hit)) stop("No RDS metadata found for Ensemble_Main_0_model_1_metadata in '", adir, "'.")
+    
+    files <- list.files(adir, pattern = "\\.[Rr][Dd][Ss]$", full.names = TRUE, recursive = TRUE, include.dirs = FALSE)
+    
+    # try exact ENV_META_NAME prefix first
+    patt <- sprintf("(?i)(?:^|_)%s_.*\\.[Rr][Dd][Ss]$", ENV_META_NAME)
+    hit  <- grepl(patt, basename(files), perl = TRUE)
+    
+    # fallback: rebuild pattern from pieces (Main/Temp, ensemble#, slot#)
+    if (!any(hit)) {
+      mm <- regexec("^Ensemble_(Main|Temp)_(\\d+)_model_(\\d+)_metadata$", ENV_META_NAME, perl = TRUE)
+      rs <- regmatches(ENV_META_NAME, mm)[[1]]
+      if (length(rs)) {
+        patt <- sprintf("(?i)(?:^|_)Ensemble_%s_%s_model_%s_metadata_.*\\.[Rr][Dd][Ss]$", rs[2], rs[3], rs[4])
+        hit  <- grepl(patt, basename(files), perl = TRUE)
+      }
+    }
+    
+    if (!any(hit)) stop("No RDS metadata found matching ", ENV_META_NAME, " in '", adir, "'.")
     cand <- files[hit]; info <- file.info(cand)
-    file <- cand[order(info$mtime, decreasing=TRUE)][1L]
-    meta <- tryCatch({ m <- readRDS(file); attr(m,"artifact_path") <- file; m }, error=function(e) NULL)
-    if (is.null(meta)) stop("Failed to read metadata RDS: ", file)
-    cat("[LOAD] meta: RDS → ", attr(meta,"artifact_path"), "\n", sep="")
+    file <- cand[order(info$mtime, decreasing = TRUE)][1L]
+    meta <- readRDS(file); attr(meta, "artifact_path") <- file
+    cat("[LOAD] meta: RDS → ", attr(meta, "artifact_path"), "\n", sep = "")
   } else {
-    if (!exists(ENV_META_NAME, inherits=TRUE)) stop("ENV meta object not found: ", ENV_META_NAME)
-    meta <- get(ENV_META_NAME, inherits=TRUE)
-    cat("[LOAD] meta: ENV → ", ENV_META_NAME, "\n", sep="")
+    if (!exists(ENV_META_NAME, inherits = TRUE)) stop("ENV meta object not found: ", ENV_META_NAME)
+    meta <- get(ENV_META_NAME, inherits = TRUE)
+    cat("[LOAD] meta: ENV → ", ENV_META_NAME, "\n", sep = "")
   }
   
   # ---------------- pick split strictly from meta ----------------
@@ -2422,3 +2435,166 @@ desonn_predict_eval <- function(
     metrics_rds     = metrics_path
   ))
 }
+
+# ============================================================
+# Fuse predictions from an aggregate predictions RDS (per run/seed)
+# ============================================================
+desonn_fuse_from_agg <- function(
+    AGG_PREDICTIONS_FILE,
+    RUN_INDEX,
+    SEED,
+    y_true,                             # numeric 0/1 (binary). For multiclass, pass class ids 1..K
+    methods = c("avg","wavg","vote_soft","vote_hard"),
+    weight_column = c("tuned_f1","f1","accuracy"),  # used for wavg
+    use_tuned_threshold_for_vote = TRUE,
+    default_threshold = 0.5,
+    vote_quorum = NULL,                 # NULL = majority
+    classification_mode = c("binary","multiclass","regression")
+) {
+  `%||%` <- function(x,y) if (is.null(x)) y else x
+  r6 <- function(x) ifelse(is.finite(x), round(x,6), NA_real_)
+  classification_mode <- match.arg(classification_mode)
+  weight_column <- match.arg(weight_column)
+  methods <- unique(match.arg(methods, several.ok = TRUE))
+  
+  stopifnot(file.exists(AGG_PREDICTIONS_FILE))
+  pack <- readRDS(AGG_PREDICTIONS_FILE)
+  if (is.null(pack$entries) || !length(pack$entries))
+    stop("Aggregate predictions file has no entries; ensure SAVE_PREDICTIONS_COLUMN_IN_RDS=TRUE during eval.")
+  
+  # --- filter entries for this (RUN_INDEX, SEED) ---
+  entries <- Filter(function(e) {
+    is.list(e) && identical(as.integer(e$run_index), as.integer(RUN_INDEX)) &&
+      identical(as.integer(e$seed), as.integer(SEED))
+  }, pack$entries)
+  
+  if (!length(entries)) stop("No entries for run=", RUN_INDEX, " seed=", SEED)
+  
+  # --- collect predictions and per-slot metrics ---
+  # Each entry looks like: list(run_index, seed, model_slot, results_df, predictions = list(<ENV_VAR>=P))
+  # We assume classification_mode == "binary" → take 1st column as positive prob.
+  get_prob <- function(P) {
+    if (is.null(P) || !is.matrix(P) || nrow(P)==0) return(NULL)
+    if (ncol(P) == 1L) as.numeric(P[,1]) else as.numeric(P[,1])
+  }
+  
+  probs_list <- list()
+  w_vec <- c()
+  thr_vec <- c()
+  slots <- integer(0)
+  
+  for (e in entries) {
+    if (is.null(e$predictions)) {
+      stop("Entry has no predictions payload. Re-run eval with SAVE_PREDICTIONS_COLUMN_IN_RDS=TRUE.")
+    }
+    # predictions is a named list of matrices; we saved exactly one under ENV_META_NAME
+    P <- e$predictions[[1]]
+    p <- get_prob(P)
+    if (is.null(p)) next
+    
+    # slot id
+    k <- as.integer(e$model_slot %||% NA_integer_)
+    slots <- c(slots, k)
+    
+    # weights from results_df row (single row)
+    rd <- e$results_df
+    pick_col <- function(df, nm) {
+      cn <- names(df)
+      hit <- cn[tolower(cn) == tolower(nm)]
+      if (length(hit)) as.numeric(df[[hit[1]]]) else NA_real_
+    }
+    w <- switch(weight_column,
+                "tuned_f1" = pick_col(rd, "tuned_f1"),
+                "f1"       = pick_col(rd, "f1"),
+                "accuracy" = pick_col(rd, "accuracy")
+    )
+    w_vec <- c(w_vec, ifelse(is.finite(w), w, NA_real_))
+    
+    # per-slot tuned threshold (optional for vote)
+    tthr <- pick_col(rd, "tuned_threshold")
+    thr_vec <- c(thr_vec, ifelse(is.finite(tthr), tthr, default_threshold))
+    
+    probs_list[[length(probs_list)+1]] <- p
+  }
+  
+  if (!length(probs_list)) stop("No usable prediction vectors in aggregate file.")
+  # Align lengths
+  lens <- vapply(probs_list, length, integer(1))
+  N <- min(lens)
+  probs_mat <- do.call(cbind, lapply(probs_list, function(v) v[1:N]))
+  y_true <- as.numeric(y_true)[1:N]
+  
+  # --- metrics helpers (binary) ---
+  bin_metrics <- function(p, y, thr=0.5) {
+    y01 <- as.integer(y > 0)
+    yhat <- as.integer(p >= thr)
+    TP <- sum(yhat==1 & y01==1); FP <- sum(yhat==1 & y01==0)
+    FN <- sum(yhat==0 & y01==1); TN <- sum(yhat==0 & y01==0)
+    acc <- mean(yhat==y01)
+    prec <- if ((TP+FP)>0) TP/(TP+FP) else 0
+    rec  <- if ((TP+FN)>0) TP/(TP+FN) else 0
+    f1   <- if ((prec+rec)>0) 2*prec*rec/(prec+rec) else 0
+    list(acc=r6(acc), precision=r6(prec), recall=r6(rec), f1=r6(f1), TP=TP, FP=FP, FN=FN, TN=TN)
+  }
+  
+  out_rows <- list()
+  out_preds <- list()
+  
+  # 1) AVG
+  if ("avg" %in% methods) {
+    p_avg <- rowMeans(probs_mat, na.rm = TRUE)
+    m <- if (classification_mode=="binary") bin_metrics(p_avg, y_true, default_threshold) else list()
+    out_rows[["Ensemble_avg"]] <- c(list(kind="Ensemble_avg", n=N, slots=paste(slots, collapse=",")), m)
+    out_preds[["Ensemble_avg"]] <- matrix(p_avg, ncol=1, dimnames=list(NULL, "pred"))
+  }
+  
+  # 2) WAVG
+  if ("wavg" %in% methods) {
+    ww <- ifelse(is.finite(w_vec), w_vec, 0)
+    if (sum(ww) == 0) ww[] <- 1
+    ww <- ww / sum(ww)
+    p_w <- as.numeric(probs_mat %*% ww)
+    m <- if (classification_mode=="binary") bin_metrics(p_w, y_true, default_threshold) else list()
+    out_rows[["Ensemble_wavg"]] <- c(list(kind="Ensemble_wavg", n=N, slots=paste(slots, collapse=","), weights=ww), m)
+    out_preds[["Ensemble_wavg"]] <- matrix(p_w, ncol=1, dimnames=list(NULL, "pred"))
+  }
+  
+  # 3) VOTE
+  if ("vote_soft" %in% methods || "vote_hard" %in% methods) {
+    use_thr <- if (isTRUE(use_tuned_threshold_for_vote)) thr_vec else rep(default_threshold, ncol(probs_mat))
+    vote_mat <- sweep(probs_mat, 2, use_thr, FUN = ">=") * 1L
+    # soft = fraction of votes in [0,1]
+    vote_frac <- rowMeans(vote_mat, na.rm = TRUE)
+    # hard = 1 if votes >= quorum
+    q <- vote_quorum %||% ceiling(ncol(probs_mat)/2)
+    vote_hard <- as.integer(rowSums(vote_mat, na.rm = TRUE) >= q)
+    
+    if ("vote_soft" %in% methods) {
+      m <- if (classification_mode=="binary") bin_metrics(vote_frac, y_true, default_threshold) else list()
+      out_rows[["Ensemble_vote_soft"]] <- c(list(kind="Ensemble_vote_soft", n=N, slots=paste(slots, collapse=","), quorum=q), m)
+      out_preds[["Ensemble_vote_soft"]] <- matrix(vote_frac, ncol=1, dimnames=list(NULL, "pred"))
+    }
+    if ("vote_hard" %in% methods) {
+      m <- if (classification_mode=="binary") bin_metrics(as.numeric(vote_hard), y_true, default_threshold) else list()
+      out_rows[["Ensemble_vote_hard"]] <- c(list(kind="Ensemble_vote_hard", n=N, slots=paste(slots, collapse=","), quorum=q), m)
+      out_preds[["Ensemble_vote_hard"]] <- matrix(as.numeric(vote_hard), ncol=1, dimnames=list(NULL, "pred"))
+    }
+  }
+  
+  # format a compact data.frame of metrics
+  rows_df <- do.call(rbind, lapply(names(out_rows), function(k) {
+    r <- out_rows[[k]]
+    data.frame(
+      kind = k, n = as.integer(r$n %||% NA), slots = as.character(r$slots %||% NA),
+      accuracy = r6(r$acc %||% NA), precision = r6(r$precision %||% NA),
+      recall = r6(r$recall %||% NA), f1 = r6(r$f1 %||% NA),
+      TP = as.integer(r$TP %||% NA), FP = as.integer(r$FP %||% NA),
+      FN = as.integer(r$FN %||% NA), TN = as.integer(r$TN %||% NA),
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(rows_df) <- NULL
+  
+  list(metrics = rows_df, predictions = out_preds)
+}
+
