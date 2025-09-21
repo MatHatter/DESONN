@@ -1,3 +1,20 @@
+# ===============================================================
+# DeepDynamic — DDESONN
+# Deep Dynamic Ensemble Self-Organizing Neural Network
+# ---------------------------------------------------------------
+# Copyright (c) 2024-2025 Mathew William Fok
+# 
+# Licensed for academic and personal research use only.
+# Commercial use, redistribution, or incorporation into any
+# profit-seeking product or service is strictly prohibited.
+#
+# This license applies to all versions of DeepDynamic/DDESONN,
+# past, present, and future, including legacy releases.
+#
+# Intended future distribution: CRAN package.
+# ===============================================================
+
+
 source("DESONN.R")
 source("utils/utils.R")
 source("utils/bootstrap_metadata.R")
@@ -994,7 +1011,7 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
 do_ensemble         <- TRUE
-num_networks        <- 5L          # example main size
+num_networks        <- 2L          # example main size
 num_temp_iterations <- 1L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
 #
 ## You can set the above variables BEFORE sourcing this file. The defaults below are fallbacks.
@@ -1262,7 +1279,6 @@ if(train) {
     cat(sprintf("Single-run mode → training %d model%s inside one DESONN instance, skipping all ensemble/logging.\n",
                 as.integer(num_networks), if (num_networks == 1L) "" else "s"))
     
-    # IMPORTANT: respect num_networks here so Scenario B works (multi-model, no ensembles)
     main_model <- DESONN$new(
       num_networks    = max(1L, as.integer(num_networks)),
       input_size      = input_size,
@@ -1271,19 +1287,12 @@ if(train) {
       N               = N,
       lambda          = lambda,
       ensemble_number = 0L,
-      ensembles       = NULL,      # single run: no ensembles tracking
+      ensembles       = NULL,
       ML_NN           = ML_NN,
       method          = init_method,
       custom_scale    = custom_scale
     )
-    # NOTE: The code below still uses the word "ensemble" for consistency,
-    # even in single-run mode. It is not a true ensemble in that case,
-    # but changing the naming caused downstream issues with plotting logic
-    # (especially where plots are returned as lists). To avoid the heavy
-    # rework needed just for naming, we keep the "ensemble" wording here
-    # and simply document the distinction.
-    # Apply per-SONN plotting flags to all internal models
-    # Apply per-SONN plotting flags to all internal models
+    
     if (length(main_model$ensemble)) {
       for (m in seq_along(main_model$ensemble)) {
         main_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
@@ -1304,30 +1313,20 @@ if(train) {
       }
     }
     
-    # ============================
-    # Multi-seed (50 runs) section
-    # ============================
-    # if (!dir.exists("artifacts_runs")) dir.create("artifacts_runs")
-    
+    # Seeds
     seeds <- 1:x
-    acc_rows <- vector("list", length(seeds))
     metrics_rows <- list()
     
-    # Timestamp for uniqueness
+    # Filenames
     ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    
-    # Number of seeds
-    s <- as.character(length(seeds))
-
-    # File paths with seed count in the name
-    agg_pred_file <- file.path("artifacts", sprintf("SingleRun_Pretty_Test_Metrics_%s_seeds_%s.rds", s, ts_stamp))
-    agg_metrics_file <- file.path("artifacts", sprintf("SingleRun_Test_Metrics_%s_seeds_%s.rds", s, ts_stamp))
+    s_chr <- as.character(length(seeds))
+    agg_pred_file    <- file.path("artifacts", sprintf("SingleRun_Pretty_Test_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp))
+    agg_metrics_file <- file.path("artifacts", sprintf("SingleRun_Test_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp))
     
     for (i in seq_along(seeds)) {
       s <- seeds[i]
       set.seed(s)
       
-      # Build a fresh DESONN for each seed so init differs per run
       run_model <- DESONN$new(
         num_networks    = max(1L, as.integer(num_networks)),
         input_size      = input_size,
@@ -1342,7 +1341,6 @@ if(train) {
         custom_scale    = custom_scale
       )
       
-      # Apply the same per-SONN plotting flags to this run_model
       if (length(run_model$ensemble)) {
         for (m in seq_along(run_model$ensemble)) {
           run_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
@@ -1363,7 +1361,6 @@ if(train) {
         }
       }
       
-      # Train for this seed
       model_results <- run_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
         lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs, use_biases=use_biases,
@@ -1378,8 +1375,7 @@ if(train) {
         train=train, viewTables=viewTables, verbose=verbose
       )
       
-      
-      
+      # --- flatten TRAIN metrics as before ---
       flat <- tryCatch(
         rapply(
           list(
@@ -1390,70 +1386,73 @@ if(train) {
         ),
         error = function(e) setNames(vector("list", 0L), character(0))
       )
-      
-      # keep only length-1 atomics
       if (length(flat)) {
         L <- as.list(flat)
         flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
       }
-      
-      # exclude bulky keys + drop NAs
       nms <- names(flat)
       if (length(nms)) {
         drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
           grepl("grid_used", nms, fixed = TRUE) |
-          grepl("(^|\\.)details(\\.|$)", nms)   # drop any *.details.*
+          grepl("(^|\\.)details(\\.|$)", nms)
         keep <- !drop & !is.na(flat)
-        flat <- flat[keep]
-        nms  <- names(flat)
+        flat <- flat[keep]; nms <- names(flat)
       }
-      
-      # --- build a named list so column names are metric names (not values) ---
       if (length(flat) == 0L) {
         row_df <- data.frame(run_index = i, seed = s, stringsAsFactors = FALSE)
       } else {
         out <- setNames(vector("list", length(flat)), nms)
-        # numeric if possible, else character — preserve names
         num <- suppressWarnings(as.numeric(flat))
-        for (j in seq_along(flat)) {
-          out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
-        }
+        for (j in seq_along(flat)) out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
         row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
         row_df <- cbind(data.frame(run_index = i, seed = s, stringsAsFactors = FALSE), row_df)
       }
-      
-      # --- add best-* fields (robust, no helpers) ---
-      row_df$best_train_acc  <- tryCatch(as.numeric(model_results$best_train_acc),  error = function(e) NA_real_)
-      row_df$best_epoch_train<- tryCatch(as.integer(model_results$best_epoch_train),error = function(e) NA_integer_)
-      row_df$best_val_acc    <- tryCatch(as.numeric(model_results$best_val_acc),    error = function(e) NA_real_)
-      row_df$best_val_epoch  <- tryCatch(as.integer(model_results$best_val_epoch),  error = function(e) NA_integer_)
-      
+      row_df$best_train_acc   <- tryCatch(as.numeric(model_results$best_train_acc),    error = function(e) NA_real_)
+      row_df$best_epoch_train <- tryCatch(as.integer(model_results$best_epoch_train),  error = function(e) NA_integer_)
+      row_df$best_val_acc     <- tryCatch(as.numeric(model_results$best_val_acc),      error = function(e) NA_real_)
+      row_df$best_val_epoch   <- tryCatch(as.integer(model_results$best_val_epoch),    error = function(e) NA_integer_)
       metrics_rows[[i]] <- row_df
+      
       if (i == length(seeds)) main_model <- run_model
       cat(sprintf("Seed %d → collected %d metrics\n", s, max(0, ncol(row_df) - 2L)))
       
-      if(test){
-      #RUN TEST RESULTS TABLE
-      # evaluate via ENV (example) or set LOAD_FROM_RDS=TRUE to read artifacts
-      desonn_predict_eval(
-        LOAD_FROM_RDS = FALSE,
-        ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
-        INPUT_SPLIT   = "test",
-        CLASSIFICATION_MODE = CLASSIFICATION_MODE,
-        RUN_INDEX = i,
-        SEED      = s,
-        OUTPUT_DIR = "artifacts",
-        SAVE_METRICS_RDS = FALSE,                             # avoid per-seed metrics files
-        METRICS_PREFIX   = "metrics_test",
-        SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,              # keep lightweight agg file
-        AGG_PREDICTIONS_FILE = agg_pred_file,                # << aggregate here
-        AGG_METRICS_FILE     = agg_metrics_file              # << and here
-      )
+      # ============================
+      # TEST EVAL (per-slot, per-seed) — publish ENV meta per slot (no helper)
+      # ============================
+      if (isTRUE(test)) {
+        K <- max(1L, as.integer(num_networks))
+        for (k in seq_len(K)) {
+          env_name <- sprintf("Ensemble_Main_0_model_%d_metadata", as.integer(k))
+          
+          # Expect metadata present on each submodel like in do_ensemble:
+          md_k <- tryCatch(run_model$ensemble[[k]]$metadata, error = function(e) NULL)
+          if (is.null(md_k) || !is.list(md_k)) {
+            warning(sprintf("[single-run] Missing run_model$ensemble[[%d]]$metadata; skipping slot %d.", k, k))
+            next
+          }
+          md_k$model_serial_num <- as.character(md_k$model_serial_num %||% sprintf("0.main.%d", as.integer(k)))
+          assign(env_name, md_k, envir = .GlobalEnv)
+          
+          desonn_predict_eval(
+            LOAD_FROM_RDS = FALSE,
+            ENV_META_NAME = env_name,
+            INPUT_SPLIT   = "test",
+            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+            RUN_INDEX = i,
+            SEED      = s,
+            OUTPUT_DIR = "artifacts",
+            SAVE_METRICS_RDS = FALSE,
+            METRICS_PREFIX   = "metrics_test",
+            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,
+            AGG_PREDICTIONS_FILE = agg_pred_file,
+            AGG_METRICS_FILE     = agg_metrics_file,
+            MODEL_SLOT           = k
+          )
+        }
       }
-      
     }
     
-    # --- bind with base-R fill ---
+    # --- bind all TRAIN metrics (unchanged) ---
     if (length(metrics_rows) == 0L) {
       results_table <- data.frame()
     } else {
@@ -1470,60 +1469,44 @@ if(train) {
       }
     }
     
-    # remove "performance_metric." / "relevance_metric." prefixes
     colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
-    
-    # keep best_train_acc/epoch + best_val_epoch, but DROP best_val_acc before final table
     if ("best_val_acc" %in% names(results_table)) results_table$best_val_acc <- NULL
     
-    
-    # save
     dir.create("artifacts", showWarnings = FALSE, recursive = TRUE)
     out_path <- file.path(
       "artifacts",
-      sprintf("SingleRun_Train_Acc_Val_Metrics_%s_seeds_%s.rds", s, format(Sys.time(), "%Y%m%d_%H%M%S"))
+      sprintf("SingleRun_Train_Acc_Val_Metrics_%s_seeds_%s.rds", s_chr, format(Sys.time(), "%Y%m%d_%H%M%S"))
     )
     saveRDS(results_table, out_path)
     cat("Saved multi-seed metrics table to:", out_path, " | rows=", nrow(results_table),
         " cols=", ncol(results_table), "\n")
-  
     
-    
-    # Keep the ID on the run object too (belt-and-suspenders)
     main_model$ensemble_number <- 0L
-    
-    # Attach the run into the top-level container (so downstream code sees it)
     ensembles <- attach_run_to_container(ensembles, main_model)
-    
-    # Optional: quick tree view
     print_ensembles_summary(ensembles)
     
-    # Optional: expose under ensembles$main_ensemble[[1]] for downstream convenience
     if (exists("ensembles", inherits = TRUE) && is.list(ensembles)) {
       if (is.null(ensembles$main_ensemble)) ensembles$main_ensemble <- list()
       ensembles$main_ensemble[[1]] <- main_model
     }
     
-    # Optional summaries (for the last seed’s model)
     if (!is.null(main_model$performance_metric)) {
       cat("\nSingle run performance_metric (DESONN-level):\n"); print(main_model$performance_metric)
     }
     if (!is.null(main_model$relevance_metric)) {
       cat("\nSingle run relevance_metric (DESONN-level):\n"); print(main_model$relevance_metric)
     }
-    # If you want per-model metrics, iterate main_model$ensemble here as needed.
-    
   }
+  
   else {
-    ## ==========================================================
-    ## ENSEMBLE MODE (multi-seed via x)
-    ##  - Scenario C: do_ensemble=TRUE,  num_temp_iterations == 0
-    ##  - Scenario D: do_ensemble=TRUE,  num_temp_iterations > 0
-    ## ==========================================================
+    ## =======================
+    ## ENSEMBLE (multi-seed)
+    ##   - Scenario C: num_temp_iterations == 0
+    ##   - Scenario D: num_temp_iterations > 0 (prune/add)
+    ##   Output: ONE ROW PER MODEL SLOT PER SEED
+    ## =======================
     
-    ## -------------------------
-    ## Minimal helpers
-    ## -------------------------
+    ## --- tiny helpers ---
     '%||%' <- get0("%||%", ifnotfound = function(x, y) if (is.null(x)) y else x)
     
     main_meta_var <- function(i) sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(i))
@@ -1532,7 +1515,7 @@ if(train) {
     snapshot_main_serials_meta <- function() {
       vars <- grep("^Ensemble_Main_(0|1)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
       if (!length(vars)) return(character())
-      ord  <- suppressWarnings(as.integer(sub("^Ensemble_Main_(0|1)_model_(\\d+)_metadata$", "\\1", vars)))
+      ord  <- suppressWarnings(as.integer(sub("^Ensemble_Main_(?:0|1)_model_(\\d+)_metadata$", "\\1", vars)))
       vars <- vars[order(ord)]
       vapply(vars, function(v) {
         md <- get(v, envir = .GlobalEnv)
@@ -1540,82 +1523,11 @@ if(train) {
       }, character(1))
     }
     
-    compose_metadata_views <- function(ensembles) {
-      if (is.null(ensembles$original)) ensembles$original <- list()
-      main_vars <- grep("^Ensemble_Main_(0|1)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-      if (length(main_vars)) {
-        ord <- as.integer(sub("^Ensemble_Main_(0|1)_model_(\\d+)_metadata$", "\\1", main_vars))
-        main_vars <- main_vars[order(ord)]
-        ensembles$original$main_1 <- setNames(lapply(main_vars, get, envir = .GlobalEnv), main_vars)
-      } else {
-        ensembles$original$main_1 <- list()
-      }
-      ensembles$main <- ensembles$original$main_1
-      
-      t_all <- grep("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
-      if (length(t_all)) {
-        Es <- sort(unique(as.integer(sub("^Ensemble_Temp_(\\d+)_model_\\d+_metadata$", "\\1", t_all))))
-        e_last <- tail(Es, 1)
-        vars_e <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e_last), t_all, value = TRUE)
-        ord <- as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e_last), "\\1", vars_e))
-        vars_e <- vars_e[order(ord)]
-        ensembles$temp <- setNames(lapply(vars_e, get, envir = .GlobalEnv), vars_e)
-      } else {
-        ensembles$temp <- list()
-      }
-      ensembles
-    }
-    
-    .metric_minimize <- function(metric) {
-      isTRUE(get0(paste0("MINIMIZE_", metric), ifnotfound = FALSE, inherits = TRUE))
-    }
-    
-    .reset_ensemble_globals <- function() {
-      vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
-                   ls(.GlobalEnv), value = TRUE)
-      if (length(vars)) rm(list = vars, envir = .GlobalEnv)
-      if (exists("ensembles", inherits = TRUE)) {
-        try(rm(ensembles, inherits = TRUE), silent = TRUE)
-      }
-    }
-    
-    .collect_grouped_from_main <- function(ens) {
-      perf_rows <- list(); relev_rows <- list()
-      if (!is.null(ens$main) && length(ens$main)) {
-        nm <- names(ens$main)
-        for (i in seq_along(ens$main)) {
-          md <- ens$main[[i]]; if (is.null(md) || !is.list(md)) next
-          serial <- as.character(md$model_serial_num %||% NA_character_)
-          slot   <- suppressWarnings(as.integer(sub(".*model_(\\d+)_metadata$", "\\1", nm[i]))); if (!is.finite(slot)) slot <- i
-          if (is.list(md$performance_metric)) {
-            for (mn in names(md$performance_metric)) {
-              val <- md$performance_metric[[mn]]
-              if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
-                perf_rows[[length(perf_rows)+1L]] <- data.frame(slot=slot, serial=serial, metric_name=mn, metric_value=as.numeric(val), stringsAsFactors=FALSE)
-              }
-            }
-          }
-          if (is.list(md$relevance_metric)) {
-            for (mn in names(md$relevance_metric)) {
-              val <- md$relevance_metric[[mn]]
-              if (is.numeric(val) && length(val) == 1L && is.finite(val)) {
-                relev_rows[[length(relev_rows)+1L]] <- data.frame(slot=slot, serial=serial, metric_name=mn, metric_value=as.numeric(val), stringsAsFactors=FALSE)
-              }
-            }
-          }
-        }
-      }
-      list(
-        perf_df  = if (length(perf_rows))  do.call(rbind, perf_rows)  else NULL,
-        relev_df = if (length(relev_rows)) do.call(rbind, relev_rows) else NULL
-      )
-    }
-    
     get_temp_serials_meta <- function(iter_j) {
       e <- iter_j + 1L
       vars <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e), ls(.GlobalEnv), value = TRUE)
       if (!length(vars)) return(character())
-      ord <- as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e), "\\1", vars))
+      ord <- suppressWarnings(as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e), "\\1", vars)))
       vars <- vars[order(ord)]
       vapply(vars, function(v) {
         md <- get(v, envir = .GlobalEnv)
@@ -1624,9 +1536,126 @@ if(train) {
       }, character(1))
     }
     
-    ## -------------------------
-    ## New helper: resolve_env_meta
-    ## -------------------------
+    .metric_minimize <- function(metric) isTRUE(get0(paste0("MINIMIZE_", metric), ifnotfound = FALSE, inherits = TRUE))
+    is_real_serial   <- function(s) is.character(s) && length(s) == 1L && nzchar(s) && !is.na(s)
+    EMPTY_SLOT <- structure(list(.empty_slot = TRUE), class = "EMPTY_SLOT")
+    
+    ## Always take a single numeric scalar (optionally by index) to avoid length>1 assignments
+    .scalar_num <- function(x, idx = NA_integer_) {
+      v <- suppressWarnings(as.numeric(x))
+      if (!length(v)) return(NA_real_)
+      if (is.finite(idx) && !is.na(idx) && idx >= 1L && idx <= length(v)) return(v[idx])
+      v[1]
+    }
+    
+    ## --- prune/add (minimal) ---
+    prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
+      minimize  <- .metric_minimize(target_metric_name_worst)
+      main_sers <- snapshot_main_serials_meta()
+      if (!length(main_sers)) return(NULL)
+      
+      get_metric_by_serial <- function(serial, metric_name) {
+        vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                     ls(.GlobalEnv), value = TRUE)
+        for (v in vars) {
+          md <- get(v, envir = .GlobalEnv)
+          if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+            val <- tryCatch(md$performance_metric[[metric_name]], error = function(e) NULL)
+            if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error = function(e) NULL)
+            val_num <- suppressWarnings(as.numeric(val))
+            return(if (length(val_num) && is.finite(val_num[1])) val_num[1] else NA_real_)
+          }
+        }
+        NA_real_
+      }
+      
+      main_vals <- vapply(main_sers, get_metric_by_serial, numeric(1), target_metric_name_worst)
+      if (all(!is.finite(main_vals))) return(NULL)
+      
+      worst_idx  <- if (minimize) which.max(main_vals) else which.min(main_vals)
+      worst_slot <- as.integer(worst_idx)
+      if (!(length(ensembles$main_ensemble) >= 1L)) return(NULL)
+      main_container <- ensembles$main_ensemble[[1]]
+      if (is.null(main_container$ensemble) || !length(main_container$ensemble)) return(NULL)
+      if (worst_slot < 1L || worst_slot > length(main_container$ensemble)) return(NULL)
+      
+      removed_model <- main_container$ensemble[[worst_slot]]
+      main_container$ensemble[[worst_slot]] <- EMPTY_SLOT
+      ensembles$main_ensemble[[1]] <- main_container
+      
+      list(
+        removed_network   = removed_model,
+        updated_ensembles = ensembles,
+        worst_model_index = worst_slot,
+        worst_slot        = worst_slot,
+        worst_serial      = as.character(main_sers[worst_slot]),
+        worst_value       = as.numeric(main_vals[worst_slot])
+      )
+    }
+    
+    add_network_to_ensemble <- function(ensembles, target_metric_name_best,
+                                        removed_network, ensemble_number,
+                                        worst_model_index, removed_serial, removed_value) {
+      minimize     <- .metric_minimize(target_metric_name_best)
+      temp_serials <- get_temp_serials_meta(ensemble_number)
+      if (!length(temp_serials)) return(list(updated_ensembles=ensembles, worst_slot=as.integer(worst_model_index)))
+      
+      get_metric_by_serial <- function(serial, metric_name) {
+        vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                     ls(.GlobalEnv), value = TRUE)
+        for (v in vars) {
+          md <- get(v, envir = .GlobalEnv)
+          if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+            val <- tryCatch(md$performance_metric[[metric_name]], error = function(e) NULL)
+            if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error = function(e) NULL)
+            val_num <- suppressWarnings(as.numeric(val))
+            return(if (length(val_num) && is.finite(val_num[1])) val_num[1] else NA_real_)
+          }
+        }
+        NA_real_
+      }
+      
+      temp_vals <- vapply(temp_serials, get_metric_by_serial, numeric(1), target_metric_name_best)
+      if (all(!is.finite(temp_vals))) return(list(updated_ensembles=ensembles, worst_slot=as.integer(worst_model_index)))
+      
+      best_idx    <- if (minimize) which.min(temp_vals) else which.max(temp_vals)
+      best_serial <- as.character(temp_serials[best_idx])
+      best_val    <- as.numeric(temp_vals[best_idx])
+      
+      removed_val <- if (is.finite(removed_value)) removed_value else if (is_real_serial(removed_serial)) get_metric_by_serial(removed_serial, target_metric_name_best) else NA_real_
+      if (!is.finite(best_val) || !is.finite(removed_val) ||
+          !(if (minimize) best_val < removed_val else best_val > removed_val)) {
+        return(list(updated_ensembles=ensembles, worst_slot=as.integer(worst_model_index)))
+      }
+      
+      worst_slot <- as.integer(worst_model_index)
+      if (!(length(ensembles$main_ensemble) >= 1L)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      main_container <- ensembles$main_ensemble[[1]]
+      if (is.null(main_container$ensemble) || !length(main_container$ensemble)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      
+      temp_parts       <- strsplit(best_serial, "\\.")[[1]]
+      temp_model_index <- suppressWarnings(as.integer(temp_parts[3]))
+      if (!is.finite(temp_model_index) || is.na(temp_model_index)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      
+      if (!(length(ensembles$temp_ensemble) >= 1L) || is.null(ensembles$temp_ensemble[[1]]$ensemble)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      temp_container <- ensembles$temp_ensemble[[1]]
+      if (temp_model_index < 1L || temp_model_index > length(temp_container$ensemble)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      
+      candidate_model <- temp_container$ensemble[[temp_model_index]]
+      main_container$ensemble[[worst_slot]] <- candidate_model
+      ensembles$main_ensemble[[1]] <- main_container
+      
+      temp_e  <- suppressWarnings(as.integer(temp_parts[1]))
+      tvar <- temp_meta_var(temp_e, temp_model_index)
+      mvar <- main_meta_var(worst_slot)
+      if (exists(tvar, envir = .GlobalEnv)) {
+        tmd <- get(tvar, envir = .GlobalEnv)
+        tmd$model_serial_num <- best_serial
+        assign(mvar, tmd, envir = .GlobalEnv)
+      }
+      list(updated_ensembles=ensembles, worst_slot=worst_slot)
+    }
+    
     resolve_env_meta <- function(slot = 1L, prefer = c("main","temp"), temp_iter_fallback = 1L) {
       prefer <- match.arg(prefer)
       cand <- if (prefer == "main") {
@@ -1646,40 +1675,39 @@ if(train) {
     ## Seed loop
     ## -------------------------
     seeds <- 1:x
-    metrics_rows <- vector("list", length(seeds))
-    ens_rows     <- vector("list", length(seeds))
+    per_slot_rows <- list()
     ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
     
     TARGET_METRIC <- get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
     num_temp_iterations <- as.integer(num_temp_iterations %||% 0L)
     
     total_seeds_chr <- as.character(length(seeds))
-    agg_pred_file   <- file.path("artifacts", sprintf("Ensemble_Pretty_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
-    agg_metrics_file<- file.path("artifacts", sprintf("Ensemble_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    agg_pred_file    <- file.path("artifacts", sprintf("Ensemble_Pretty_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    agg_metrics_file <- file.path("artifacts", sprintf("Ensemble_Test_Metrics_%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
     
-    for (ii in seq_along(seeds)) {
-      s <- seeds[ii]
+    row_ptr <- 0L
+    for (i in seq_along(seeds)) {
+      s <- seeds[i]
       set.seed(s)
       cat(sprintf("[ENSEMBLE] Seed %d/%d\n", s, length(seeds)))
       
-      .reset_ensemble_globals()
-      ensembles <- list(main_ensemble = list(), temp_ensemble = list(), tables = NULL)
+      ## reset metadata
+      vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                   ls(.GlobalEnv), value = TRUE)
+      if (length(vars)) rm(list = vars, envir = .GlobalEnv)
+      if (exists("ensembles", inherits = TRUE)) try(rm(ensembles, inherits = TRUE), silent = TRUE)
       
-      ## ===== MAIN model (common to C & D) =====
+      ensembles <- list(main_ensemble = list(), temp_ensemble = list())
+      
+      ## MAIN
       main_model <- DESONN$new(
         num_networks    = max(1L, as.integer(num_networks)),
-        input_size      = input_size,
-        hidden_sizes    = hidden_sizes,
-        output_size     = output_size,
-        N               = N,
-        lambda          = lambda,
-        ensemble_number = 1L,
-        ensembles       = ensembles,
-        ML_NN           = ML_NN,
-        method          = init_method,
-        custom_scale    = custom_scale
+        input_size      = input_size, hidden_sizes = hidden_sizes, output_size = output_size,
+        N = N, lambda = lambda, ensemble_number = 1L, ensembles = ensembles,
+        ML_NN = ML_NN, method = init_method, custom_scale = custom_scale
       )
-      model_results_main <- main_model$train(
+      
+      model_results_main <<- main_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
         lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs, use_biases=use_biases,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
@@ -1694,44 +1722,54 @@ if(train) {
       )
       ensembles$main_ensemble[[1]] <- main_model
       
-      ## ===== Scenario C =====
-      if (num_temp_iterations == 0L) {
-        ensembles <- compose_metadata_views(ensembles)
-        if (isTRUE(test)) {
-          ENV_META_NAME <- resolve_env_meta(1, "main", 1L)
+      ## === STAMP MAIN METADATA with best_* including best_val_prediction_time ===
+      best_train_acc_ret     <- try(model_results_main$predicted_outputAndTime$best_train_acc,           silent = TRUE); if (inherits(best_train_acc_ret, "try-error")) best_train_acc_ret <- NA_real_
+      best_epoch_train_ret   <- try(model_results_main$predicted_outputAndTime$best_epoch_train,         silent = TRUE); if (inherits(best_epoch_train_ret, "try-error")) best_epoch_train_ret <- NA_integer_
+      best_val_acc_ret       <- try(model_results_main$predicted_outputAndTime$best_val_acc,             silent = TRUE); if (inherits(best_val_acc_ret, "try-error")) best_val_acc_ret <- NA_real_
+      best_val_epoch_ret     <- try(model_results_main$predicted_outputAndTime$best_val_epoch,           silent = TRUE); if (inherits(best_val_epoch_ret, "try-error")) best_val_epoch_ret <- NA_integer_
+      best_val_pred_time_ret <- try(model_results_main$predicted_outputAndTime$best_val_prediction_time, silent = TRUE); if (inherits(best_val_pred_time_ret, "try-error")) best_val_pred_time_ret <- NA_real_
+      
+      K <- max(1L, as.integer(num_networks))
+      for (k in seq_len(K)) {
+        mvar <- main_meta_var(k)
+        if (!exists(mvar, envir = .GlobalEnv)) next
+        md <- get(mvar, envir = .GlobalEnv)
+        
+        md$best_train_acc           <- .scalar_num(md$best_train_acc           %||% best_train_acc_ret,     idx = k)
+        md$best_epoch_train         <- as.integer(.scalar_num(md$best_epoch_train %||% best_epoch_train_ret, idx = k))
+        md$best_val_acc             <- .scalar_num(md$best_val_acc             %||% best_val_acc_ret,       idx = k)
+        md$best_val_epoch           <- as.integer(.scalar_num(md$best_val_epoch %||% best_val_epoch_ret,    idx = k))
+        md$best_val_prediction_time <- .scalar_num(md$best_val_prediction_time %||% best_val_pred_time_ret, idx = k)
+        
+        assign(mvar, md, envir = .GlobalEnv)
+        cat(sprintf("[STAMPED][MAIN] slot=%d best_val_acc=%s\n", k, as.character(md$best_val_acc)))
+      }
+      
+      ## Scenario C test eval
+      if (num_temp_iterations == 0L && isTRUE(test)) {
+        for (k in seq_len(K)) {
+          ENV_META_NAME <- resolve_env_meta(k, "main", 1L)
           desonn_predict_eval(
-            LOAD_FROM_RDS = FALSE,
-            ENV_META_NAME = ENV_META_NAME,
-            INPUT_SPLIT   = "test",
-            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
-            RUN_INDEX = ii,
-            SEED      = s,
-            OUTPUT_DIR = "artifacts",
-            SAVE_METRICS_RDS = FALSE,
-            METRICS_PREFIX   = "metrics_test",
-            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,
-            AGG_PREDICTIONS_FILE = agg_pred_file,
-            AGG_METRICS_FILE     = agg_metrics_file
+            LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
+            CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
+            OUTPUT_DIR = "artifacts", SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
+            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE, AGG_PREDICTIONS_FILE = agg_pred_file,
+            AGG_METRICS_FILE = agg_metrics_file, MODEL_SLOT = k
           )
         }
       }
       
-      ## ===== Scenario D =====
-      else {
+      ## Scenario D prune/add
+      if (num_temp_iterations > 0L) {
         for (j in seq_len(num_temp_iterations)) {
+          ensembles$temp_ensemble <- vector("list", 1L)
           temp_model <- DESONN$new(
-            num_networks    = max(1L, as.integer(num_networks)),
-            input_size      = input_size,
-            hidden_sizes    = hidden_sizes,
-            output_size     = output_size,
-            N               = N,
-            lambda          = lambda,
-            ensemble_number = j + 1L,
-            ensembles       = ensembles,
-            ML_NN           = ML_NN,
-            method          = init_method,
-            custom_scale    = custom_scale
+            num_networks=max(1L, as.integer(num_networks)), input_size=input_size,
+            hidden_sizes=hidden_sizes, output_size=output_size, N=N, lambda=lambda,
+            ensemble_number = j + 1L, ensembles = ensembles, ML_NN=ML_NN, method=init_method, custom_scale=custom_scale
           )
+          ensembles$temp_ensemble[[1]] <- temp_model
+          
           invisible(temp_model$train(
             Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
             lr_min=lr_min, ensemble_number=j+1L, num_epochs=num_epochs, use_biases=use_biases,
@@ -1745,75 +1783,152 @@ if(train) {
             X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
             train=train, viewTables=viewTables, verbose=verbose
           ))
-          ensembles <- compose_metadata_views(ensembles)
-        }
-        if (isTRUE(test)) {
-          ENV_META_NAME <- resolve_env_meta(1, "main", num_temp_iterations)
-          desonn_predict_eval(
-            LOAD_FROM_RDS = FALSE,
-            ENV_META_NAME = ENV_META_NAME,
-            INPUT_SPLIT   = "test",
-            CLASSIFICATION_MODE = CLASSIFICATION_MODE,
-            RUN_INDEX = ii,
-            SEED      = s,
-            OUTPUT_DIR = "artifacts",
-            SAVE_METRICS_RDS = FALSE,
-            METRICS_PREFIX   = "metrics_test",
-            SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE,
-            AGG_PREDICTIONS_FILE = agg_pred_file,
-            AGG_METRICS_FILE     = agg_metrics_file
+          
+          ## === STAMP TEMP METADATA (same 5 fields) ===
+          best_train_acc_tmp     <- try(temp_model$train_last_result$best_train_acc,           silent = TRUE); if (inherits(best_train_acc_tmp, "try-error")) best_train_acc_tmp <- NA_real_
+          best_epoch_train_tmp   <- try(temp_model$train_last_result$best_epoch_train,         silent = TRUE); if (inherits(best_epoch_train_tmp, "try-error")) best_epoch_train_tmp <- NA_integer_
+          best_val_acc_tmp       <- try(temp_model$train_last_result$best_val_acc,             silent = TRUE); if (inherits(best_val_acc_tmp, "try-error")) best_val_acc_tmp <- NA_real_
+          best_val_epoch_tmp     <- try(temp_model$train_last_result$best_val_epoch,           silent = TRUE); if (inherits(best_val_epoch_tmp, "try-error")) best_val_epoch_tmp <- NA_integer_
+          best_val_pred_time_tmp <- try(temp_model$train_last_result$best_val_prediction_time, silent = TRUE); if (inherits(best_val_pred_time_tmp, "try-error")) best_val_pred_time_tmp <- NA_real_
+          
+          for (k in seq_len(K)) {
+            tvar <- temp_meta_var(j + 1L, k)
+            if (!exists(tvar, envir = .GlobalEnv)) next
+            tmd <- get(tvar, envir = .GlobalEnv)
+            
+            tmd$best_train_acc           <- .scalar_num(tmd$best_train_acc           %||% best_train_acc_tmp,     idx = k)
+            tmd$best_epoch_train         <- as.integer(.scalar_num(tmd$best_epoch_train %||% best_epoch_train_tmp, idx = k))
+            tmd$best_val_acc             <- .scalar_num(tmd$best_val_acc             %||% best_val_acc_tmp,       idx = k)
+            tmd$best_val_epoch           <- as.integer(.scalar_num(tmd$best_val_epoch %||% best_val_epoch_tmp,    idx = k))
+            tmd$best_val_prediction_time <- .scalar_num(tmd$best_val_prediction_time %||% best_val_pred_time_tmp, idx = k)
+            
+            assign(tvar, tmd, envir = .GlobalEnv)
+            cat(sprintf("[STAMPED][TEMP e=%d] slot=%d best_val_acc=%s\n", j+1L, k, as.character(tmd$best_val_acc)))
+          }
+          
+          pruned <- prune_network_from_ensemble(
+            ensembles,
+            get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
           )
+          if (!is.null(pruned)) {
+            ensembles <- add_network_to_ensemble(
+              ensembles               = pruned$updated_ensembles,
+              target_metric_name_best = get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE),
+              removed_network         = pruned$removed_network,
+              ensemble_number         = j,
+              worst_model_index       = pruned$worst_model_index,
+              removed_serial          = pruned$worst_serial,
+              removed_value           = pruned$worst_value
+            )$updated_ensembles
+          }
+        }
+        
+        if (isTRUE(test)) {
+          K <- max(1L, as.integer(num_networks))
+          for (k in seq_len(K)) {
+            ENV_META_NAME <- resolve_env_meta(k, "main", num_temp_iterations)
+            desonn_predict_eval(
+              LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
+              CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
+              OUTPUT_DIR = "artifacts", SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
+              SAVE_PREDICTIONS_COLUMN_IN_RDS = FALSE, AGG_PREDICTIONS_FILE = agg_pred_file,
+              AGG_METRICS_FILE = agg_metrics_file, MODEL_SLOT = k
+            )
+          }
         }
       }
       
-      ## ---- Flatten per-seed metrics (like !do_ensemble) ----
-      flat <- tryCatch(
-        rapply(
-          list(
-            performance_metric = model_results_main$performance_relevance_data$performance_metric,
-            relevance_metric   = model_results_main$performance_relevance_data$relevance_metric
+      ## ==========================
+      ## Per-SLOT rows for this seed
+      ## ==========================
+      K <- max(1L, as.integer(num_networks))
+      for (k in seq_len(K)) {
+        mvar <- main_meta_var(k)
+        if (!exists(mvar, envir = .GlobalEnv)) next
+        md <- get(mvar, envir = .GlobalEnv)
+        
+        ## Flatten only train() metadata (performance + relevance)
+        flat <- tryCatch(
+          rapply(
+            list(
+              performance_metric = md$performance_metric,
+              relevance_metric   = md$relevance_metric
+            ),
+            f = function(z) z, how = "unlist"
           ),
-          f = function(z) z, how = "unlist"
-        ),
-        error = function(e) setNames(vector("list", 0L), character(0))
-      )
-      if (length(flat)) {
-        L <- as.list(flat)
-        flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+          error = function(e) setNames(vector("list", 0L), character(0))
+        )
+        
+        if (length(flat)) {
+          L <- as.list(flat)
+          flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+        }
+        nms <- names(flat)
+        if (length(nms)) {
+          drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
+            grepl("(^|\\.)grid_used(\\.|$)", nms) |
+            grepl("(^|\\.)details(\\.|$)", nms)
+          keep <- !drop & !is.na(flat)
+          flat <- flat[keep]; nms <- names(flat)
+        }
+        
+        if (length(flat) == 0L) {
+          row_df <- data.frame(run_index = i, seed = s, MODEL_SLOT = k, stringsAsFactors = FALSE)
+        } else {
+          out <- setNames(vector("list", length(flat)), nms)
+          num <- suppressWarnings(as.numeric(flat))
+          for (jj in seq_along(flat)) out[[jj]] <- if (!is.na(num[jj])) num[jj] else as.character(flat[[jj]])
+          row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
+          row_df <- cbind(data.frame(run_index = i, seed = s, MODEL_SLOT = k, stringsAsFactors = FALSE), row_df)
+        }
+        
+        ## attach serial + model_name
+        row_df$serial     <- as.character(md$model_serial_num %||% NA_character_)
+        row_df$model_name <- md$model_name %||% NA_character_
+        
+        ## Accuracy policy: if missing, fall back to tuned accuracy.
+        get_num <- function(x) suppressWarnings(as.numeric(x))
+        if (!("accuracy" %in% names(row_df)) || !is.finite(get_num(row_df$accuracy))) {
+          if ("accuracy_precision_recall_f1_tuned.accuracy" %in% names(row_df)) {
+            row_df$accuracy <- get_num(row_df[["accuracy_precision_recall_f1_tuned.accuracy"]])
+          }
+        }
+        
+        ## Confusion matrix: prefer plain; if missing, fill from tuned block if present.
+        have_cm <- all(c("confusion_matrix.TP","confusion_matrix.FP","confusion_matrix.TN","confusion_matrix.FN") %in% names(row_df))
+        if (!have_cm) {
+          map_tuned_cm <- function(src_name, dst_name) {
+            if (src_name %in% names(row_df) && !(dst_name %in% names(row_df))) {
+              row_df[[dst_name]] <<- get_num(row_df[[src_name]])
+            }
+          }
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.TP", "confusion_matrix.TP")
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.FP", "confusion_matrix.FP")
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.TN", "confusion_matrix.TN")
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.FN", "confusion_matrix.FN")
+        }
+        
+        ## Best* (read UNCONDITIONALLY from metadata; scalarized)
+        row_df$best_train_acc           <- .scalar_num(md$best_train_acc)
+        row_df$best_epoch_train         <- as.integer(.scalar_num(md$best_epoch_train))
+        row_df$best_val_acc             <- .scalar_num(md$best_val_acc)
+        row_df$best_val_epoch           <- as.integer(.scalar_num(md$best_val_epoch))
+        row_df$best_val_prediction_time <- .scalar_num(md$best_val_prediction_time)
+        
+        row_ptr <- row_ptr + 1L
+        per_slot_rows[[row_ptr]] <- row_df
       }
-      nms <- names(flat)
-      if (length(nms)) {
-        drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
-          grepl("grid_used", nms, fixed = TRUE) |
-          grepl("(^|\\.)details(\\.|$)", nms)
-        keep <- !drop & !is.na(flat)
-        flat <- flat[keep]; nms <- names(flat)
-      }
-      if (length(flat) == 0L) {
-        row_df <- data.frame(run_index = ii, seed = s, stringsAsFactors = FALSE)
-      } else {
-        out <- setNames(vector("list", length(flat)), nms)
-        num <- suppressWarnings(as.numeric(flat))
-        for (j in seq_along(flat)) out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
-        row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
-        row_df <- cbind(data.frame(run_index = ii, seed = s, stringsAsFactors = FALSE), row_df)
-      }
-      row_df$best_train_acc   <- tryCatch(as.numeric(model_results_main$best_train_acc),    error = function(e) NA_real_)
-      row_df$best_epoch_train <- tryCatch(as.integer(model_results_main$best_epoch_train),  error = function(e) NA_integer_)
-      row_df$best_val_acc     <- tryCatch(as.numeric(model_results_main$best_val_acc),      error = function(e) NA_real_)
-      row_df$best_val_epoch   <- tryCatch(as.integer(model_results_main$best_val_epoch),    error = function(e) NA_integer_)
       
-      metrics_rows[[ii]] <- row_df
-    }
+    } ## seeds
     
-    ## ---- Aggregate TRAIN metrics ----
-    if (length(metrics_rows) == 0L) {
+    ## ---- Aggregate: ONE ROW PER MODEL SLOT PER SEED ----
+    if (length(per_slot_rows) == 0L) {
       results_table <- data.frame()
     } else {
-      results_table <- metrics_rows[[1]]
-      if (length(metrics_rows) > 1L) {
-        for (k in 2:length(metrics_rows)) {
-          x <- results_table; y <- metrics_rows[[k]]
+      results_table <- per_slot_rows[[1]]
+      if (length(per_slot_rows) > 1L) {
+        for (k in 2:length(per_slot_rows)) {
+          x <- results_table; y <- per_slot_rows[[k]]
           for (m in setdiff(names(y), names(x))) x[[m]] <- NA
           for (m in setdiff(names(x), names(y))) y[[m]] <- NA
           ord <- union(names(x), names(y))
@@ -1821,23 +1936,57 @@ if(train) {
         }
       }
     }
+    
+    ## strip leading namespaces like "performance_metric." / "relevance_metric."
     colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
-    if ("best_val_acc" %in% names(results_table)) results_table$best_val_acc <- NULL
     
     out_path_train <- file.path("artifacts",
                                 sprintf("Ensembles_Train_Acc_Val_Metrics_%s_seeds_%s.rds", length(seeds), ts_stamp))
     saveRDS(results_table, out_path_train)
-    cat("Saved ENSEMBLE per-seed TRAIN metrics table to:", out_path_train,
+    cat("Saved ENSEMBLE per-slot TRAIN metrics table to:", out_path_train,
         " | rows=", nrow(results_table), " cols=", ncol(results_table), "\n")
+    
+    ## (optional) Reindex AGG test artifacts by serial/slot (robust to partial cols)
+    for (agg_path in c(agg_metrics_file, agg_pred_file)) {
+      if (!file.exists(agg_path)) next
+      df <- try(readRDS(agg_path), silent = TRUE); if (inherits(df, "try-error")) next
+      if (!is.data.frame(df) || !NROW(df)) next
+      
+      order_keys <- snapshot_main_serials_meta()
+      if (!length(order_keys)) next
+      
+      if (!("serial" %in% names(df))) df$serial <- NA_character_
+      need <- is.na(df$serial) | !nzchar(df$serial)
+      
+      if (any(need)) {
+        slot_col <- if ("MODEL_SLOT" %in% names(df)) "MODEL_SLOT" else if ("model" %in% names(df)) "model" else NA_character_
+        if (!is.na(slot_col) && length(order_keys)) {
+          idx <- which(need)
+          slot_vals <- suppressWarnings(as.integer(df[[slot_col]]))
+          ok  <- idx[slot_vals[idx] >= 1L & slot_vals[idx] <= length(order_keys)]
+          if (length(ok)) df$serial[ok] <- order_keys[slot_vals[ok]]
+        }
+      }
+      
+      n <- NROW(df)
+      ord_idx  <- match(df$serial, order_keys)
+      tie_seed <- if ("SEED" %in% names(df)) df$SEED else rep(999999L, n)
+      tie_slot <- if ("MODEL_SLOT" %in% names(df)) df$MODEL_SLOT else if ("model" %in% names(df)) suppressWarnings(as.integer(df$model)) else seq_len(n)
+      
+      o <- try(order(ord_idx, tie_seed, tie_slot, na.last = TRUE), silent = TRUE)
+      if (inherits(o, "try-error") || length(o) != n) o <- seq_len(n)
+      
+      df <- df[o, , drop = FALSE]; df$run_index <- seq_len(nrow(df))
+      saveRDS(df, agg_path)
+      cat("Reindexed (by serial) AGG file:", agg_path, " | rows=", nrow(df), "\n")
+    }
   }
   
-  
-  
-  
-  
+
   
   
 }
+  
 
 
 

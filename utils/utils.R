@@ -1,3 +1,19 @@
+# ===============================================================
+# DeepDynamic — DDESONN
+# Deep Dynamic Ensemble Self-Organizing Neural Network
+# ---------------------------------------------------------------
+# Copyright (c) 2024-2025 Mathew William Fok
+# 
+# Licensed for academic and personal research use only.
+# Commercial use, redistribution, or incorporation into any
+# profit-seeking product or service is strictly prohibited.
+#
+# This license applies to all versions of DeepDynamic/DDESONN,
+# past, present, and future, including legacy releases.
+#
+# Intended future distribution: CRAN package.
+# ===============================================================
+
 probe_preds_vs_labels <- function(preds, labs, tag = "GENERIC", save_global = FALSE) {
   r2_val <- tryCatch({
     ss_tot <- sum((labs - mean(labs))^2, na.rm = TRUE)
@@ -1918,7 +1934,6 @@ optimizers_log_update <- function(
 # MAIN TEST PREDICT-ONLY FUNCTION
 #################################################################################################
 
-
 desonn_predict_eval <- function(
     LOAD_FROM_RDS = FALSE,                            # if TRUE, load meta RDS; else from ENV object
     ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
@@ -1931,7 +1946,8 @@ desonn_predict_eval <- function(
     METRICS_PREFIX = "metrics_test",                  # artifacts/<prefix>_runXXX_seedY_YYYYmmdd_HHMMSS.rds
     SAVE_PREDICTIONS_COLUMN_IN_RDS = get0("SAVE_PREDICTIONS_COLUMN_IN_RDS", inherits=TRUE, ifnotfound=FALSE),
     AGG_PREDICTIONS_FILE = NULL,                      # if provided, append all seeds into one predictions RDS here
-    AGG_METRICS_FILE     = NULL                       # if provided, append all seeds into one metrics RDS table here
+    AGG_METRICS_FILE     = NULL,                      # if provided, append all seeds into one metrics RDS table here
+    MODEL_SLOT           = 1L                         # <<< NEW: which MAIN slot we're evaluating
 ) {
   # ---------------- helpers ----------------
   `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -2066,7 +2082,7 @@ desonn_predict_eval <- function(
     }
     storage.mode(P) <- "double"
     if (!is.matrix(P) || nrow(P) == 0L) stop("[as_pred] empty prediction matrix")
-    if (mode == "regression" && ncol(P) > 1L) { if (DEBUG) message("[as_pred] regression but >1 cols; using col 1"); P <- P[,1,drop=FALSE] }
+    if (mode == "regression" && ncol(P) > 1L) { P <- P[,1,drop=FALSE] }
     P
   }
   
@@ -2078,7 +2094,8 @@ desonn_predict_eval <- function(
   verbose_flag   <- isTRUE(get0("verbose", inherits=TRUE, ifnotfound=FALSE))
   
   cat("[CFG] SPLIT=", INPUT_SPLIT, " | CLASS_MODE=", CLASSIFICATION_MODE,
-      " | RUN_INDEX=", RUN_INDEX, " | SEED=", SEED, " | OUT=", OUTPUT_DIR, "\n", sep="")
+      " | RUN_INDEX=", RUN_INDEX, " | SEED=", SEED, " | SLOT=", MODEL_SLOT,
+      " | OUT=", OUTPUT_DIR, "\n", sep="")
   
   # ---------------- load meta ----------------
   meta <- NULL
@@ -2269,11 +2286,15 @@ desonn_predict_eval <- function(
   }
   colnames(row_df) <- sub("^performance_metric\\.", "", colnames(row_df))
   colnames(row_df) <- sub("^relevance_metric\\.",   "", colnames(row_df))
+  # tag the slot for aggregate metrics
+  row_df$model_slot <- as.integer(MODEL_SLOT)
   
   # ---------------- compact summary (results_df) ----------------
   pred_hash <- tryCatch(digest_safe(round(P[seq_len(min(nrow(P), 2000)), , drop=FALSE], 6)), error=function(e) NA_character_)
   results_df <- data.frame(
-    kind = if (LOAD_FROM_RDS) "RDS" else "ENV", ens = 0L, model = 1L,
+    kind = if (LOAD_FROM_RDS) "RDS" else "ENV",
+    ens  = 0L,
+    model = as.integer(MODEL_SLOT),                 # <<< reflect the slot
     split_used = split_used, n_pred_rows = nrow(P),
     accuracy=r6(acc), precision=r6(prec), recall=r6(rec), f1=r6(f1s),
     tuned_threshold = r6(tuned$details$best_threshold),
@@ -2305,20 +2326,27 @@ desonn_predict_eval <- function(
         schema_version = "pred-agg-v1",
         created_at     = Sys.time(),
         flags          = list(CLASSIFICATION_MODE=CLASSIFICATION_MODE),
-        meta_source    = if (LOAD_FROM_RDS) (attr(meta,"artifact_path") %||% NA_character_) else ENV_META_NAME,
-        entries        = list(),    # per-seed entries
+        meta_source    = "mixed",                     # <<< multiple slots likely
+        entries        = list(),                      # per-seed/slot entries
         seeds          = integer(0)
       )
+    } else {
+      # ensure meta_source doesn't mislead when mixing slots
+      if (is.null(pack$meta_source) || identical(pack$meta_source, "")) pack$meta_source <- "mixed"
     }
-    key <- sprintf("seed_%s_run_%03d", as.character(SEED), as.integer(RUN_INDEX))
+    key <- sprintf("seed_%s_run_%03d_model_%02d",
+                   as.character(SEED), as.integer(RUN_INDEX), as.integer(MODEL_SLOT))
     entry <- list(
-      run_index   = RUN_INDEX,
-      seed        = SEED,
+      run_index   = as.integer(RUN_INDEX),
+      seed        = as.integer(SEED),
+      model_slot  = as.integer(MODEL_SLOT),
+      meta_var    = as.character(ENV_META_NAME),     # <<< which ENV var was used
       results_df  = results_df,
       prediction_sig = pred_hash
     )
     if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
-      entry$predictions <- list(Ensemble_Main_0_model_1 = P)
+      # name by ENV var for debuggability
+      entry$predictions <- setNames(list(P), ENV_META_NAME)
     }
     pack$entries[[key]] <- entry
     if (!(SEED %in% pack$seeds)) pack$seeds <- sort(unique(c(pack$seeds, SEED)))
@@ -2344,12 +2372,12 @@ desonn_predict_eval <- function(
       ),
       meta_source     = if (LOAD_FROM_RDS) (attr(meta,"artifact_path") %||% NA_character_) else ENV_META_NAME,
       results_table   = results_df,
-      prediction_sigs = results_df$pred_sig
+      prediction_sigs = results_df$pred_sig,
+      model_slot      = as.integer(MODEL_SLOT)
     )
     if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
-      predict_pack$predictions <- list(Ensemble_Main_0_model_1 = P)
+      predict_pack$predictions <- setNames(list(P), ENV_META_NAME)
     }
-    # Hard safety strip
     if (!isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS) && !is.null(predict_pack$predictions)) predict_pack$predictions <- NULL
     saveRDS(predict_pack, predictions_path)
     cat("[SAVE] predictions → ", predictions_path,
@@ -2381,7 +2409,7 @@ desonn_predict_eval <- function(
     )
     if (SAVE_METRICS_RDS) {
       saveRDS(row_df, metrics_path)
-      cat("[SAVE] metrics     → ", metrics_path, " | rows=", nrow(row_df), " cols=", ncol(row_df), "\n", sep="")
+      cat("[SAVE] metrics     → ", metrics_path, " | rows=", nrow(row_df), " cols=", ncol(row_df), "\n")
     } else {
       metrics_path <- NA_character_
     }

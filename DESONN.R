@@ -1,3 +1,19 @@
+# ===============================================================
+# DeepDynamic — DDESONN
+# Deep Dynamic Ensemble Self-Organizing Neural Network
+# ---------------------------------------------------------------
+# Copyright (c) 2024-2025 Mathew William Fok
+# 
+# Licensed for academic and personal research use only.
+# Commercial use, redistribution, or incorporation into any
+# profit-seeking product or service is strictly prohibited.
+#
+# This license applies to all versions of DeepDynamic/DDESONN,
+# past, present, and future, including legacy releases.
+#
+# Intended future distribution: CRAN package.
+# ===============================================================
+
 source("utils/utils.R")
 source("optimizers.R")
 source("activation_functions.R")
@@ -1384,15 +1400,7 @@ SONN <- R6Class(
       
       # ======== TRAIN LOOP ========
       if (train) {
-        # --- minimal safety init so best_epoch_train & logs always exist (keeps groundwork intact) ---
-        # --- BEST TRACKERS (initialize once, no exists() guards) ---
-        best_train_acc    <- -Inf
-        best_train_epoch  <- NA_integer_
-        best_val_acc      <- -Inf
-        best_val_epoch    <- NA_integer_
-        best_weights      <- NULL
-        best_biases       <- NULL
-        
+
         # --- LOGS (empty at start, will fill each epoch) ---
         train_accuracy_log <- numeric(0)
         train_loss_log     <- numeric(0)
@@ -1874,7 +1882,8 @@ SONN <- R6Class(
             biases_record  <- vector("list", self$num_layers)
           }
           
-          # Update weights and biases code removed for chatgpt to process
+
+          
           if (update_weights) {
             if (self$ML_NN) {
               for (layer in 1:self$num_layers) {
@@ -1955,7 +1964,7 @@ SONN <- R6Class(
                   }
                   
                   
-
+                  
                   # Apply weight update safely
                   if (all(dim(grads_matrix) == dim(self$weights[[layer]]))) {
                     self$weights[[layer]] <- self$weights[[layer]] - weight_update
@@ -2825,7 +2834,6 @@ SONN <- R6Class(
                   }
           }
           
-          
           if(use_biases) {
             if (self$ML_NN) {
               for (layer in 1:self$num_layers) {
@@ -2855,8 +2863,32 @@ SONN <- R6Class(
           # Runs validation metrics when explicitly enabled and both X_validation/y_validation exist.
           # Otherwise, if validation_metrics == FALSE, falls back to training metrics using X_train/y_train.
           
-          predicted_output_val        <- NULL  # last-evaluated VAL preds (for logging)
-          predicted_output_train_reg  <- NULL  # last-evaluated TRAIN preds (for logging)
+          ## ================== BEGIN PATCHED BLOCK (no predicted_output_val / predicted_output_train_reg inits) ==================
+          
+          # --- init holders (keep last vs best separate) ---
+          last_val_probs    <- NULL
+          last_val_labels   <- NULL
+          last_train_probs  <- NULL
+          last_train_labels <- NULL
+          
+          # keep full predict()-style objects from the LAST epoch
+          last_val_predict   <- NULL
+          last_train_predict <- NULL
+          
+          # --- init "best" holders so they ALWAYS exist in-scope ---
+          best_val_probs            <- NULL
+          best_val_labels           <- NULL
+          best_val_prediction_time  <- NA_real_
+          best_val_acc              <- NA_real_
+          best_val_epoch            <- NA_integer_
+          best_val_n_eff            <- NA_integer_         # lock the slice length used for best
+          
+          best_train_acc            <- if (exists("best_train_acc")) best_train_acc else NA_real_
+          best_train_epoch          <- if (exists("best_train_epoch")) best_train_epoch else NA_integer_
+          
+          # Best weights/biases (snapshot)
+          best_weights <- NULL
+          best_biases  <- NULL
           
           if (!is.null(X_validation) && !is.null(y_validation) && isTRUE(validation_metrics)) {
             
@@ -2899,16 +2931,12 @@ SONN <- R6Class(
                 len_y <- length(y_val_vec)
               } else if (is.matrix(y_validation)) {
                 if (ncol(y_validation) == 1L) {
-                  y_val_vec <- y_validation[, 1]
-                  len_y <- length(y_val_vec)
+                  y_val_vec <- y_validation[, 1]; len_y <- length(y_val_vec)
                 } else {
-                  # already one-hot or multi-col labels
-                  y_val_vec <- y_validation
-                  len_y <- nrow(y_validation)
+                  y_val_vec <- y_validation;      len_y <- nrow(y_validation)
                 }
               } else {
-                y_val_vec <- y_validation
-                len_y <- length(y_val_vec)
+                y_val_vec <- y_validation;        len_y <- length(y_val_vec)
               }
               
               # Align by trimming only (no recycling)
@@ -2922,21 +2950,34 @@ SONN <- R6Class(
                 y_val_epoch <- y_val_vec[seq_len(n_eff)]
               }
               
-              # Build targets and compute metrics
+              # --- capture LAST-epoch VAL outputs BEFORE computing/overwriting with best snapshot ---
+              last_val_probs   <- probs_val
+              last_val_labels  <- y_val_epoch
+              last_val_predict <- predicted_output_val   # keep full predict()-style list
+              cat("[DBG] Captured LAST-epoch validation probs/labels and predict() list\n")
+              
+              # Build targets (for loss only; acc handled by accuracy())
               targs_val <- .build_targets(y_val_epoch, n_eff, K_val, CLASSIFICATION_MODE)
               
+              # --- ACCURACY via helper (ALWAYS 0.5 threshold for binary) ---
+              val_acc <- accuracy(
+                SONN                = self,
+                Rdata               = X_validation[seq_len(n_eff), , drop = FALSE],
+                labels              = y_val_epoch,
+                CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+                predicted_output    = probs_val,
+                verbose             = isTRUE(debug)
+              )
+              
+              # --- LOSS (unchanged)
               if (identical(CLASSIFICATION_MODE, "multiclass")) {
                 stopifnot(K_val >= 2)
-                pred_idx_val <- max.col(probs_val, ties.method = "first")
-                val_acc  <- mean(pred_idx_val == targs_val$y_idx, na.rm = TRUE)
                 val_loss <- if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
                   .ce_loss_multiclass(probs_val, targs_val$Y)
                 } else {
                   mean((probs_val - targs_val$Y)^2, na.rm = TRUE)
                 }
               } else { # binary
-                preds_bin_val <- as.integer(probs_val >= 0.5)
-                val_acc  <- mean(preds_bin_val == targs_val$y, na.rm = TRUE)
                 val_loss <- if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
                   .bce_loss(probs_val, targs_val$y)
                 } else {
@@ -2951,10 +2992,11 @@ SONN <- R6Class(
               self$best_weights <- NULL  # keep original behavior
               self$best_biases  <- NULL
               
-              # Track best (by validation accuracy)
+              # Track best (by validation accuracy at fixed 0.5 threshold)
               if (is.na(best_val_acc) || (!is.na(val_acc) && val_acc > best_val_acc)) {
-                best_val_acc   <- val_acc
-                best_val_epoch <- epoch
+                best_val_acc       <- val_acc
+                best_val_epoch     <- epoch
+                best_val_n_eff     <- n_eff          # lock the exact slice length used
                 
                 # Snapshot best params (deep copy)
                 if (isTRUE(self$ML_NN)) {
@@ -2965,24 +3007,30 @@ SONN <- R6Class(
                   best_biases  <- as.matrix(self$biases)
                 }
                 
-                # (Optional) expose best val artifacts
-                assign("best_val_probs",  probs_val,   envir = .GlobalEnv)
-                assign("best_val_labels", y_val_epoch, envir = .GlobalEnv)
+                # capture this epoch's validation prediction_time if present
+                if (!is.null(predicted_output_val$prediction_time)) {
+                  best_val_prediction_time <- predicted_output_val$prediction_time
+                }
+                
+                # definitive best probs/labels at this epoch (already sliced to n_eff)
+                best_val_probs  <- as.matrix(probs_val)
+                best_val_labels <- if (is.matrix(y_val_epoch)) {
+                  y_val_epoch
+                } else {
+                  matrix(y_val_epoch, ncol = if (identical(CLASSIFICATION_MODE, "multiclass")) K_val else 1L)
+                }
                 
                 cat("New best model saved at epoch", epoch,
-                    "| Val Acc:", round(100 * val_acc, 2), "%\n")
+                    "| Val Acc (0.5 thr):", round(100 * val_acc, 2), "%\n")
               }
             }
-            
-            # for now, training-output placeholder mirrors “val” (will be recomputed below with best)
-            predicted_output_train_reg <- predicted_output_val
             
           } else if (!is.null(X_train) && !is.null(y_train) && isFALSE(validation_metrics)) {
             
             # -------- Training path (when validation metrics are disabled) --------
             predicted_output_train <- tryCatch(
               self$predict(
-                Rdata                = X,   # replace with X_train if that's what you want here
+                Rdata                = X_train,  # use X_train (not X) to avoid ambiguity
                 weights              = if (isTRUE(self$ML_NN)) weights_record else self$weights,
                 biases               = if (isTRUE(self$ML_NN)) biases_record  else self$biases,
                 activation_functions = activation_functions,
@@ -3014,20 +3062,15 @@ SONN <- R6Class(
               
               # --- Normalize y_train to vector or one-hot matrix ---
               if (is.data.frame(y_train)) {
-                y_tr_vec <- y_train[[1]]
-                len_y_tr <- length(y_tr_vec)
+                y_tr_vec <- y_train[[1]]; len_y_tr <- length(y_tr_vec)
               } else if (is.matrix(y_train)) {
                 if (ncol(y_train) == 1L) {
-                  y_tr_vec <- y_train[, 1]
-                  len_y_tr <- length(y_tr_vec)
+                  y_tr_vec <- y_train[, 1]; len_y_tr <- length(y_tr_vec)
                 } else {
-                  # already one-hot or multi-col labels
-                  y_tr_vec <- y_train
-                  len_y_tr <- nrow(y_train)
+                  y_tr_vec <- y_train;      len_y_tr <- nrow(y_train)
                 }
               } else {
-                y_tr_vec <- y_train
-                len_y_tr <- length(y_tr_vec)
+                y_tr_vec <- y_train;        len_y_tr <- length(y_tr_vec)
               }
               
               # Align by trimming only (no recycling)
@@ -3041,21 +3084,34 @@ SONN <- R6Class(
                 y_tr_epoch <- y_tr_vec[seq_len(n_eff_tr)]
               }
               
-              # Build targets and compute metrics
+              # --- capture LAST-epoch TRAIN outputs BEFORE best-snapshot logic ---
+              last_train_probs    <- probs_tr
+              last_train_labels   <- y_tr_epoch
+              last_train_predict  <- predicted_output_train   # keep full predict()-style list
+              cat("[DBG] Captured LAST-epoch training probs/labels and predict() list\n")
+              
+              # Build targets (for loss only; acc handled by accuracy())
               targs_tr <- .build_targets(y_tr_epoch, n_eff_tr, K_tr, CLASSIFICATION_MODE)
               
+              # --- ACCURACY via helper (always 0.5 for binary) ---
+              tr_acc <- accuracy(
+                SONN                = self,
+                Rdata               = X_train[seq_len(n_eff_tr), , drop = FALSE],
+                labels              = y_tr_epoch,
+                CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+                predicted_output    = probs_tr,
+                verbose             = isTRUE(debug)
+              )
+              
+              # --- LOSS (unchanged)
               if (identical(CLASSIFICATION_MODE, "multiclass")) {
                 stopifnot(K_tr >= 2)
-                pred_idx_tr <- max.col(probs_tr, ties.method = "first")
-                tr_acc  <- mean(pred_idx_tr == targs_tr$y_idx, na.rm = TRUE)
                 tr_loss <- if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
                   .ce_loss_multiclass(probs_tr, targs_tr$Y)
                 } else {
                   mean((probs_tr - targs_tr$Y)^2, na.rm = TRUE)
                 }
               } else { # binary
-                preds_bin_tr <- as.integer(probs_tr >= 0.5)
-                tr_acc  <- mean(preds_bin_tr == targs_tr$y, na.rm = TRUE)
                 tr_loss <- if (!is.null(loss_type) && identical(loss_type, "cross_entropy")) {
                   .bce_loss(probs_tr, targs_tr$y)
                 } else {
@@ -3089,35 +3145,34 @@ SONN <- R6Class(
                 assign("best_train_labels", y_tr_epoch, envir = .GlobalEnv)
                 
                 cat("New best (train) model saved at epoch", epoch,
-                    "| Train Acc:", round(100 * tr_acc, 2), "%\n")
+                    "| Train Acc (0.5 thr):", round(100 * tr_acc, 2), "%\n")
               }
             }
-            
-            predicted_output_train_reg <- predicted_output_train
           }
           
           # -------- FINALIZE WITH BEST SNAPSHOT (critical fix) --------
           # After the epoch loop completes, ensure the outputs you return are from the BEST params.
-          
           use_best <- !is.null(best_weights) && !is.null(best_biases)
           
           if (isTRUE(use_best)) {
-            # recompute TRAIN preds with best snapshot
-            pred_train_best <- tryCatch(
-              self$predict(
-                Rdata                = if (!is.null(X_train)) X_train else X,   # pick what you consider "train" here
-                weights              = best_weights,
-                biases               = best_biases,
-                activation_functions = activation_functions,
-                verbose = FALSE, debug = FALSE
-              ),
-              error = function(e) NULL
-            )
-            if (!is.null(pred_train_best)) {
-              predicted_output_train_reg <- pred_train_best
+            # recompute TRAIN preds with best snapshot (train stays separate)
+            if (!is.null(X_train)) {
+              pred_train_best <- tryCatch(
+                self$predict(
+                  Rdata                = X_train,
+                  weights              = best_weights,
+                  biases               = best_biases,
+                  activation_functions = activation_functions,
+                  verbose = FALSE, debug = FALSE
+                ),
+                error = function(e) NULL
+              )
+              if (!is.null(pred_train_best)) {
+                predicted_output_train_reg <- pred_train_best
+              }
             }
             
-            # recompute VAL preds with best snapshot when applicable
+            # recompute VAL preds with best snapshot when applicable (val stays separate)
             if (!is.null(X_validation) && !is.null(y_validation) && isTRUE(validation_metrics)) {
               pred_val_best <- tryCatch(
                 self$predict(
@@ -3131,19 +3186,83 @@ SONN <- R6Class(
               )
               if (!is.null(pred_val_best)) {
                 predicted_output_val <- pred_val_best
+                if (!is.null(pred_val_best$prediction_time)) {
+                  best_val_prediction_time <- pred_val_best$prediction_time
+                }
+                
+                probs_val_best <- if (!is.null(pred_val_best$predicted_output)) {
+                  pred_val_best$predicted_output
+                } else {
+                  pred_val_best
+                }
+                probs_val_best <- as.matrix(probs_val_best)
+                
+                # Recreate label vector/matrix
+                if (is.data.frame(y_validation)) {
+                  y_val_vec2 <- y_validation[[1]]
+                } else if (is.matrix(y_validation)) {
+                  y_val_vec2 <- if (ncol(y_validation) == 1L) y_validation[, 1] else y_validation
+                } else {
+                  y_val_vec2 <- y_validation
+                }
+                
+                # Use the SAME slice length captured at best epoch when possible
+                n_eff2 <- min(nrow(X_validation), nrow(probs_val_best), if (is.matrix(y_val_vec2)) nrow(y_val_vec2) else length(y_val_vec2))
+                if (is.finite(best_val_n_eff) && !is.na(best_val_n_eff)) {
+                  n_eff2 <- min(n_eff2, best_val_n_eff)
+                }
+                if (n_eff2 <= 0) stop("Validation sizes yield zero effective rows (best snapshot).")
+                
+                probs_val_best <- probs_val_best[seq_len(n_eff2), , drop = FALSE]
+                if (is.matrix(y_val_vec2) && !is.null(dim(y_val_vec2)) && ncol(y_val_vec2) > 1L) {
+                  y_val_epoch2 <- y_val_vec2[seq_len(n_eff2), , drop = FALSE]
+                } else {
+                  y_val_epoch2 <- y_val_vec2[seq_len(n_eff2)]
+                }
+                
+                best_val_probs  <- probs_val_best
+                best_val_labels <- if (is.matrix(y_val_epoch2)) {
+                  y_val_epoch2
+                } else {
+                  matrix(y_val_epoch2, ncol = if (identical(CLASSIFICATION_MODE, "multiclass")) ncol(best_val_probs) else 1L)
+                }
+                
               }
             }
             
-            cat(sprintf("[BEST-SNAPSHOT] using %s epoch=%s\n",
+            cat(sprintf("[BEST-SNAPSHOT] using %s epoch=%s | best_val_acc=%.7f | thr=0.5 | n_eff=%s\n",
                         if (isTRUE(validation_metrics)) "validation-best" else "train-best",
-                        if (isTRUE(validation_metrics)) best_val_epoch else best_train_epoch))
+                        if (isTRUE(validation_metrics)) as.character(best_val_epoch) else as.character(best_train_epoch),
+                        if (is.na(best_val_acc)) NA_real_ else best_val_acc,
+                        as.character(best_val_n_eff)))
           } else {
             cat("[BEST-SNAPSHOT] no best snapshot captured; returning last evaluated predictions.\n")
           }
-          # ------------------------------------------------------------
+          
+          # --- SINGLE CRITICAL DEBUG+STOP (right before performance assembly) ---
+          if (isTRUE(validation_metrics) && isTRUE(use_best) && (is.null(best_val_probs) || is.null(best_val_labels) || is.na(best_val_acc))) {
+            stop("[STOP] BEST snapshot selected for validation but best_val_probs/labels/acc are incomplete. Investigate best-val capture.")
+          }
+          
+          # === CRITICAL: Keep predict()-style list in predicted_output_train_reg,
+          #     but choose it based on LAST-epoch context using your preferred vars ===
+          if (isTRUE(train) && isTRUE(validation_metrics)) {
+            # Training that evaluated on validation → use LAST-epoch VAL predict list
+            predicted_output_train_reg <- last_val_predict
+          } else if (!isTRUE(train) && !isTRUE(validation_metrics)) {
+            # Non-training run without validation metrics → use LAST-epoch TRAIN predict list
+            predicted_output_train_reg <- last_train_predict
+          } else {
+            # leave as-is from earlier logic (or NULL if none)
+            predicted_output_train_reg <- predicted_output_train_reg
+          }
+          
+          ## =================== END PATCHED BLOCK ===================
           
           
-          
+    
+
+
           
           
         }            
@@ -3161,11 +3280,7 @@ SONN <- R6Class(
       
       
       
-      if (train && validation_metrics) {
-        predicted_output_train_reg <- predicted_output_val
-      } else if (!train && !validation_metrics) {
-        
-      }
+
       
       # probe_last_layer(self$weights, self$biases, y, tag="TRAIN-END")
       
@@ -3223,10 +3338,7 @@ SONN <- R6Class(
       # print(paste("Loss for epoch", epoch, ":", round(losses[epoch], 6)))
       
       
-      end_time <- Sys.time()
-      
-      # Calculate the training time
-      training_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
+
       if(never_ran_flag == TRUE) {
         # Find the index where the validation loss starts to increase
         optimal_epoch <- which(diff(losses) > 0)[1]
@@ -3304,12 +3416,13 @@ SONN <- R6Class(
       })
       
       
+      end_time <- Sys.time()
       
-      # Optionally timestamp prediction time
-      predicted_output_train_reg_prediction_time <- Sys.time() - start_time
-      
+      # Calculate the training time
+      training_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
+
       # Return the predicted output
-      return(list(predicted_output_l2 = predicted_output_train_reg, train_reg_prediction_time = predicted_output_train_reg_prediction_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch, training_time = training_time, learn_output = learn_result$learn_output, learn_time = learn_result$learn_time, learn_dim_hidden_layers = learn_result$dim_hidden_layers, learn_hidden_outputs = learn_result$hidden_outputs, learn_grads_matrix = learn_result$grads_matrix, learn_bias_gradients = learn_result$bias_gradients, learn_errors = learn_result$errors, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
+      return(list(predicted_output_l2 = predicted_output_train_reg, training_time = training_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch, best_val_prediction_time = best_val_prediction_time, learn_output = learn_result$learn_output, learn_time = learn_result$learn_time, learn_dim_hidden_layers = learn_result$dim_hidden_layers, learn_hidden_outputs = learn_result$hidden_outputs, learn_grads_matrix = learn_result$grads_matrix, learn_bias_gradients = learn_result$bias_gradients, learn_errors = learn_result$errors, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
     },
     # # Method to calculate performance and relevance
     # calculate_metrics = function(Rdata) {
@@ -3702,9 +3815,15 @@ DESONN <- R6Class(
       all_predicted_outputs_learn    <- vector("list", length(self$ensemble))
       all_predicted_outputs          <- vector("list", length(self$ensemble))
       all_prediction_times           <- vector("list", length(self$ensemble))
+      all_training_times             <- vector("list", length(self$ensemble))
+      all_best_val_prediction_time   <- vector("list", length(self$ensemble))
       all_learn_times                <- vector("list", length(self$ensemble))
       all_ensemble_name_model_name   <- vector("list", length(self$ensemble))
       all_model_iter_num             <- vector("list", length(self$ensemble))
+      all_best_train_acc             <- vector("list", length(self$ensemble))
+      all_best_epoch_train           <- vector("list", length(self$ensemble))
+      all_best_val_acc               <- vector("list", length(self$ensemble))
+      all_best_val_epoch             <- vector("list", length(self$ensemble))
       
       # NEW: Extended debug/tracking
       all_errors                     <- vector("list", length(self$ensemble))
@@ -3745,20 +3864,23 @@ DESONN <- R6Class(
             all_ensemble_name_model_name[[i]] <- ensemble_name_model_name
             
             all_model_iter_num[[i]] <- model_iter_num
-            
-            
+
             
             all_predicted_outputAndTime[[i]] <- list(
-              predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output,
-              prediction_time = predicted_outputAndTime$predicted_output_l2$prediction_time,
-              training_time = predicted_outputAndTime$training_time,
-              optimal_epoch = predicted_outputAndTime$optimal_epoch,
-              weights_record = predicted_outputAndTime$best_weights_record,
-              biases_record = predicted_outputAndTime$best_biases_record,
-              losses_at_optimal_epoch = predicted_outputAndTime$lossesatoptimalepoch
+              predicted_output         = predicted_outputAndTime$predicted_output_l2$predicted_output, #this is last_val_predict or last_train_predict based on what is toggled upstream (isTrue(validation_metrics))
+              prediction_time          = predicted_outputAndTime$predicted_output_l2$prediction_time,
+              training_time            = predicted_outputAndTime$training_time,
+              best_val_prediction_time = predicted_outputAndTime$best_val_prediction_time,
+              optimal_epoch            = predicted_outputAndTime$optimal_epoch,
+              weights_record           = predicted_outputAndTime$best_weights_record,
+              biases_record            = predicted_outputAndTime$best_biases_record,
+              losses_at_optimal_epoch  = predicted_outputAndTime$lossesatoptimalepoch,
+              best_train_acc           = predicted_outputAndTime$best_train_acc,
+              best_epoch_train         = predicted_outputAndTime$best_epoch_train,
+              best_val_acc             = predicted_outputAndTime$best_val_acc,
+              best_val_epoch           = predicted_outputAndTime$best_val_epoch
             )
-            
-            
+
             # Optional storage
             # my_optimal_epoch_out_vector[[i]] <<- predicted_outputAndTime$optimal_epoch
             # ----------------------------------
@@ -3766,17 +3888,23 @@ DESONN <- R6Class(
             # Continue if predictions are available
             if (!is.null(predicted_outputAndTime$predicted_output_l2)) {
               
-              all_predicted_outputs[[i]]       <- predicted_outputAndTime$predicted_output_l2$predicted_output
-              all_prediction_times[[i]]        <- predicted_outputAndTime$train_reg_prediction_time
-              all_errors[[i]]                  <- compute_error(predicted_outputAndTime$predicted_output_l2$predicted_output, y, CLASSIFICATION_MODE)
-              all_hidden_outputs[[i]]          <- predicted_outputAndTime$learn_hidden_outputs
-              all_layer_dims[[i]]              <- predicted_outputAndTime$learn_dim_hidden_layers
-              all_best_val_probs[[i]]          <- predicted_outputAndTime$best_val_probs
-              all_best_val_labels[[i]]         <- predicted_outputAndTime$best_val_labels
-              all_weights[[i]]                 <- predicted_outputAndTime$best_weights_record
-              all_biases[[i]]                  <- predicted_outputAndTime$best_biases_record
-              all_activation_functions[[i]]    <- activation_functions_learn
-              
+              all_predicted_outputs[[i]]        <- predicted_outputAndTime$predicted_output_l2$predicted_output
+              all_training_times                <- predicted_outputAndTime$training_time
+              # all_prediction_times[[i]]         <- predicted_outputAndTime$train_reg_prediction_time
+              all_best_val_prediction_time[[i]] <- predicted_outputAndTime$best_val_prediction_time
+              all_errors[[i]]                   <- compute_error(predicted_outputAndTime$predicted_output_l2$predicted_output, y, CLASSIFICATION_MODE)
+              all_hidden_outputs[[i]]           <- predicted_outputAndTime$learn_hidden_outputs
+              all_layer_dims[[i]]               <- predicted_outputAndTime$learn_dim_hidden_layers
+              all_best_val_probs[[i]]           <- predicted_outputAndTime$best_val_probs
+              all_best_val_labels[[i]]          <- predicted_outputAndTime$best_val_labels
+              all_weights[[i]]                  <- predicted_outputAndTime$best_weights_record
+              all_biases[[i]]                   <- predicted_outputAndTime$best_biases_record
+              all_activation_functions[[i]]     <- activation_functions_learn
+              all_best_train_acc[[i]]           <- predicted_outputAndTime$best_train_acc
+              all_best_epoch_train[[i]]         <- predicted_outputAndTime$best_epoch_train
+              all_best_val_acc[[i]]             <- predicted_outputAndTime$best_val_acc
+              all_best_val_epoch[[i]]           <- predicted_outputAndTime$best_val_epoch
+
               # --- Debug prints ---
               cat(">> Ensemble Index:", i, "\n")
               cat("Predicted Output (first 5):\n"); print(head(all_predicted_outputs[[i]], 5))
@@ -3805,31 +3933,6 @@ DESONN <- R6Class(
               str(predicted_outputAndTime)
             }
             
-            
-            #look into later. must take in Rdata and labels too because we can compare metrics later
-            
-            # === Evaluate Prediction Diagnostics ===
-            # if (!is.null(X_validation) && !is.null(y_validation) && isTRUE(validation_metrics)) {
-            #   eval_result <- EvaluatePredictionsReport(
-            #     X_validation = X_validation,
-            #     y_validation = y_validation,
-            #     CLASSIFICATION_MODE = CLASSIFICATION_MODE,
-            #     probs = all_predicted_outputs[[i]],
-            #     predicted_outputAndTime = predicted_outputAndTime,
-            #     threshold_function = threshold_function,    # still accepted, no-op
-            #     best_val_probs = all_best_val_probs[[i]],
-            #     best_val_labels = all_best_val_labels[[i]],
-            #     verbose = verbose,
-            #     # --- NEW ---
-            #     accuracy_mode = "both",                    # or "default" or "both"
-            #     tuned_threshold_override = meta$tuned_threshold  # optional: freeze τ on test
-            #   )
-            #   
-            # }
-            
-            # -------------------------------
-            # After EvaluatePredictionsReport
-            # -------------------------------
             
             
             
@@ -3913,6 +4016,7 @@ DESONN <- R6Class(
           predicted_output_list        = all_predicted_outputs,
           all_best_val_probs           = all_best_val_probs,
           all_best_val_labels          = all_best_val_labels,
+          all_best_val_prediction_time = all_best_val_prediction_time,
           learn_time                   = NULL,
           prediction_time_list         = all_prediction_times,
           run_id                       = all_ensemble_name_model_name,
@@ -3920,11 +4024,15 @@ DESONN <- R6Class(
           all_weights                  = all_weights,
           all_biases                   = all_biases,
           all_activation_functions     = all_activation_functions,
+          all_best_train_acc           = all_best_train_acc,
+          all_best_epoch_train         = all_best_epoch_train,
+          all_best_val_acc             = all_best_val_acc,
+          all_best_val_epoch           = all_best_val_epoch,
           ML_NN = ML_NN,
           viewTables = viewTables,
           verbose = verbose
         )
-        
+
         `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
         
         # Prints to RStudio Plots pane ONLY. Never saves. Handles ggplot, list, and nested list.
@@ -4076,18 +4184,17 @@ DESONN <- R6Class(
         
         
         
-      
-        
+
         
         
         
       }
       
-      return(list(predicted_output = predicted_outputAndTime$predicted_output_l2$predicted_output, performance_relevance_data = performance_relevance_data, best_train_acc = predicted_outputAndTime$best_train_acc, best_epoch_train = predicted_outputAndTime$best_epoch_train, best_val_acc = predicted_outputAndTime$best_val_acc, best_val_epoch = predicted_outputAndTime$best_val_epoch))
+      return(list(predicted_outputAndTime = predicted_outputAndTime, performance_relevance_data = performance_relevance_data))
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, preprocessScaledData, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, threshold_function, learn_results, predicted_output_list, all_best_val_probs, all_best_val_labels, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, ML_NN, viewTables, verbose) {
+    update_performance_and_relevance = function(Rdata, labels, preprocessScaledData, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, threshold_function, learn_results, predicted_output_list, all_best_val_probs, all_best_val_labels, all_best_val_prediction_time, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, all_best_train_acc, all_best_epoch_train, all_best_val_acc, all_best_val_epoch, ML_NN, viewTables, verbose) {
       
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -4104,6 +4211,13 @@ DESONN <- R6Class(
           
           best_val_probs <- all_best_val_probs[[i]]
           best_val_labels <- all_best_val_labels[[i]]
+          best_val_prediction_time <- all_best_val_prediction_time[[i]]
+          
+          best_train_acc <- all_best_train_acc
+          best_epoch_train <- all_best_epoch_train
+          best_val_acc <- all_best_val_acc
+          best_val_epoch <- all_best_val_epoch
+            
           single_predicted_outputAndTime <- all_predicted_outputAndTime[[i]]  # metadata
           single_predicted_output <- predicted_output_list[[i]]
           single_ensemble_name_model_name <- run_id[[i]]
@@ -4139,8 +4253,9 @@ DESONN <- R6Class(
                 all_best_val_labels = best_val_labels,
                 verbose = TRUE,
                 # --- NEW ---
-                accuracy_mode = "both",                    # or "default" or "both"
-                tuned_threshold_override = NULL
+                accuracy_plot = "both",                    # or "default" or "both"
+                tuned_threshold_override = NULL,
+                SONN
               )
               
             }
@@ -4202,18 +4317,48 @@ DESONN <- R6Class(
               }
             }
             
+            use_best_val <- TRUE
+            
+ 
+            if (use_best_val && !is.null(best_val_probs) && !is.null(best_val_labels)) {
+              probs   <- best_val_probs
+              targets <- best_val_labels
+              prediction_time <- best_val_prediction_time
+              cat("[calculate_performance] Using best validation snapshot (@ best epoch)\n")
+            } else {
+              probs   <- predicted_output
+              targets <- labels
+              prediction_time <- single_prediction_time
+              cat("[calculate_performance] Using last-epoch predictions\n")
+            }
+            
+
+            
+            # # --- SINGLE CRITICAL DEBUG+STOP ---
+            # acc_tmp <- mean((probs >= threshold) == as.integer(targets))
+            # cat(sprintf("[DBG][model %d] acc_tmp=%.7f vs best_val_acc=%.7f | branch=%s\n",
+            #             i,
+            #             acc_tmp,
+            #             ifelse(exists("best_val_acc"), best_val_acc, NA),
+            #             if (exists("best_val_probs") && !is.null(best_val_probs)) "BEST" else "LAST"))
+            # if (use_best_val && !is.null(best_val_probs) && abs(acc_tmp - best_val_acc) > 1e-9) {
+            #   stop(sprintf("[STOP][model %d] accuracy mismatch between recompute (%.7f) and stored best_val_acc (%.7f)",
+            #                i, acc_tmp, best_val_acc))
+            # }
+            
+            
             performance_list[[i]] <- calculate_performance(
               SONN = self$ensemble[[i]],
               Rdata = Rdata,
-              labels = labels,
+              labels = targets,
               lr = lr,
               CLASSIFICATION_MODE = CLASSIFICATION_MODE,
               model_iter_num = i,
               num_epochs = num_epochs,
               threshold = threshold,
               learn_time = learn_time,
-              predicted_output = single_predicted_output,
-              prediction_time = single_prediction_time,
+              predicted_output = probs,
+              prediction_time = prediction_time,
               ensemble_number = ensemble_number,
               run_id = run_id,
               weights = all_weights[[i]],
@@ -4226,10 +4371,10 @@ DESONN <- R6Class(
             relevance_list[[i]] <- calculate_relevance(
               self$ensemble[[i]],
               Rdata = Rdata, 
-              labels = labels,
+              labels = targets,
               CLASSIFICATION_MODE = CLASSIFICATION_MODE,
               model_iter_num = i,
-              predicted_output = single_predicted_output, 
+              predicted_output = probs, 
               ensemble_number = ensemble_number,
               weights = self$ensemble[[i]]$weights,
               biases = self$ensemble[[i]]$biases,
@@ -4268,7 +4413,7 @@ DESONN <- R6Class(
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = single_ensemble_name_model_name, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime)
+          self$store_metadata(run_id = single_ensemble_name_model_name, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime, best_val_prediction_time = best_val_prediction_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch)
           
         }
       }
@@ -4748,7 +4893,7 @@ DESONN <- R6Class(
       return(low_mean_plots)
     }
     ,
-    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime) {
+    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime, best_val_prediction_time, best_train_acc, best_epoch_train, best_val_acc, best_val_epoch) {
       
       # ---------------- helpers (lightweight; keep most original structure) ----------------
       to_num_mat <- function(x) {
@@ -4972,7 +5117,13 @@ DESONN <- R6Class(
         dropout_rates        = dropout_rates,
         hidden_sizes         = self$hidden_sizes %||% hidden_sizes,
         output_size          = self$output_size %||% output_size,
-        ML_NN                = self$ML_NN %||% ML_NN
+        ML_NN                = self$ML_NN %||% ML_NN,
+        
+        best_val_prediction_time = best_val_prediction_time,
+        best_train_acc = best_train_acc,
+        best_epoch_train = best_epoch_train,
+        best_val_acc = best_val_acc,
+        best_val_epoch = best_val_epoch
       )
       
       

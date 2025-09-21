@@ -1,3 +1,19 @@
+# ===============================================================
+# DeepDynamic — DDESONN
+# Deep Dynamic Ensemble Self-Organizing Neural Network
+# ---------------------------------------------------------------
+# Copyright (c) 2024-2025 Mathew William Fok
+# 
+# Licensed for academic and personal research use only.
+# Commercial use, redistribution, or incorporation into any
+# profit-seeking product or service is strictly prohibited.
+#
+# This license applies to all versions of DeepDynamic/DDESONN,
+# past, present, and future, including legacy releases.
+#
+# Intended future distribution: CRAN package.
+# ===============================================================
+
 apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr, beta1, beta2, epsilon, epoch, self, layer, target,
                                    alpha = NULL, lambda1 = NULL, lambda2 = NULL, verbose) {
   
