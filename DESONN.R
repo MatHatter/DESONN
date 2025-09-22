@@ -243,18 +243,18 @@ SONN <- R6Class(
       
       # Initialize first hidden layer
       weights[[1]] <- init_weight(input_size, hidden_sizes[1], method, custom_scale)
-      biases[[1]] <- matrix(rnorm(hidden_sizes[1], mean = 0, sd = 0.01), ncol = 1)  # slightly higher bias init
+      biases[[1]]  <- matrix(0, nrow = hidden_sizes[1], ncol = 1)
       
       # Intermediate hidden layers
       for (layer in 2:length(hidden_sizes)) {
         weights[[layer]] <- init_weight(hidden_sizes[layer - 1], hidden_sizes[layer], method, custom_scale)
-        biases[[layer]] <- matrix(rnorm(hidden_sizes[layer], mean = 0, sd = 0.01), ncol = 1)
+        biases[[layer]]  <- matrix(0, nrow = hidden_sizes[layer], ncol = 1)
       }
       
       # Output layer
       last_hidden_size <- hidden_sizes[[length(hidden_sizes)]]
       weights[[length(hidden_sizes) + 1]] <- init_weight(last_hidden_size, output_size, method, custom_scale)
-      biases[[length(hidden_sizes) + 1]] <- matrix(rnorm(output_size, mean = 0, sd = 0.01), ncol = 1)
+      biases[[length(hidden_sizes) + 1]]  <- matrix(0, nrow = output_size, ncol = 1)
       
       self$weights <- weights
       self$biases <- biases
