@@ -197,4 +197,4 @@ cat("=== Summary (per seed; fused used as test when ensemble) ===\n")
 print(summary_all, row.names = TRUE)
 
 cat("\n=== Per-seed table ===\n")
-print(merged)
+print(merged, n = 31)

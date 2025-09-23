@@ -14,12 +14,9 @@
 # Intended future distribution: CRAN package.
 # ===============================================================
 
-
 source("DESONN.R")
 source("utils/utils.R")
 source("utils/bootstrap_metadata.R")
-library(readxl)
-library(dplyr)
 
 # # Define parameters
 ## =========================
@@ -44,7 +41,7 @@ momentum_bn <- 0.9 # Improved convergence
 is_training_bn <- TRUE
 beta1 <- .9 # Standard Adam value
 beta2 <- 0.8 # Slightly lower for better adaptability
-# lr <- .122
+
 lr <- .125
 lr_decay_rate  <- 0.5
 lr_decay_epoch <- 20
@@ -1295,7 +1292,7 @@ if(train) {
     }
     
     # --------------------- RUN DIR SETUP (single stamp) ---------------------
-    seeds <- 506:511
+    seeds <- 1:999
     metrics_rows <- list()
     
     ts_stamp  <- format(Sys.time(), "%Y%m%d_%H%M%S")

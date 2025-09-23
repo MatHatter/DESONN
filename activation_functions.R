@@ -14,215 +14,8 @@
 # Intended future distribution: CRAN package.
 # ===============================================================
 
-binary_activation_derivative <- function(x) {
-  return(rep(0, length(x)))  # Non-differentiable, set to 0
-}
-
-
-custom_binary_activation_derivative <- function(x, threshold = -1.08) {
-  return(rep(0, length(x)))  # Also a step function, gradient is zero everywhere
-}
-
-
-custom_activation_derivative <- function(z) {
-  softplus_output <- log1p(exp(z))
-  softplus_derivative <- 1 / (1 + exp(-z))  # sigmoid
-  
-  # If thresholding applies hard cut-off, gradient becomes 0
-  return(ifelse(softplus_output > 0.00000000001, 0, softplus_derivative))
-}
-
-bent_identity_derivative <- function(x) {
-  return(x / (2 * sqrt(x^2 + 1)) + 1)
-}
-
-relu_derivative <- function(x) {
-  return(ifelse(x > 0, 1, 0))
-}
-
-
-softplus_derivative <- function(x) {
-  return(1 / (1 + exp(-x)))
-}
-
-leaky_relu_derivative <- function(x, alpha = 0.01) {
-  return(ifelse(x > 0, 1, alpha))
-}
-
-elu_derivative <- function(x, alpha = 1.0) {
-  return(ifelse(x > 0, 1, alpha * exp(x)))
-}
-
-tanh_derivative <- function(x) {
-  t <- tanh(x)
-  return(1 - t^2)
-}
-
-sigmoid_derivative <- function(x) {
-  s <- 1 / (1 + exp(-x))
-  return(s * (1 - s))
-}
-
-hard_sigmoid_derivative <- function(x) {
-  x <- as.matrix(x)
-  if (is.null(dim(x))) dim(x) <- c(length(x), 1)  # Force matrix shape if needed
-  deriv <- matrix(0, nrow = nrow(x), ncol = ncol(x))
-  deriv[which(x > -2.5 & x < 2.5, arr.ind = TRUE)] <- 0.2
-  return(deriv)
-}
-
-
-
-swish_derivative <- function(x) {
-  s <- 1 / (1 + exp(-x))  # sigmoid(x)
-  return(s + x * s * (1 - s))
-}
-
-sigmoid_binary_derivative <- function(x) {
-  # Approximate pseudo-gradient
-  return(rep(0, length(x)))  # Step function is not differentiable
-}
-
-gelu_derivative <- function(x) {
-  phi <- 0.5 * (1 + erf(x / sqrt(2)))
-  dphi <- exp(-x^2 / 2) / sqrt(2 * pi)
-  return(0.5 * phi + x * dphi)
-}
-
-selu_derivative <- function(x, lambda = 1.0507, alpha = 1.67326) {
-  return(lambda * ifelse(x > 0, 1, alpha * exp(x)))
-}
-
-mish_derivative <- function(x) {
-  sp <- log1p(exp(x))              # softplus
-  tanh_sp <- tanh(sp)
-  grad_sp <- 1 - exp(-sp)          # d(softplus) ≈ sigmoid(x)
-  return(tanh_sp + x * grad_sp * (1 - tanh_sp^2))
-}
-
-maxout_derivative <- function(x, w1 = 0.5, b1 = 1.0, w2 = -0.5, b2 = 0.5) {
-  val1 <- w1 * x + b1
-  val2 <- w2 * x + b2
-  return(ifelse(val1 > val2, w1, w2))  # Returns the gradient of the active unit
-}
-
-prelu_derivative <- function(x, alpha = 0.01) {
-  return(ifelse(x > 0, 1, alpha))
-}
-
-softmax_derivative <- function(x) {
-  s <- softmax(x)
-  return(s * (1 - s))  # Only valid when loss is MSE, not cross-entropy
-}
-
-bent_relu_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  base_deriv <- (x / (2 * sqrt(x^2 + 1))) + 1
-  return(ifelse(x > 0, base_deriv, 0))
-}
-
-bent_sigmoid_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  bent_part <- ((sqrt(x^2 + 1) - 1) / 2 + x)
-  sigmoid_out <- 1 / (1 + exp(-bent_part))
-  dbent_dx <- (x / (2 * sqrt(x^2 + 1))) + 1
-  out <- sigmoid_out * (1 - sigmoid_out) * dbent_dx
-  dim(out) <- dim(x)
-  return(out)
-}
-
-arctangent_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return(1 / (1 + x^2))
-}
-
-sinusoid_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return(cos(x))
-}
-
-gaussian_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return(-2 * x * exp(-x^2))
-}
-
-isrlu_derivative <- function(x, alpha = 1.0) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return(ifelse(x >= 0, 1, (1 / sqrt(1 + alpha * x^2))^3))
-}
-
-bent_swish_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  bent <- ((sqrt(x^2 + 1) - 1) / 2 + x)
-  s <- 1 / (1 + exp(-x))
-  dbent <- (x / (2 * sqrt(x^2 + 1))) + 1
-  return(dbent * s + bent * s * (1 - s))
-}
-
-parametric_bent_relu_derivative <- function(x, beta = 1.0) {
-  if (is.null(x) || length(x) == 0) return(x)
-  x <- as.matrix(x); dim(x) <- dim(x)
-  
-  grad_bent <- (beta * x) / (2 * sqrt(beta * x^2 + 1)) + 1
-  mask <- x > 0
-  out <- matrix(0, nrow = nrow(x), ncol = ncol(x))
-  out[mask] <- grad_bent[mask]
-  return(out)
-}
-
-leaky_bent_derivative <- function(x, alpha = 0.01) {
-  if (is.null(x) || length(x) == 0) return(x)
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return((x / (2 * sqrt(x^2 + 1))) + alpha)
-}
-
-inverse_linear_unit_derivative <- function(x) {
-  if (is.null(x) || length(x) == 0) return(x)
-  x <- as.matrix(x); dim(x) <- dim(x)
-  return(1 / (1 + abs(x))^2)
-}
-
-tanh_relu_hybrid_derivative <- function(x) {
-  if (is.null(x) || length(x) == 0) return(x)
-  x <- as.matrix(x); dim(x) <- dim(x)
-  result <- matrix(0, nrow = nrow(x), ncol = ncol(x))
-  pos_mask <- x > 0
-  result[pos_mask] <- tanh(x[pos_mask]) + x[pos_mask] * (1 - tanh(x[pos_mask])^2)
-  return(result)
-}
-
-custom_bent_piecewise_derivative <- function(x, threshold = 0.5) {
-  if (is.null(x) || length(x) == 0) return(x)
-  x <- as.matrix(x); dim(x) <- dim(x)
-  dbent <- (x / (2 * sqrt(x^2 + 1))) + 1
-  result <- matrix(1, nrow = nrow(x), ncol = ncol(x))
-  below_mask <- x <= threshold
-  result[below_mask] <- dbent[below_mask]
-  return(result)
-}
-
-sigmoid_sharp_derivative <- function(x, temp = 5) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  s <- 1 / (1 + exp(-temp * x))
-  return(temp * s * (1 - s))
-}
-
-leaky_selu_derivative <- function(x, alpha = 0.01, lambda = 1.0507) {
-  ifelse(x > 0, lambda, lambda * alpha * exp(x))
-}
-
-identity_derivative <- function(x) {
-  x <- as.matrix(x); dim(x) <- dim(x)
-  # derivative of f(x)=x is 1 everywhere
-  matrix(1, nrow = nrow(x), ncol = ncol(x))
-}
-
-###################################################################################################################################################################
-
-
-
 # -------------------------
-# Activation Functions (Fixed)
+# Activation Functions
 # -------------------------
 
 binary_activation <- function(x) {
@@ -231,6 +24,7 @@ binary_activation <- function(x) {
 }
 attr(binary_activation, "name") <- "binary_activation"
 
+# Fun custom derivatives (mostly zeroed out — experimental only, not for real training)
 custom_binary_activation <- function(x, threshold = -1.08) {
   x <- as.matrix(x); dim(x) <- dim(x)
   return(ifelse(x < threshold, 0, 1))
@@ -289,7 +83,7 @@ attr(sigmoid, "name") <- "sigmoid"
 hard_sigmoid <- function(x) {
   x <- as.matrix(x)
   out <- pmax(0, pmin(1, 0.2 * x + 0.5))
-  dim(out) <- dim(x)  # ✅ Preserve shape no matter what
+  dim(out) <- dim(x)  # Preserve shape no matter what
   return(out)
 }
 attr(hard_sigmoid, "name") <- "hard_sigmoid"
@@ -439,3 +233,208 @@ attr(leaky_selu, "name") <- "leaky_selu"
 # -------- Identity (Linear) --------
 identity <- base::identity
 attr(identity, "name") <- "identity"
+
+###################################################################################################################################################################
+###################################################################################################################################################################
+###################################################################################################################################################################
+###################################################################################################################################################################
+###################################################################################################################################################################
+
+binary_activation_derivative <- function(x) {
+  return(rep(0, length(x)))  # Non-differentiable, set to 0
+}
+
+
+custom_binary_activation_derivative <- function(x, threshold = -1.08) {
+  return(rep(0, length(x)))  # Also a step function, gradient is zero everywhere
+}
+
+
+custom_activation_derivative <- function(z) {
+  array(0, dim = dim(z))  # zero a.e.; undefined only where softplus == 1e-11
+}
+attr(custom_activation_derivative, "name") <- "custom_activation_derivative"
+
+
+bent_identity_derivative <- function(x) {
+  return(x / (2 * sqrt(x^2 + 1)) + 1)
+}
+
+relu_derivative <- function(x) {
+  return(ifelse(x > 0, 1, 0))
+}
+
+
+softplus_derivative <- function(x) {
+  return(1 / (1 + exp(-x)))
+}
+
+leaky_relu_derivative <- function(x, alpha = 0.01) {
+  return(ifelse(x > 0, 1, alpha))
+}
+
+elu_derivative <- function(x, alpha = 1.0) {
+  return(ifelse(x > 0, 1, alpha * exp(x)))
+}
+
+tanh_derivative <- function(x) {
+  t <- tanh(x)
+  return(1 - t^2)
+}
+
+sigmoid_derivative <- function(x) {
+  s <- 1 / (1 + exp(-x))
+  return(s * (1 - s))
+}
+
+hard_sigmoid_derivative <- function(x) {
+  x <- as.matrix(x)
+  if (is.null(dim(x))) dim(x) <- c(length(x), 1)  # Force matrix shape if needed
+  deriv <- matrix(0, nrow = nrow(x), ncol = ncol(x))
+  deriv[which(x > -2.5 & x < 2.5, arr.ind = TRUE)] <- 0.2
+  return(deriv)
+}
+
+swish_derivative <- function(x) {
+  s <- 1 / (1 + exp(-x))  # sigmoid(x)
+  return(s + x * s * (1 - s))
+}
+
+sigmoid_binary_derivative <- function(x) {
+  # Approximate pseudo-gradient
+  return(rep(0, length(x)))  # Step function is not differentiable
+}
+
+gelu_derivative <- function(x) {
+  phi <- 0.5 * (1 + erf(x / sqrt(2)))
+  dphi <- exp(-x^2 / 2) / sqrt(2 * pi)
+  return(0.5 * phi + x * dphi)
+}
+
+selu_derivative <- function(x, lambda = 1.0507, alpha = 1.67326) {
+  return(lambda * ifelse(x > 0, 1, alpha * exp(x)))
+}
+
+mish_derivative <- function(x) {
+  sp <- log1p(exp(x))              # softplus
+  tanh_sp <- tanh(sp)
+  grad_sp <- 1 - exp(-sp)          # d(softplus) ≈ sigmoid(x)
+  return(tanh_sp + x * grad_sp * (1 - tanh_sp^2))
+}
+
+maxout_derivative <- function(x, w1 = 0.5, b1 = 1.0, w2 = -0.5, b2 = 0.5) {
+  val1 <- w1 * x + b1
+  val2 <- w2 * x + b2
+  return(ifelse(val1 > val2, w1, w2))  # Returns the gradient of the active unit
+}
+
+prelu_derivative <- function(x, alpha = 0.01) {
+  return(ifelse(x > 0, 1, alpha))
+}
+
+softmax_derivative <- function(x) {
+  s <- softmax(x)
+  return(s * (1 - s))  # Only valid when loss is MSE, not cross-entropy
+}
+
+bent_relu_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  base_deriv <- (x / (2 * sqrt(x^2 + 1))) + 1
+  return(ifelse(x > 0, base_deriv, 0))
+}
+
+bent_sigmoid_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  bent_part <- ((sqrt(x^2 + 1) - 1) / 2 + x)
+  sigmoid_out <- 1 / (1 + exp(-bent_part))
+  dbent_dx <- (x / (2 * sqrt(x^2 + 1))) + 1
+  out <- sigmoid_out * (1 - sigmoid_out) * dbent_dx
+  dim(out) <- dim(x)
+  return(out)
+}
+
+arctangent_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(1 / (1 + x^2))
+}
+
+sinusoid_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(cos(x))
+}
+
+gaussian_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(-2 * x * exp(-x^2))
+}
+
+isrlu_derivative <- function(x, alpha = 1.0) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(ifelse(x >= 0, 1, (1 / sqrt(1 + alpha * x^2))^3))
+}
+
+bent_swish_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  bent <- ((sqrt(x^2 + 1) - 1) / 2 + x)
+  s <- 1 / (1 + exp(-x))
+  dbent <- (x / (2 * sqrt(x^2 + 1))) + 1
+  return(dbent * s + bent * s * (1 - s))
+}
+
+parametric_bent_relu_derivative <- function(x, beta = 1.0) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  
+  grad_bent <- (beta * x) / (2 * sqrt(beta * x^2 + 1)) + 1
+  mask <- x > 0
+  out <- matrix(0, nrow = nrow(x), ncol = ncol(x))
+  out[mask] <- grad_bent[mask]
+  return(out)
+}
+
+leaky_bent_derivative <- function(x, alpha = 0.01) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return((x / (2 * sqrt(x^2 + 1))) + alpha)
+}
+
+inverse_linear_unit_derivative <- function(x) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  return(1 / (1 + abs(x))^2)
+}
+
+tanh_relu_hybrid_derivative <- function(x) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  result <- matrix(0, nrow = nrow(x), ncol = ncol(x))
+  pos_mask <- x > 0
+  result[pos_mask] <- tanh(x[pos_mask]) + x[pos_mask] * (1 - tanh(x[pos_mask])^2)
+  return(result)
+}
+
+custom_bent_piecewise_derivative <- function(x, threshold = 0.5) {
+  if (is.null(x) || length(x) == 0) return(x)
+  x <- as.matrix(x); dim(x) <- dim(x)
+  dbent <- (x / (2 * sqrt(x^2 + 1))) + 1
+  result <- matrix(1, nrow = nrow(x), ncol = ncol(x))
+  below_mask <- x <= threshold
+  result[below_mask] <- dbent[below_mask]
+  return(result)
+}
+
+sigmoid_sharp_derivative <- function(x, temp = 5) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  s <- 1 / (1 + exp(-temp * x))
+  return(temp * s * (1 - s))
+}
+
+leaky_selu_derivative <- function(x, alpha = 0.01, lambda = 1.0507) {
+  ifelse(x > 0, lambda, lambda * alpha * exp(x))
+}
+
+identity_derivative <- function(x) {
+  x <- as.matrix(x); dim(x) <- dim(x)
+  # derivative of f(x)=x is 1 everywhere
+  matrix(1, nrow = nrow(x), ncol = ncol(x))
+}

@@ -45,7 +45,7 @@ y_all = df[target_col].values.astype(int)
 # ---------- Run multiple seeds ----------
 results = []
 
-for seed in range(505, 511):   # 50 seeds
+for seed in range(1, 1000):   # 50 seeds
     print(f"\n=== Seed {seed} ===")
 
     # Reproducibility

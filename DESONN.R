@@ -18,47 +18,23 @@ source("utils/utils.R")
 source("optimizers.R")
 source("activation_functions.R")
 source("reports/evaluate_predictions_report.R")
-function(showlibraries){
-  # Fake function for collapse feature.
-  ## ====== REQUIRED PACKAGES (only if not already loaded) ======
-  # install.packages("R6")
-  # install.packages("cluster")
-  # install.packages("fpc", type = "source")  # Still needed as source for some systems
-  # install.packages("tibble")
-  # install.packages("dplyr")
-  # install.packages("tidyverse")  # Includes ggplot2, dplyr, purrr, readr, etc.
-  # install.packages("ggplot2")
-  # install.packages("plotly")
-  # install.packages("gridExtra")
-  # install.packages("rlist")
-  # install.packages("writexl")
-  # install.packages("readxl")
-  # install.packages("tidyr")
-  # install.packages("purrr")
-  # install.packages("pracma")
-  # install.packages("randomForest")
-  # install.packages("openxlsx")
-  # install.packages("ggplotify")
-  library(R6)
-  library(cluster)
-  library(fpc)
-  library(tibble)
-  library(dplyr)
-  library(tidyverse)
-  library(ggplot2)
-  library(plotly)
-  library(gridExtra)
-  library(rlist)
-  library(writexl)
-  library(readxl)
-  library(tidyr)
-  library(purrr)
-  library(pracma)
-  library(randomForest)
-  library(openxlsx)
-  library(pROC)
-  library(ggplotify)
+
+## ====== REQUIRED PACKAGES ======
+pkgs <- c(
+  "R6", "cluster", "fpc", "tibble", "dplyr", "tidyverse",
+  "ggplot2", "plotly", "gridExtra", "rlist", "writexl", "readxl",
+  "tidyr", "purrr", "pracma", "openxlsx",
+  "pROC", "ggplotify"
+)
+
+for (pkg in pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    message(sprintf("Installing package: %s", pkg))
+    install.packages(pkg, dependencies = TRUE)
+  }
+  library(pkg, character.only = TRUE)
 }
+
 
 #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 #_____/\\\\\\\\\\\__________/\\\\\________/\\\\\_____/\\\___/\\\\\_____/\\\_$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
@@ -98,10 +74,7 @@ SONN <- R6Class(
     
     initialize = function(input_size, hidden_sizes = NULL, output_size, Rdata = NULL, N,  lambda, ML_NN, dropout_rates = NULL, activation_functions_learn = NULL, activation_functions = NULL, method = init_method, custom_scale = custom_scale) {
       
-      
-      
       # Initialize SONN parameters and architecture
-      # Define functions for self-organization, learning, and prediction
       self$input_size <- input_size
       if (ML_NN){
         self$hidden_sizes <- hidden_sizes
@@ -111,15 +84,9 @@ SONN <- R6Class(
       self$ML_NN <- ML_NN
       self$num_layers <- length(hidden_sizes) + 1  # including the output layer
       
-      # Initialize activation functions
-      # self$activation_functions <- vector("list", self$num_layers)
-      # self$activation_functions_learn <- vector("list", self$num_layers)
-      
       self$dropout_rates <- dropout_rates
       self$dropout_rates_learn <- self$dropout_rates
-      # Initialize self as an environment or list
-      # self <- new.env()  # You could also use self <- list()
-      
+
       self$output_size <- output_size
       self$lambda <- lambda  # Regularization parameter
       self$ML_NN <- ML_NN
@@ -128,14 +95,7 @@ SONN <- R6Class(
       self$dropout_rates <- dropout_rates
       self$dropout_rates_learn <- self$dropout_rates
       
-      # self$weights <- vector("list", self$num_layers)
-      # self$biases <- vector("list", self$num_layers)
-      
-      
-      
-      
-      
-      
+
       # Initialize weights and biases for subsequent layers if ML_NN is TRUE
       if (ML_NN) {
         # Initialize weights and biases using specified initialization method
@@ -146,25 +106,7 @@ SONN <- R6Class(
         self$weights <- matrix(runif(input_size *  output_size), ncol = output_size, nrow = input_size) #should highly consider removing column if not relevant
         self$biases <- rnorm(output_size, mean = 0, sd = 0.01)
       }
-      
-      
-      
-      weights_stored <<- as.matrix(self$weights[[1]])
-      biases_stored <<- as.matrix(self$biases)
-      
-      
-      
-      # for (m in 1:self$num_layers) {
-      #     weight_name <- ifelse(m == 1, "weights", paste0("weights", m))
-      #     cat("Weight matrix", weight_name, ":\n")
-      #
-      #     # Check if the weight matrix exists and is not NULL
-      #     if (length(self$weights) >= m && !is.null(self$weights[[m]])) {
-      #         print(self$weights[[m]])
-      #     } else {
-      #         cat("Weight matrix", weight_name, "is NULL or not initialized.\n")
-      #     }}
-      
+
       
       # Function to find factors of N that are as close as possible to each other
       find_grid_dimensions <- function(N) {
@@ -539,19 +481,7 @@ SONN <- R6Class(
         cat("Performing matrix multiplication for single layer\n")
         errors[[1]] <- errors_sl %*% t(weights_sl)
       }
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
+
       
       print("str(errors)")
       str(errors)

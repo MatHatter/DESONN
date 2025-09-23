@@ -120,12 +120,12 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
         repeated <- rep(update_matrix, length.out = prod(target_dim))
         updated  <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2], byrow = TRUE)
       }
-      # ✅ Clip weights after update if target is "weights"
+      # Clip weights after update if target is "weights"
       clip_threshold <- .5
       updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
     }
     
-    # ✅ Apply update
+    # Apply update
     if (target == "weights") {
       self$weights[[layer]] <- self$weights[[layer]] - updated
       Wpost <- self$weights[[layer]]
@@ -134,7 +134,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       Wpost <- self$biases[[layer]]
     }
     
-    # ✅ Clean compact log (Option A: tagged min/mean/max)
+    # Clean compact log (Option A: tagged min/mean/max)
     optimizers_log_update("adam", epoch, layer, target, grads_matrix, Wpre, Wpost, verbose)
   } 
   else if (optimizer == "rmsprop") {
@@ -197,7 +197,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
     }
     
-    # ✅ Apply update
+    # Apply update
     if (target == "weights") {
       self$weights[[layer]] <- self$weights[[layer]] - updated
       Wpost <- self$weights[[layer]]
@@ -206,7 +206,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       Wpost <- self$biases[[layer]]
     }
     
-    # ✅ Clean compact log (Option A)
+    # Clean compact log (Option A)
     optimizers_log_update("rmsprop", epoch, layer, target, grads_matrix, Wpre, Wpost, verbose)
   }
   
@@ -278,7 +278,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       Wpost <- self$biases[[layer]]
     }
     
-    # ✅ Clean compact log (Option A: tagged min/mean/max)
+    # Clean compact log (Option A: tagged min/mean/max)
     optimizers_log_update("sgd", epoch, layer, target, grads_matrix, Wpre, Wpost, verbose)
     
     # Build return object
@@ -308,7 +308,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       list(grads_matrix)
     }
     
-    # $$$$$$$$$$$$ Momentum update
+    # Momentum update
     sgd_result <- sgd_momentum_update(
       params   = optimizer_params[[layer]],
       grads    = grads_input,
@@ -343,7 +343,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
     }
     
-    # $$$$$$$$$$$$ Apply update
+    # Apply update
     if (target == "weights") {
       self$weights[[layer]] <- self$weights[[layer]] - updated
       Wpost <- self$weights[[layer]]
@@ -352,10 +352,10 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       Wpost <- self$biases[[layer]]
     }
     
-    # ✅ Clean compact log (Option A: tagged min/mean/max)
+    # Clean compact log (Option A: tagged min/mean/max)
     optimizers_log_update("sgd_momentum", epoch, layer, target, grads_matrix, Wpre, Wpost, verbose)
     
-    # $$$$$$$$$$$$ Return object to caller
+    # Return object to caller
     updated_optimizer <- list(
       updated_optimizer_params   = optimizer_params[[layer]],
       updated_weights_or_biases  = updated
@@ -380,7 +380,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       list(grads_matrix)
     }
     
-    # ✅ NAG Update
+    # NAG Update
     nag_result <- nag_update(
       params = optimizer_params[[layer]],
       grads = grads_input,
@@ -390,7 +390,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     
     optimizer_params[[layer]] <- nag_result$params
     
-    # ✅ Use correct update from result
+    # Use correct update from result
     update <- if (target == "weights") nag_result$weights_update[[1]] else nag_result$biases_update[[1]]
     
     # Align shapes
@@ -451,7 +451,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       list(grads_matrix)
     }
     
-    # ✅ FTRL Update
+    # FTRL Update
     ftrl_result <- ftrl_update(
       params   = optimizer_params[[layer]],
       grads    = grads_input,
@@ -464,10 +464,10 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     
     optimizer_params[[layer]] <- ftrl_result$params
     
-    # ✅ Choose correct update
+    # Choose correct update
     update <- if (target == "weights") ftrl_result$weights_update[[1]] else ftrl_result$biases_update[[1]]
     
-    # ✅ Align shape
+    # Align shape
     target_matrix <- if (target == "weights") self$weights[[layer]] else self$biases[[layer]]
     target_dim <- dim(as.matrix(target_matrix))
     
@@ -498,7 +498,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     cat("Updated", target, "summary (layer", layer, "): min =", min(updated), 
         ", mean =", mean(updated), ", max =", max(updated), "\n")
     
-    # ✅ Apply update
+    # Apply update
     if (target == "weights") {
       self$weights[[layer]] <- self$weights[[layer]] - updated
     } else if (target == "biases") {
@@ -524,7 +524,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       list(grads_matrix)
     }
     
-    # ✅ LAMB Update
+    # LAMB Update
     lamb_result <- lamb_update(
       params = optimizer_params[[layer]],
       grads = grads_input[[1]],
@@ -537,7 +537,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     
     optimizer_params[[layer]] <- lamb_result$params
     
-    # ✅ Select correct update
+    # Select correct update
     update <- if (target == "weights") lamb_result$weights_update[[1]] else lamb_result$biases_update[[1]]
     
     # Align shapes
@@ -587,7 +587,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     
     layer_boost <- if (layer == self$num_layers) 1 else 1
     
-    # ✅ Call the lookahead optimizer
+    # Call the lookahead optimizer
     lookahead_result <- lookahead_update(
       params = optimizer_params[[layer]],
       grads_list = list(grads_matrix),
@@ -601,15 +601,15 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       lambda = lambda
     )
     
-    # ✅ Update the state
+    # Update the state
     optimizer_params[[layer]] <- lookahead_result
     
-    # ✅ Extract update for weight or bias
+    # Extract update for weight or bias
     update <- if (target == "weights") lookahead_result$weights_update else {
       if (!is.null(lookahead_result$biases_update)) lookahead_result$biases_update else matrix(0, nrow = 1, ncol = 1)
     }
     
-    # ✅ Align update shape to target
+    # Align update shape to target
     target_matrix <- if (target == "weights") self$weights[[layer]] else self$biases[[layer]]
     target_dim <- dim(as.matrix(target_matrix))
     
@@ -622,7 +622,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
       updated <- matrix(repeated, nrow = target_dim[1], ncol = target_dim[2])
     }
     
-    # ✅ Optionally clip weights
+    # Optionally clip weights
     if (target == "weights") {
       clip_threshold <- 0.5
       updated <- pmin(pmax(updated, -clip_threshold), clip_threshold)
@@ -631,7 +631,7 @@ apply_optimizer_update <- function(optimizer, optimizer_params, grads_matrix, lr
     cat("Updated", target, "summary (layer", layer, "): min =", min(updated),
         ", mean =", mean(updated), ", max =", max(updated), "\n")
     
-    # ✅ Apply the update
+    # Apply the update
     if (target == "weights") {
       self$weights[[layer]] <- self$weights[[layer]] - updated
     } else if (target == "biases") {
@@ -1150,7 +1150,7 @@ nag_update <- function(params, grads, lr, beta1 = 0.9) {
       params$fast_biases[[i]] <- matrix(0, nrow = grad_dims[1], ncol = grad_dims[2])
     }
     
-    # ✅ Use beta1
+    # Use beta1
     params$momentum[[i]] <- beta1 * params$momentum[[i]] + grads[[i]]
     weights_update[[i]] <- lr * (beta1 * params$momentum[[i]] + grads[[i]])
     biases_update[[i]] <- lr * grads[[i]]
@@ -1234,7 +1234,7 @@ ftrl_update <- function(params, grads, lr,
 }
 
 
-# LAMB Update Function #$$$$$$$$$$$$$
+# LAMB Update Function
 lamb_update <- function(params, grads, lr, beta1, beta2, eps, lambda) {
   # Ensure param and grads are numeric vectors
   params$param <- as.numeric(params$param)
