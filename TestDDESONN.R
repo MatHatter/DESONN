@@ -1,0 +1,2362 @@
+# ===============================================================
+# DeepDynamic — DDESONN
+# Deep Dynamic Ensemble Self-Organizing Neural Network
+# ---------------------------------------------------------------
+# Copyright (c) 2024-2025 Mathew William Fok
+# 
+# Licensed for academic and personal research use only.
+# Commercial use, redistribution, or incorporation into any
+# profit-seeking product or service is strictly prohibited.
+#
+# This license applies to all versions of DeepDynamic/DDESONN,
+# past, present, and future, including legacy releases.
+#
+# Intended future distribution: CRAN package.
+# ===============================================================
+
+source("DDESONN.R")
+source("utils/utils.R")
+source("utils/bootstrap_metadata.R")
+
+# # Define parameters
+## =========================
+## Classification mode
+## =========================
+# CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "regression"
+CLASSIFICATION_MODE <- "binary"
+# CLASSIFICATION_MODE <- "regression"
+set.seed(111)
+#number of seeds;if doing seed loop
+x <- 1
+test <- TRUE
+init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
+optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
+lookahead_step <- 5
+batch_normalize_data <- TRUE
+shuffle_bn <- FALSE
+gamma_bn <- .6
+beta_bn <- .6
+epsilon_bn <- 1e-6  # Increase for numerical stability
+momentum_bn <- 0.9 # Improved convergence
+is_training_bn <- TRUE
+beta1 <- .9 # Standard Adam value
+beta2 <- 0.8 # Slightly lower for better adaptability
+
+lr <- .125
+lr_decay_rate  <- 0.5
+lr_decay_epoch <- 20
+lr_min <- 1e-5
+lambda <- 0.00028
+# lambda <- 0.00013
+num_epochs <- 3
+validation_metrics <- TRUE
+test_metrics <- TRUE
+custom_scale <- 1.04349
+
+
+ML_NN <- TRUE
+
+learnOnlyTrainingRun <- FALSE
+update_weights <- TRUE
+update_biases <- TRUE
+
+if (CLASSIFICATION_MODE == "binary") {
+  use_biases <- TRUE
+} else if (CLASSIFICATION_MODE == "regression") {
+  use_biases <- TRUE
+}
+# hidden_sizes <- NULL
+hidden_sizes <- c(64, 32)
+
+# Activation functions applied in forward pass during prediction | predict(). # hidden layers + output layer
+if (CLASSIFICATION_MODE == "binary") {
+  activation_functions <- list(relu, relu, sigmoid)
+  
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  activation_functions <- list(relu, relu, softmax)
+  
+} else if (CLASSIFICATION_MODE == "regression") {
+  activation_functions <- list(relu, relu, identity)
+}
+
+
+# Activation functions applied in forward pass during training | learn() # You can keep them the same as predict() or customize, e.g. list(relu, selu, sigmoid) 
+activation_functions_learn <- activation_functions
+epsilon <- 1e-7
+loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+
+dropout_rates <- list(0.10, 0.00) # NULL for output layer
+
+
+threshold_function <- tune_threshold_accuracy
+threshold <- .5  # Classification threshold (not directly used in Random Forest)
+
+dropout_rates_learn <- dropout_rates
+
+num_layers <- length(hidden_sizes) + 1
+output_size <- 1  # For binary classification
+
+## Kaggle Data
+runData <- FALSE
+if(runData){
+  library(reticulate)
+  
+  # Ensure we're using reticulate's default Python env (created above)
+  # If you prefer, you can create/use your own venv and call use_virtualenv() instead.
+  
+  # 1) Install kagglehub into the active Python used by reticulate
+  py_install("kagglehub", pip = TRUE)
+  
+  # 2) Download with kagglehub from Python, returning the path back to R
+  res <- py_run_string("
+import kagglehub
+p = kagglehub.dataset_download('matiflatif/walmart-complete-stocks-dataweekly-updated')
+print('Downloaded to:', p)
+path = p
+")
+  src_path <- res$path
+  
+  # 3) Copy the downloaded dataset into your target folder
+  dst_path <- "C:/Users/wfky1/Desktop/DDESONN/data"
+  dir.create(dst_path, showWarnings = FALSE, recursive = TRUE)
+  # Copy everything (preserves directories); overwrite existing
+  file.copy(from = list.files(src_path, full.names = TRUE),
+            to   = dst_path,
+            recursive = TRUE, overwrite = TRUE)
+  
+  cat("Copied dataset from:\n ", src_path, "\n→\n ", dst_path, "\n")
+}
+
+
+## -------------------------
+## Load the dataset
+## -------------------------
+if (CLASSIFICATION_MODE == "binary") {
+  data <- read.csv("data/heart_failure_clinical_records.csv")
+  dependent_variable <- "DEATH_EVENT"
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  data <- read.csv("data/train_multiclass_customer_segmentation.csv")
+  dependent_variable <- "Segmentation"
+} else if (CLASSIFICATION_MODE == "regression") {
+  data <- read.csv("data/WMT_1970-10-01_2025-03-15.csv")
+  # --- NEW: enforce time order + create future target (close[t+1]) ---
+  stopifnot("date" %in% names(data))
+  data <- data %>% arrange(date)
+  data <- data %>% mutate(future_close = dplyr::lead(close, 1L))
+  data <- data %>% filter(!is.na(future_close))
+  
+  # --- NEW: set dependent variable to future_close ---
+  dependent_variable <- "future_close"
+} else {
+  stop("CLASSIFICATION_MODE must be 'binary' or 'multiclass'")
+}
+
+
+## Quick NA check
+na_count <- sum(is.na(data))
+cat("[split] NA count:", na_count, "\n")
+
+
+# Assuming there are no missing values, or handle them if they exist
+# Convert categorical variables to factors if any
+data <- data %>% mutate(across(where(is.character), as.factor))
+
+
+
+## -------------------------
+## Features/labels (full)
+## -------------------------
+input_columns <- setdiff(colnames(data), dependent_variable)
+Rdata  <- data[, input_columns, drop = FALSE]
+labels <- data[, dependent_variable, drop = FALSE]  # keep as data.frame (1 col)
+
+if (CLASSIFICATION_MODE %in% c("binary", "regression")) {
+  input_size  <- ncol(Rdata)
+  output_size <- 1L
+}
+
+if (!ML_NN) {
+  N <- input_size + output_size
+} else {
+  N <- input_size + sum(hidden_sizes) + output_size
+}
+
+reduce_data <- TRUE
+
+if (CLASSIFICATION_MODE == "regression" && reduce_data) {
+  stopifnot(is.character(dependent_variable), length(dependent_variable) == 1)
+  stopifnot(dependent_variable %in% names(data))
+  
+  # Keep only raw OHLCV + date, plus the dependent variable (future_close)
+  base_keep <- c("date", "open", "high", "low", "close", "volume")
+  keep_cols <- unique(c(base_keep, dependent_variable))
+  
+  data_reduced <- data %>%
+    dplyr::select(dplyr::any_of(keep_cols))
+  
+  # Split into X (features at time t) and y (close at t+1)
+  X <- data_reduced %>% dplyr::select(-dplyr::all_of(dependent_variable))
+  y <- data_reduced[[dependent_variable]]
+  
+  # Safety checks (no leakage)
+  if ("adj_close" %in% names(X)) {
+    stop("Leak detected: 'adj_close' showed up in X unexpectedly.")
+  }
+  if (!is.null(y) && anyNA(y)) {
+    warning("Target 'y' contains NA values.")
+  }
+  
+  # Optional: make 'date' numeric if present
+  if ("date" %in% names(X)) {
+    d <- X[["date"]]
+    if (inherits(d, "POSIXt")) {
+      X[["date"]] <- as.numeric(as.Date(d))
+    } else if (inherits(d, "Date")) {
+      X[["date"]] <- as.numeric(d)
+    } else {
+      suppressWarnings({ parsed <- as.Date(d) })
+      if (!all(is.na(parsed))) {
+        X[["date"]] <- as.numeric(parsed)
+      } # else leave as-is
+    }
+  }
+}
+
+# Keep your existing fallback exactly as written
+if (CLASSIFICATION_MODE == "regression" && reduce_data) {
+  X <- data_reduced %>% dplyr::select(-dplyr::all_of(dependent_variable))
+  y <- data_reduced %>% dplyr::select(dplyr::all_of(dependent_variable))
+} else {
+  X <- data %>% dplyr::select(-dplyr::all_of(dependent_variable))
+  y <- data %>% dplyr::select(dplyr::all_of(dependent_variable))
+}
+
+colname_y <- colnames(y)
+
+# ensure downstream uses lagged setup (place right after your X/y fallback)
+# Rdata  <- X
+# labels <- y
+
+if (CLASSIFICATION_MODE == "binary") {
+  numeric_columns <- c('age','creatinine_phosphokinase','ejection_fraction',
+                       'platelets','serum_creatinine','serum_sodium','time')
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  numeric_columns <- c("Age","Work_Experience","Family_Size")
+} else if (CLASSIFICATION_MODE == "regression") {
+  # Predicting future_close (t+1) from today's OHLCV (t)
+  numeric_columns <- c("date","open","high","low","close","volume")
+  
+}
+
+
+
+
+
+## -------------------------
+## Split selector
+## -------------------------
+USE_TIME_SPLIT <- TRUE  # toggle here: TRUE=new chrono split, FALSE=old random split
+
+if (USE_TIME_SPLIT) {
+  ## -------------------------
+  ## Time-ordered split
+  ## -------------------------
+  stopifnot(nrow(X) == nrow(y))
+  total_num_samples <- nrow(X)
+  
+  p_train <- 0.70
+  p_val   <- 0.15
+  
+  num_training_samples   <- max(1L, floor(p_train * total_num_samples))
+  num_validation_samples <- max(1L, floor(p_val   * total_num_samples))
+  num_test_samples       <- max(0L, total_num_samples - num_training_samples - num_validation_samples)
+  
+  train_indices      <- seq_len(num_training_samples)
+  validation_indices <- if (num_validation_samples > 0L)
+    seq(from = max(train_indices) + 1L,
+        length.out = num_validation_samples)
+  else integer()
+  test_indices       <- if (num_test_samples > 0L)
+    seq(from = max(c(train_indices, validation_indices)) + 1L,
+        length.out = num_test_samples)
+  else integer()
+  
+  X_train      <- X[train_indices,      , drop = FALSE]; y_train      <- y[train_indices,      , drop = FALSE]
+  X_validation <- X[validation_indices, , drop = FALSE]; y_validation <- y[validation_indices, , drop = FALSE]
+  X_test       <- X[test_indices,       , drop = FALSE]; y_test       <- y[test_indices,       , drop = FALSE]
+  
+  cat(sprintf("[SPLIT chrono] train=%d val=%d test=%d\n",
+              nrow(X_train), nrow(X_validation), nrow(X_test)))
+} else {
+  ## -------------------------
+  ## Alternative random split (⚠ may cause data leakage)
+  ## -------------------------
+  
+  total_num_samples <- nrow(X)
+  desired_val  <- 800L
+  desired_test <- 800L
+  
+  num_validation_samples <- min(desired_val,  floor(total_num_samples / 3))
+  num_test_samples       <- min(desired_test, floor((total_num_samples - num_validation_samples) / 2))
+  num_training_samples   <- total_num_samples - num_validation_samples - num_test_samples
+  
+  indices <- sample.int(total_num_samples)
+  train_indices      <- indices[seq_len(num_training_samples)]
+  validation_indices <- indices[seq(from = num_training_samples + 1L,
+                                    length.out = num_validation_samples)]
+  test_indices       <- indices[seq(from = num_training_samples + num_validation_samples + 1L,
+                                    length.out = num_test_samples)]
+  
+  X_train      <- X[train_indices,      , drop = FALSE]; y_train      <- y[train_indices,      , drop = FALSE]
+  X_validation <- X[validation_indices, , drop = FALSE]; y_validation <- y[validation_indices, , drop = FALSE]
+  X_test       <- X[test_indices,       , drop = FALSE]; y_test       <- y[test_indices,       , drop = FALSE]
+  
+  cat(sprintf("[SPLIT random] train=%d val=%d test=%d\n",
+              nrow(X_train), nrow(X_validation), nrow(X_test)))
+}
+
+
+
+## IMPORTANT:
+## When you train, pass X_train / y_train — NOT the full Rdata/labels.
+## Likewise, for validation, forward X_validation and compare with y_validation.
+
+# ===== OPTIONAL LOG/CLIP TRANSFORMATION (kept from your "below" block; commented) =====
+# Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
+# X_train$creatinine_phosphokinase      <- pmin(X_train$creatinine_phosphokinase, 3000)
+# X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
+# X_test$creatinine_phosphokinase       <- pmin(X_test$creatinine_phosphokinase, 3000)
+
+# ------------------------------------------------------------
+# BINARY PATH (untouched)  vs  MULTICLASS PATH (make numeric + labels)
+# ------------------------------------------------------------
+if (CLASSIFICATION_MODE == "binary") {
+  
+  # $$$$$$$$$$$$$ Feature scaling without leakage (standardization first)
+  X_train_scaled <- scale(X_train)
+  center <- attr(X_train_scaled, "scaled:center")
+  scale_ <- attr(X_train_scaled, "scaled:scale")
+  
+  X_validation_scaled <- scale(X_validation, center = center, scale = scale_)
+  X_test_scaled       <- scale(X_test,       center = center, scale = scale_)
+  
+  # $$$$$$$$$$$$$ Further rescale to prevent exploding activations (keep parity)
+  max_val <- suppressWarnings(max(abs(X_train_scaled)))
+  if (!is.finite(max_val) || is.na(max_val) || max_val == 0) max_val <- 1
+  
+  X_train_scaled      <- X_train_scaled      / max_val
+  X_validation_scaled <- X_validation_scaled / max_val
+  X_test_scaled       <- X_test_scaled       / max_val
+  
+  # ==============================================================
+  # Choose whether to use scaled or raw data for NN training
+  # ==============================================================
+  scaledData <- TRUE   # <<<<<< set to FALSE to use raw data
+  
+  if (isTRUE(scaledData)) {
+    X <- as.matrix(X_train_scaled)
+    y <- as.matrix(y_train)
+    
+    X_validation <- as.matrix(X_validation_scaled)
+    y_validation <- as.matrix(y_validation)
+    
+    X_test <- as.matrix(X_test_scaled)
+    y_test <- as.matrix(y_test)
+  } else {
+    X <- as.matrix(X_train)
+    y <- as.matrix(y_train)
+    
+    X_validation <- as.matrix(X_validation)
+    y_validation <- as.matrix(y_validation)
+    
+    X_test <- as.matrix(X_test)
+    y_test <- as.matrix(y_test)
+  }
+  
+  colnames(y) <- colname_y
+  
+  # ----- diagnostics (binary has no one-hot by design) -----
+  cat("=== Unscaled Rdata summary (X_train) ===\n")
+  print(summary(as.vector(as.matrix(X_train))))
+  cat("First 5 rows of unscaled X_train:\n")
+  print(as.matrix(X_train)[1:5, 1:min(5, ncol(X_train)), drop = FALSE])
+  
+  cat("=== Scaled Rdata summary (X_train_scaled) ===\n")
+  print(summary(as.vector(as.matrix(X_train_scaled))))
+  cat("First 5 rows of scaled X_train_scaled:\n")
+  print(as.matrix(X_train_scaled)[1:5, 1:min(5, ncol(X_train_scaled)), drop = FALSE])
+  
+  cat("Dimensions of scaled sets:\n")
+  cat("Training:",   dim(X), "\n")
+  cat("Validation:", dim(X_validation), "\n")
+  cat("Test:",       dim(X_test), "\n")
+  
+  cat("Any NAs in scaled sets:\n")
+  cat("Training:",   anyNA(X), "\n")
+  cat("Validation:", anyNA(X_validation), "\n")
+  cat("Test:",       anyNA(X_test), "\n")
+  
+} else if (CLASSIFICATION_MODE == "multiclass") {
+  
+  cat("\n==================== [MC] START ====================\n")
+  
+  # ---------- A) Row-ID setup so we can align y to X ----------
+  # Ensure row names on split frames reflect original row indices
+  if (is.null(rownames(X_train)))      rownames(X_train)      <- as.character(train_indices)
+  if (is.null(rownames(X_validation))) rownames(X_validation) <- as.character(validation_indices)
+  if (is.null(rownames(X_test)))       rownames(X_test)       <- as.character(test_indices)
+  
+  # ---------- A0) Numeric imputation with TRAIN medians (prevents NA drops downstream) ----------
+  impute_with_train_median <- function(df_train, df_other) {
+    num_cols <- names(df_train)[vapply(df_train, is.numeric, TRUE)]
+    for (nm in num_cols) {
+      med <- suppressWarnings(median(df_train[[nm]], na.rm = TRUE))
+      if (!is.finite(med) || is.na(med)) med <- 0
+      if (nm %in% names(df_train))   df_train[[nm]][is.na(df_train[[nm]])] <- med
+      if (nm %in% names(df_other))   df_other[[nm]][is.na(df_other[[nm]])] <- med
+    }
+    list(train = df_train, other = df_other)
+  }
+  tmp <- impute_with_train_median(X_train, X_validation); X_train <- tmp$train; X_validation <- tmp$other
+  tmp <- impute_with_train_median(X_train, X_test);       X_test  <- tmp$other
+  
+  # Quick predictor type scan
+  pred_types <- vapply(X_train, function(col) {
+    if (is.numeric(col)) "numeric"
+    else if (is.factor(col)) "factor"
+    else class(col)[1]
+  }, character(1))
+  n_num <- sum(pred_types == "numeric")
+  n_fac <- sum(pred_types == "factor")
+  cat("[mc] predictors summary: numeric =", n_num, " | factor =", n_fac, " | total =", length(pred_types), "\n")
+  if (n_fac > 0) {
+    cat("[mc] factor columns:\n"); print(names(which(pred_types == "factor")))
+  }
+  
+  all_numeric <- all(pred_types == "numeric")
+  cat("[mc] all_numeric predictors? ->", all_numeric, "\n")
+  
+  # ---------- B) Build X (features) ----------
+  if (all_numeric) {
+    cat("[mc] PATH A: numeric-only (no one-hot for X)\n")
+    
+    X_train_scaled <- scale(as.data.frame(X_train))
+    center <- attr(X_train_scaled, "scaled:center")
+    scale_ <- attr(X_train_scaled, "scaled:scale"); scale_[!is.finite(scale_) | scale_ == 0] <- 1
+    
+    X_validation_scaled <- sweep(sweep(as.matrix(as.data.frame(X_validation)), 2, center, "-"), 2, scale_, "/")
+    X_test_scaled       <- sweep(sweep(as.matrix(as.data.frame(X_test)),       2, center, "-"), 2, scale_, "/")
+    
+    X            <- as.matrix(X_train_scaled)
+    X_validation <- as.matrix(X_validation_scaled)
+    X_test       <- as.matrix(X_test_scaled)
+    
+  } else {
+    cat("[mc] PATH B: one-hot features with model.matrix() + consistent TRAIN terms + row alignment\n")
+    
+    # Make factor NAs explicit so rows are preserved as levels
+    X_train_f      <- dplyr::mutate(X_train,      dplyr::across(where(is.factor), ~forcats::fct_explicit_na(., "(Missing)")))
+    X_validation_f <- dplyr::mutate(X_validation, dplyr::across(where(is.factor), ~forcats::fct_explicit_na(., "(Missing)")))
+    X_test_f       <- dplyr::mutate(X_test,       dplyr::across(where(is.factor), ~forcats::fct_explicit_na(., "(Missing)")))
+    
+    # Build design on TRAIN ONLY to lock columns
+    mm_terms <- terms(~ . - 1, data = X_train_f)
+    X_train_mm      <- model.matrix(mm_terms, data = X_train_f)
+    X_validation_mm <- model.matrix(mm_terms, data = X_validation_f)
+    X_test_mm       <- model.matrix(mm_terms, data = X_test_f)
+    
+    cat("[mc] dim(X_train_mm)=", paste(dim(X_train_mm), collapse="×"),
+        " | dim(X_val_mm)=", paste(dim(X_validation_mm), collapse="×"),
+        " | dim(X_test_mm)=", paste(dim(X_test_mm), collapse="×"), "\n")
+    
+    # Scale with train stats
+    X_train_scaled <- scale(X_train_mm)
+    center <- attr(X_train_scaled, "scaled:center")
+    scale_ <- attr(X_train_scaled, "scaled:scale"); scale_[!is.finite(scale_) | scale_ == 0] <- 1
+    
+    X_validation_scaled <- sweep(sweep(X_validation_mm, 2, center, "-"), 2, scale_, "/")
+    X_test_scaled       <- sweep(sweep(X_test_mm,       2, center, "-"), 2, scale_, "/")
+    
+    X            <- as.matrix(X_train_scaled)
+    X_validation <- as.matrix(X_validation_scaled)
+    X_test       <- as.matrix(X_test_scaled)
+  }
+  
+  # Stabilize magnitude (parity with your binary path)
+  max_val <- suppressWarnings(max(abs(X)))
+  if (!is.finite(max_val) || is.na(max_val) || max_val == 0) max_val <- 1
+  X            <- X            / max_val
+  X_validation <- X_validation / max_val
+  X_test       <- X_test       / max_val
+  
+  cat("[mc] dim(X) train/val/test: ",
+      paste(dim(X), collapse="×"), " / ",
+      paste(dim(X_validation), collapse="×"), " / ",
+      paste(dim(X_test), collapse="×"), "\n")
+  
+  # ---------- C) Align y to X rows (train/val/test) ----------
+  pull_y_vec <- function(obj) {
+    if (is.matrix(obj)) as.vector(obj[, 1, drop = TRUE])
+    else if (is.data.frame(obj)) as.vector(obj[[1]])
+    else as.vector(obj)
+  }
+  align_y_to_X <- function(X_mat, y_df, idx_vec) {
+    kept_rn <- rownames(X_mat)
+    if (is.null(kept_rn)) kept_rn <- as.character(idx_vec[seq_len(nrow(X_mat))])
+    pos <- match(kept_rn, as.character(idx_vec))
+    if (anyNA(pos)) stop("[mc][align] Could not map X rownames to original indices.")
+    pull_y_vec(y_df)[pos]
+  }
+  
+  y_vec_tr <- align_y_to_X(X,            y_train,      train_indices)
+  y_vec_va <- align_y_to_X(X_validation, y_validation, validation_indices)
+  y_vec_te <- align_y_to_X(X_test,       y_test,       test_indices)
+  
+  cat("[mc] lens y_vec (aligned): train/val/test = ",
+      length(y_vec_tr), "/", length(y_vec_va), "/", length(y_vec_te), "\n")
+  
+  # ---------- D) One-hot labels (shared levels from full dataset) ----------
+  y_full_vec  <- pull_y_vec(y)
+  levels_y    <- levels(factor(y_full_vec))
+  output_size <- length(levels_y)
+  cat("[mc] class levels (", output_size, "): ", paste(levels_y, collapse=", "), "\n", sep="")
+  
+  to_one_hot <- function(v, lvls) {
+    idx <- match(v, lvls)
+    m <- matrix(0L, nrow = length(v), ncol = length(lvls))
+    m[cbind(seq_along(idx), idx)] <- 1L
+    colnames(m) <- lvls
+    m
+  }
+  
+  y_train_one_hot_aligned <- to_one_hot(y_vec_tr, levels_y)
+  y_validation_one_hot    <- to_one_hot(y_vec_va, levels_y)
+  y_test_one_hot          <- to_one_hot(y_vec_te, levels_y)
+  
+  # Back-compat alias if other code references y_train_one_hot
+  y_train_one_hot <- y_train_one_hot_aligned
+  
+  cat("[mc] dim(y one-hot) train/val/test: ",
+      paste(dim(y_train_one_hot_aligned), collapse="×"), " / ",
+      paste(dim(y_validation_one_hot), collapse="×"), " / ",
+      paste(dim(y_test_one_hot), collapse="×"), "\n")
+  
+  # Keep original y matrices too
+  y            <- as.matrix(y_train); colnames(y) <- colname_y
+  y_validation <- as.matrix(y_validation)
+  y_test       <- as.matrix(y_test)
+  
+  # ---------- E) Single source of truth for training ----------
+  Rdata       <- X                               # training features
+  labels      <- y_train_one_hot_aligned         # training labels aligned to X
+  input_size  <- ncol(Rdata)
+  output_size <- ncol(labels)
+  
+  cat("[mc] FINAL dim(Rdata)=", paste(dim(Rdata), collapse="×"),
+      " | dim(labels)=", paste(dim(labels), collapse="×"),
+      " | input_size=", input_size, " | output_size=", output_size, "\n")
+  
+  if (nrow(Rdata) != nrow(labels)) {
+    stop(sprintf("[mc][FATAL] Row mismatch persists: nrow(Rdata)=%d vs nrow(labels)=%d.\nCheck alignment prints above.",
+                 nrow(Rdata), nrow(labels)))
+  }
+  
+  # ---------- F) Recompute N now that sizes are final ----------
+  if (!ML_NN) {
+    N <- input_size + output_size
+  } else {
+    N <- input_size + sum(hidden_sizes) + output_size
+  }
+  cat("[mc] N =", N, "\n")
+  
+  cat("===================== [MC] END =====================\n\n")
+} else if (CLASSIFICATION_MODE == "regression") {
+  cat("\n==================== [REG] START ====================\n")
+  
+  # ---------- A) Optional: make date numeric if present ----------
+  make_date_numeric <- function(df) {
+    if (!"date" %in% names(df)) return(df)
+    d <- df[["date"]]
+    if (inherits(d, "POSIXt")) {
+      df[["date"]] <- as.numeric(as.Date(d))       # days since epoch
+    } else if (inherits(d, "Date")) {
+      df[["date"]] <- as.numeric(d)                # days since epoch
+    } else {
+      suppressWarnings({ parsed <- as.Date(d) })
+      if (all(is.na(parsed))) {
+        warning("[reg] 'date' column could not be parsed; converting to NA (will be imputed).")
+        df[["date"]] <- NA_real_
+      } else {
+        df[["date"]] <- as.numeric(parsed)
+      }
+    }
+    df
+  }
+  X_train      <- make_date_numeric(X_train)
+  X_validation <- make_date_numeric(X_validation)
+  X_test       <- make_date_numeric(X_test)
+  
+  # ---------- B) Numeric imputation with TRAIN medians (no leakage) ----------
+  impute_with_train_median <- function(df_train, df_other) {
+    num_cols <- names(df_train)[vapply(df_train, is.numeric, TRUE)]
+    for (nm in num_cols) {
+      med <- suppressWarnings(median(df_train[[nm]], na.rm = TRUE))
+      if (!is.finite(med) || is.na(med)) med <- 0
+      if (nm %in% names(df_train)) df_train[[nm]][is.na(df_train[[nm]])] <- med
+      if (nm %in% names(df_other)) df_other[[nm]][is.na(df_other[[nm]])] <- med
+    }
+    list(train = df_train, other = df_other)
+  }
+  tmp <- impute_with_train_median(X_train, X_validation); X_train <- tmp$train; X_validation <- tmp$other
+  tmp <- impute_with_train_median(X_train, X_test);       X_test  <- tmp$other
+  
+  # ---------- C) Feature scaling without leakage ----------
+  X_train_df <- as.data.frame(X_train)
+  X_val_df   <- as.data.frame(X_validation)
+  X_test_df  <- as.data.frame(X_test)
+  
+  num_mask <- vapply(X_train_df, is.numeric, TRUE)
+  if (!any(num_mask)) stop("[reg] No numeric predictors found after preprocessing.")
+  
+  X_train_num <- as.matrix(X_train_df[, num_mask, drop = FALSE])
+  X_val_num   <- as.matrix(X_val_df[,   num_mask, drop = FALSE])
+  X_test_num  <- as.matrix(X_test_df[,  num_mask, drop = FALSE])
+  
+  X_train_scaled <- scale(X_train_num)
+  center <- attr(X_train_scaled, "scaled:center")
+  scale_ <- attr(X_train_scaled, "scaled:scale"); scale_[!is.finite(scale_) | scale_ == 0] <- 1
+  
+  X_validation_scaled <- sweep(sweep(X_val_num,  2, center, "-"), 2, scale_, "/")
+  X_test_scaled       <- sweep(sweep(X_test_num, 2, center, "-"), 2, scale_, "/")
+  
+  # ---------- D) Further rescale to prevent exploding activations ----------
+  max_val <- suppressWarnings(max(abs(X_train_scaled)))
+  if (!is.finite(max_val) || is.na(max_val) || max_val == 0) max_val <- 1
+  
+  # --- Save training-time preprocessing for predict() ---
+  feature_names <- colnames(X_train_num)  # exact order used to train
+  train_medians <- vapply(as.data.frame(X_train_df[, feature_names, drop = FALSE]),
+                          function(col) suppressWarnings(median(col, na.rm = TRUE)), numeric(1))
+  train_medians[!is.finite(train_medians)] <- 0
+  
+  # ---------- E) y handling (train-only): optional z-score ----------
+  SCALE_Y_WITH_ZSCORE <- FALSE  # TRUE = train on z-scored y; FALSE = raw y
+  
+  `%||%` <- get0("%||%", inherits = TRUE, ifnotfound = function(x, y) if (is.null(x)) y else x)
+  
+  # 1) Robust y extraction (vector)
+  y_vec <- if (is.matrix(y_train) || is.data.frame(y_train)) {
+    as.numeric(y_train[, 1])
+  } else {
+    as.numeric(y_train)
+  }
+  stopifnot(length(y_vec) == NROW(X_train))
+  
+  # 2) Decide transform type (train-only)
+  is_regression <- identical(tolower(CLASSIFICATION_MODE %||% "regression"), "regression")
+  use_zscore    <- is_regression && is.numeric(y_vec) && isTRUE(SCALE_Y_WITH_ZSCORE)
+  
+  if (use_zscore) {
+    y_center <- mean(y_vec, na.rm = TRUE)
+    y_scale  <- stats::sd(y_vec, na.rm = TRUE)
+    if (!is.finite(y_scale) || y_scale == 0) y_scale <- 1
+    
+    y_vec_scaled <- (y_vec - y_center) / y_scale
+    
+    target_transform <- list(
+      type   = "zscore",
+      params = list(center = y_center, scale = y_scale)
+    )
+    y_trained_scaled <- TRUE
+  } else {
+    # Train on raw y (predict-only does identity inverse)
+    y_vec_scaled <- y_vec
+    target_transform <- list(
+      type   = "identity",
+      params = list(center = 0, scale = 1)
+    )
+    y_trained_scaled <- FALSE
+  }
+  
+  
+  # 3) one-col numeric matrix for training
+  y <- matrix(as.numeric(y_vec_scaled), ncol = 1L)
+  storage.mode(y) <- "double"
+  colnames(y) <- colname_y
+  
+  # ---------- F) SINGLE source of truth object (no meta writes) ----------
+  # Build preprocessScaledData containing BOTH X and y handling so predict-only can invert correctly.
+  center_vec <- setNames(as.numeric(center[feature_names]),        feature_names)
+  scale_vec  <- setNames(as.numeric(scale_[feature_names]),        feature_names)
+  med_vec    <- setNames(as.numeric(train_medians[feature_names]), feature_names)
+  
+  preprocessScaledData <- list(
+    # X preprocess
+    feature_names     = as.character(feature_names),
+    center            = center_vec,
+    scale             = scale_vec,
+    max_val           = as.numeric(max_val),
+    divide_by_max_val = TRUE,
+    train_medians     = med_vec,
+    date_policy       = "as.Date -> numeric days; char parsed via as.Date()",
+    used_scaled_X     = TRUE,
+    scaler            = "standardize+divide_by_max",
+    imputer           = "train_median",
+    input_size        = ncol(X_train_num),
+    
+    # y / target transform lives HERE
+    target_transform  = target_transform,      # identity or zscore
+    y_trained_scaled  = isTRUE(y_trained_scaled)
+  )
+  
+  # Make available to outer scope (for your writer / store_metadata)
+  assign("preprocessScaledData", preprocessScaledData, inherits = TRUE)
+  assign("target_transform",     target_transform,     inherits = TRUE)
+  
+  # ---------- (Optional but recommended) mirror into meta BEFORE you write the RDS ----------
+  # This does NOT write to disk here; it only ensures the in-memory `meta` will contain the fields
+  # when your existing store_metadata() persists it.
+  # ---------- Add model-critical configs into meta ----------
+  if (exists("meta", inherits = TRUE)) {
+    try({
+      meta$preprocessScaledData <- preprocessScaledData
+      meta$target_transform     <- target_transform
+      meta$train_target_center  <- target_transform$params$center %||% NA_real_
+      meta$train_target_scale   <- target_transform$params$scale  %||% NA_real_
+      
+      # store activations and dropout etc.
+      meta$activation_functions <- activation_functions
+      meta$dropout_rates        <- dropout_rates
+      meta$hidden_sizes         <- self$hidden_sizes %||% meta$hidden_sizes
+      meta$output_size          <- self$output_size %||% meta$output_size
+      meta$ML_NN                <- self$ML_NN %||% meta$ML_NN
+    }, silent = TRUE)
+  }
+  
+  
+  # ---------- (Helpful debug) ----------
+  if (isTRUE(get0("DEBUG_PREDICT", inherits = TRUE, ifnotfound = TRUE))) {
+    if (use_zscore) {
+      cat(sprintf("[y-train] using zscore: center=%.6f scale=%.6f | y sd(raw)=%.6f sd(scaled)=%.6f\n",
+                  y_center, y_scale, stats::sd(y_vec), stats::sd(y_vec_scaled)))
+    } else {
+      cat(sprintf("[y-train] using identity target transform | y sd=%.6f\n", stats::sd(y_vec)))
+    }
+  }
+  
+  # `y` is now ready for training; `preprocessScaledData`/`target_transform` are ready for store_metadata().
+  
+  
+  
+  # ---------- G) Feed scaled inputs to the NN (divide-by-max applied) ----------
+  X_train_scaled      <- X_train_scaled      / max_val
+  X_validation_scaled <- X_validation_scaled / max_val
+  X_test_scaled       <- X_test_scaled       / max_val
+  
+  scaledData <- TRUE  # use scaled inputs by default
+  if (isTRUE(scaledData)) {
+    X <- as.matrix(X_train_scaled)
+    # IMPORTANT: keep y computed above (possibly scaled) — do NOT overwrite with raw y_train
+    X_validation <- as.matrix(X_validation_scaled)
+    X_test       <- as.matrix(X_test_scaled)
+  } else {
+    X <- as.matrix(X_train_num)
+    X_validation <- as.matrix(X_val_num)
+    X_test       <- as.matrix(X_test_num)
+  }
+  
+  # Ensure y is 1 column numeric
+  if (ncol(y) != 1L) {
+    y <- matrix(as.numeric(y[, 1]), ncol = 1L)
+  } else {
+    storage.mode(y) <- "double"
+  }
+  colnames(y) <- colname_y
+  
+  # ---------- H) Diagnostics ----------
+  cat("=== [reg] Unscaled X_train (numeric subset) summary ===\n")
+  print(summary(as.vector(X_train_num)))
+  cat("First 5 rows of unscaled numeric X_train:\n")
+  print(X_train_num[1:5, 1:min(5, ncol(X_train_num)), drop = FALSE])
+  
+  cat("=== [reg] Scaled X_train summary ===\n")
+  print(summary(as.vector(X)))
+  cat("First 5 rows of scaled X (train):\n")
+  print(X[1:5, 1:min(5, ncol(X)), drop = FALSE])
+  
+  cat("[reg] Dimensions (train/val/test):\n")
+  cat("X:",            paste(dim(X), collapse="×"),          "\n")
+  cat("X_validation:", paste(dim(X_validation), collapse="×"), "\n")
+  cat("X_test:",       paste(dim(X_test), collapse="×"),      "\n")
+  cat("[reg] Any NAs?  train:", anyNA(X),
+      "  val:", anyNA(X_validation),
+      "  test:", anyNA(X_test), "\n")
+  
+  # ---------- I) Final wiring into trainer ----------
+  Rdata       <- X
+  labels      <- y
+  input_size  <- ncol(Rdata)
+  output_size <- 1L
+  
+  cat("[reg] FINAL dim(Rdata)=", paste(dim(Rdata), collapse="×"),
+      " | dim(labels)=", paste(dim(labels), collapse="×"),
+      " | input_size=", input_size, " | output_size=", output_size, "\n")
+  
+  if (nrow(Rdata) != nrow(labels)) {
+    stop(sprintf("[reg][FATAL] Row mismatch: nrow(Rdata)=%d vs nrow(labels)=%d.", nrow(Rdata), nrow(labels)))
+  }
+  
+  if (!ML_NN) {
+    N <- input_size + output_size
+  } else {
+    N <- input_size + sum(hidden_sizes) + output_size
+  }
+  cat("[reg] N =", N, "\n")
+  cat("==================== [REG] END ====================\n\n")
+}
+
+
+
+if (CLASSIFICATION_MODE == "binary"){
+  preprocessScaledData <- NULL
+}else if (CLASSIFICATION_MODE == "multiclass") {
+  preprocessScaledData <- NULL
+}
+
+
+if (CLASSIFICATION_MODE == "multiclass") {
+  input_size  <- ncol(Rdata)                    # after model.matrix/processing
+  output_size <- ncol(y_train_one_hot_aligned)  # number of classes (fixed name)
+}
+
+
+# ==============================================================
+# Optional Random Forest-based feature selection (default OFF)
+# ==============================================================
+
+importanceFeaturesOnly <- FALSE   # default: don't filter features
+
+if (isTRUE(importanceFeaturesOnly)) {
+  library(randomForest)
+  
+  # --- Train RF on TRAIN split (X, y) ---
+  rf_data <- as.data.frame(X)                         
+  rf_data$DEATH_EVENT <- as.factor(as.vector(y[, 1])) # ensure 1D factor
+  
+  set.seed(42)
+  rf_model <- randomForest(DEATH_EVENT ~ ., data = rf_data, importance = TRUE)
+  
+  # Compute feature importance and select features above mean
+  importance_scores <- importance(rf_model, type = 2)[, 1]  # MeanDecreaseGini
+  threshold <- mean(importance_scores)
+  selected_features <- names(importance_scores[importance_scores > threshold])
+  
+  # Safety net if none pass the threshold
+  if (length(selected_features) == 0L) {
+    k <- min(10L, length(importance_scores))
+    selected_features <- names(sort(importance_scores, decreasing = TRUE))[seq_len(k)]
+  }
+  
+  # Helper: enforce same columns & order; add any missing as zeros
+  ensure_feature_columns <- function(M, wanted) {
+    M <- as.matrix(M)
+    miss <- setdiff(wanted, colnames(M))
+    if (length(miss)) {
+      M <- cbind(M, matrix(0, nrow = nrow(M), ncol = length(miss),
+                           dimnames = list(NULL, miss)))
+    }
+    M[, wanted, drop = FALSE]
+  }
+  
+  # ---- Apply the filter to ALL splits (train/val/test) ----
+  X            <- ensure_feature_columns(X,            selected_features)
+  X_validation <- ensure_feature_columns(X_validation, selected_features)
+  X_test       <- ensure_feature_columns(X_test,       selected_features)
+  
+  # Update input size for neural network initialization
+  input_size <- ncol(X)
+  
+  # Keep numeric_columns in sync (if present)
+  if (exists("numeric_columns")) {
+    numeric_columns <- intersect(numeric_columns, selected_features)
+  }
+  
+  # (optional) quick checks
+  stopifnot(identical(colnames(X), colnames(X_validation)),
+            identical(colnames(X), colnames(X_test)))
+  cat(sprintf("[RF] kept %d features; input_size=%d\n",
+              length(selected_features), input_size))
+}
+
+# ==============================================================
+# Adaptive Sample Weights (default OFF)
+# ==============================================================
+
+sampleWeights <- FALSE   # <-- toggle this flag; default = FALSE
+
+if (isTRUE(sampleWeights)) {
+  # --- Assume you already have P (n×1 probs) and yi (length n labels in {0,1}) ---
+  probs  <- as.numeric(P[, 1])
+  labels <- as.numeric(yi)
+  
+  # Optional: build flags from in-memory features (use your own logic).
+  # If you have the *unscaled* data frame used for this split (e.g., X_validation_raw),
+  # compute flags on that; otherwise set them to 0s as a safe default.
+  deceptive_flags <- rep(0L, length(labels))
+  risky_flags     <- rep(0L, length(labels))
+  
+  # Example (only if you have the needed columns in a DF called X_raw with same row order):
+  # q <- function(x, p) quantile(x, p, na.rm = TRUE)
+  # deceptive_flags <- as.integer(
+  #   X_raw$serum_creatinine < q(X_raw$serum_creatinine, 0.10) &
+  #   X_raw$age               < q(X_raw$age,               0.15) &
+  #   X_raw$creatinine_phosphokinase < q(X_raw$creatinine_phosphokinase, 0.20)
+  # )
+  # risky_flags <- as.integer( ...your risky rule here... )
+  
+  # Sanity
+  stopifnot(length(probs) == length(labels),
+            length(deceptive_flags) == length(labels),
+            length(risky_flags) == length(labels))
+  
+  # Error magnitude
+  errors <- abs(probs - labels)
+  
+  # Base weights
+  base_weights <- rep(1, length(labels))
+  base_weights[labels == 1] <- base_weights[labels == 1] * 2
+  base_weights[labels == 1 & risky_flags == 1] <- base_weights[labels == 1 & risky_flags == 1] * log(20) * 4
+  base_weights[labels == 1 & deceptive_flags == 1] <- base_weights[labels == 1 & deceptive_flags == 1] * 3
+  
+  # Blend with error + clip
+  raw_weights <- base_weights * errors
+  raw_weights <- pmin(pmax(raw_weights, 0.05), 23)
+  
+  # Final adaptive weights (normalized)
+  sample_weights <- 0.6 * base_weights + 0.4 * raw_weights
+  sample_weights <- sample_weights / mean(sample_weights)
+  
+  cat("Sample weights created. Mean =", sprintf("%.4f", mean(sample_weights)), "\n")
+  
+} else {
+  sample_weights <- NULL
+  cat("Sample weights disabled (sampleWeights=FALSE).\n")
+}
+
+
+
+#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+#    ██████  ██████  ███    ██ ████████ ██████   ██████  ██          ██████   █████  ███    ██ ███████ ██  $$$$$$$$$$$$$$
+#  ██      ██    ██ ████   ██    ██    ██   ██ ██    ██ ██          ██   ██ ██   ██ ████   ██ ██      ██   $$$$$$$$$$$$$$
+# ██      ██    ██ ██ ██  ██    ██    ██████  ██    ██ ██          ██████  ███████ ██ ██  ██ █████   ██    $$$$$$$$$$$$$$
+#██      ██    ██ ██  ██ ██    ██    ██   ██ ██    ██ ██          ██      ██   ██ ██  ██ ██ ██      ██     $$$$$$$$$$$$$$
+#██████  ██████  ██   ████    ██    ██   ██  ██████  ███████     ██      ██   ██ ██   ████ ███████ ███████ $$$$$$$$$$$$$$
+#$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+
+viewTables <- FALSE
+Losses_At_Optimal_Epoch_filenumber <- 3
+writeTofiles <- FALSE
+#########################################################################################################################
+
+#########################################################################################################################
+
+
+hyperparameter_grid_setup <- TRUE
+reg_type = "L1" #"Max_Norm" #"L2" #Max_Norm" #"Group_Lasso" #"L1_L2"
+
+# input_size <- 13 # This should match the actual number of features in your data
+# hidden_size <- 2
+loading_ensemble_1_run_ids <- FALSE
+#########################################################################################################################
+never_ran_flag <- TRUE
+
+# if(hyperparameter_grid_setup){
+#     loading_ensemble_1_run_ids <- TRUE #change back to false
+# }else if(!hyperparameter_grid_setup){
+# loading_ensemble_1_run_ids <- TRUE
+# }
+# results <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
+# Iterate over each row of the hyperparameter grid
+# for (j in 1:nruns) {
+
+plot_robustness <- FALSE
+predict_models <- FALSE
+use_loaded_weights <- FALSE
+saveToDisk <- FALSE
+
+# === Step 1: Hyperparameter setup ===
+hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manually
+
+
+## =========================
+## DDESONN Runner – Modes
+## =========================
+## SCENARIO A: Single-run only (no ensemble, ONE model)
+do_ensemble         <- FALSE
+num_networks        <- 1L
+num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+#
+## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
+# do_ensemble         <- FALSE
+# num_networks        <- 2L          # e.g., run 5 models in one DDESONN instance
+# num_temp_iterations <- 0L
+#
+## SCENARIO C: Main ensemble only (no TEMP/prune-add)
+# do_ensemble         <- TRUE
+# num_networks        <- 2L          # example main size
+# num_temp_iterations <- 0L
+#
+## SCENARIO D: Main + TEMP iterations (prune/add enabled)
+# do_ensemble         <- TRUE
+# num_networks        <- 5L          # example main size
+# num_temp_iterations <- 3L          # MAIN + 1 TEMP pass (set higher for more TEMP passes)
+#
+## You can set the above variables BEFORE sourcing this file. The defaults below are fallbacks.
+
+## ====== GLOBALS ======
+results   <- data.frame(lr = numeric(), lambda = numeric(), accuracy = numeric(), stringsAsFactors = FALSE)
+
+`%||%` <- function(a,b) if (is.null(a) || length(a)==0) b else a
+
+# You can set these BEFORE sourcing the file. Defaults below are only fallbacks.
+num_networks        <- get0("num_networks", ifnotfound = 1L)
+num_temp_iterations <- get0("num_temp_iterations", ifnotfound = 0L)   # 0 = MAIN only (no TEMP)
+do_ensemble         <- get0("do_ensemble", ifnotfound = FALSE)         # TRUE ⇒ run MAIN (+ TEMP if >0)
+
+# firstRun is only used to build the MAIN holder in ensemble mode
+firstRun <- TRUE
+
+j <- 1L
+ensembles <- list(main_ensemble = vector("list"), temp_ensemble = vector("list"))
+
+metric_name <- "accuracy"
+viewTables  <- FALSE
+
+## ====== Control panel flags ======
+viewAllPlots <- FALSE  # TRUE shows all plots regardless of individual flags
+verbose      <- FALSE  # TRUE enables additional plot/debug output
+
+# SONN plots
+accuracy_plot     <- FALSE    # show training accuracy/loss
+saturation_plot   <- FALSE   # show output saturation
+max_weight_plot   <- FALSE    # show max weight magnitude
+
+# DDESONN plots
+performance_high_mean_plots <- FALSE
+performance_low_mean_plots  <- FALSE
+relevance_high_mean_plots   <- FALSE
+relevance_low_mean_plots    <- FALSE
+
+# =========================
+# Session bootstrap & flags (TRAIN | PREDICT:STATELESS | PREDICT:STATEFUL)
+# =========================
+# =========================
+# Phase 0 — toggles & mode
+# =========================
+
+# Toggle — set TRUE to export RDS metadata and (optionally) clear env, then stop.
+
+prepare_disk_only <- FALSE
+# prepare_disk_only <- TRUE
+
+prepare_disk_only <- get0("prepare_disk_only", ifnotfound = FALSE)  # one-shot RDS export helper
+
+# Flag specific to disk-only prepare / selection
+prepare_disk_only_FROM_RDS <- FALSE
+prepare_disk_only_FROM_RDS <- get0("prepare_disk_only_FROM_RDS", ifnotfound = FALSE)
+# Modes:
+
+MODE <- "train"
+# num_epochs <- 3
+# MODE <- "predict:stateless"
+MODE <- get0("MODE", ifnotfound = "train")
+PREDICT_ONLY_FROM_RDS <- TRUE
+PREDICT_ONLY_FROM_RDS  <- isTRUE(get0("PREDICT_ONLY_FROM_RDS", inherits=TRUE, ifnotfound=FALSE))
+# Prediction scope (only used when MODE starts with "predict:")
+PREDICT_SCOPE <- "all"
+PREDICT_SCOPE    <- get0("PREDICT_SCOPE",    ifnotfound = "one")
+PICK_INDEX       <- as.integer(get0("PICK_INDEX", 1L))    # used when scope="pick"
+PREDICT_SELECTOR <- get0("PREDICT_SELECTOR", ifnotfound = "by_metric")
+TARGET_METRIC    <- get0("TARGET_METRIC",    ifnotfound = "accuracy")
+
+# Optional candidate filters
+KIND_FILTER      <- get0("KIND_FILTER",      ifnotfound = c("Main","Temp"))
+ENS_FILTER       <- get0("ENS_FILTER",       ifnotfound = NULL)
+MODEL_FILTER     <- get0("MODEL_FILTER",     ifnotfound = NULL)
+
+# (Kept only for one-shot export convenience)
+BM_NAME_HINT    <- get0("BM_NAME_HINT", ifnotfound = NULL)
+BM_PREFER_KIND  <- get0("BM_PREFER_KIND",  ifnotfound = c("Main","Temp"))
+BM_PREFER_ENS   <- get0("BM_PREFER_ENS",   ifnotfound = c(0L, 1L))
+BM_PREFER_MODEL <- get0("BM_PREFER_MODEL", ifnotfound = 1L)   # legacy keeps your old default
+.BM_DIR <- "artifacts"
+# ---- NEW: prepare-disk choice flags (adds 3-choice behavior) ----------
+# Choices: "first" | "all" | "pick"
+PREPARE_DISK_CHOICE <- get0("PREPARE_DISK_CHOICE", ifnotfound = "all")
+
+# Clear environment after saving (matches prior behavior of bm_prepare_disk_only):
+PREPARE_CLEAR_ENV <- FALSE
+PREPARE_CLEAR_ENV   <- get0("PREPARE_CLEAR_ENV",   ifnotfound = TRUE)
+
+# ---- NEW FLAG: clear environment after saving EXCEPT the models (keep models in env) ----
+# If this is TRUE, PREPARE_CLEAR_ENV is forced FALSE (mutually exclusive).
+PREPARE_CLEAR_ENV_EXCEPT_MODELS <- TRUE
+PREPARE_CLEAR_ENV_EXCEPT_MODELS <- get0("PREPARE_CLEAR_ENV_EXCEPT_MODELS", ifnotfound = FALSE)
+
+# Enforce mutual exclusion at runtime
+if (isTRUE(PREPARE_CLEAR_ENV_EXCEPT_MODELS)) {
+  PREPARE_CLEAR_ENV <- FALSE
+}
+
+# Default metadata dir (if not already set elsewhere)
+.BM_DIR <- get0(".BM_DIR", ifnotfound = "artifacts")
+
+# Helper: strip trailing _YYYYMMDD_HHMMSS from a base name
+.strip_ts <- function(x) sub("_(\\d{8}_\\d{6})$", "", x)
+
+# =========================================
+# Phase 1 — one-shot export & (optional) clean
+# =========================================
+if (isTRUE(prepare_disk_only)) {
+  
+  # Snapshot the clear flags BEFORE any helper that might wipe env
+  .CLEAR_EXCEPT <- isTRUE(PREPARE_CLEAR_ENV_EXCEPT_MODELS)  # strong override branch
+  .CLEAR_AFTER  <- isTRUE(PREPARE_CLEAR_ENV)                # only used if .CLEAR_EXCEPT is FALSE
+  saved_names   <- character(0)  # will hold names of models we want to keep in env (if needed)
+  ts_tag        <- format(Sys.time(), "%Y%m%d_%H%M%S")  # timestamp for filenames
+  
+  # -------------------------------
+  # A) Legacy exact-name path (BM_NAME_HINT)
+  # -------------------------------
+  if (!is.null(BM_NAME_HINT) && nzchar(BM_NAME_HINT)) {
+    rds_path <- bm_prepare_disk_only(
+      name_hint    = BM_NAME_HINT,
+      prefer_kind  = BM_PREFER_KIND,
+      prefer_ens   = BM_PREFER_ENS,
+      prefer_model = BM_PREFER_MODEL,
+      dir          = .BM_DIR
+    )
+    # rename file with timestamp
+    if (file.exists(rds_path)) {
+      rds_new <- sub("\\.rds$", sprintf("_%s.rds", ts_tag), rds_path)
+      file.rename(rds_path, rds_new)
+      rds_path <- rds_new
+    }
+    cat(sprintf("[prepare_disk_only] Saved metadata to: %s\n", rds_path))
+    
+    # record the object name (strip timestamp) so we can keep it in env after clearing
+    base_no_ext <- sub("\\.rds$", "", basename(rds_path))
+    saved_names <- unique(c(saved_names, .strip_ts(base_no_ext)))
+    
+  } else {
+    
+    # -------------------------------
+    # B) Choice-based export ("first" | "all" | "pick")
+    #     — DO NOT clear inside helper
+    # -------------------------------
+    rds_paths <- tryCatch(
+      bm_prepare_disk_by_choice(
+        choice       = PREPARE_DISK_CHOICE,   # "first" | "all" | "pick"
+        kind_filter  = KIND_FILTER,
+        ens_filter   = ENS_FILTER,
+        model_filter = MODEL_FILTER,
+        dir          = .BM_DIR,
+        clear_env    = FALSE                  # ← prevent premature wipe
+      ),
+      error = function(e) {
+        cat("\n[prepare_disk_only] ERROR during bm_prepare_disk_by_choice:\n")
+        message(e)
+        stop(e)
+      }
+    )
+    
+    # rename each file with timestamp
+    rds_new_paths <- character(0)
+    if (length(rds_paths)) {
+      for (p in unique(rds_paths)) {
+        if (file.exists(p)) {
+          p_new <- sub("\\.rds$", sprintf("_%s.rds", ts_tag), p)
+          file.rename(p, p_new)
+          rds_new_paths <- c(rds_new_paths, p_new)
+        }
+      }
+      cat("[prepare_disk_only] Saved metadata files:\n")
+      for (p in rds_new_paths) cat("  - ", p, "\n", sep = "")
+    } else {
+      cat("[prepare_disk_only] No candidates saved (zero-length result).\n")
+    }
+    
+    # record all object names (strip timestamp) so we can keep them in env after clearing
+    base_no_ext <- sub("\\.rds$", "", basename(rds_new_paths))
+    saved_names <- unique(c(saved_names, .strip_ts(base_no_ext)))
+  }
+  
+  # -------------------------------
+  # C) Clear environment policy
+  # -------------------------------
+  if (.CLEAR_EXCEPT) {
+    # Clear everything EXCEPT the saved models/metadata objects (by name)
+    if (length(saved_names)) {
+      if (exists("bm_clear_env_except", inherits = TRUE)) {
+        bm_clear_env_except(keep_names = saved_names)
+      } else {
+        all_objs <- ls(envir = .GlobalEnv, all.names = FALSE)
+        to_rm    <- setdiff(all_objs, saved_names)
+        if (length(to_rm)) rm(list = to_rm, envir = .GlobalEnv)
+      }
+      gc()
+      cat("[prepare_disk_only] Environment cleared EXCEPT saved models (kept in env). End of phase-1.\n")
+    } else {
+      # nothing saved? full clear fallback
+      rm(list = ls(envir = .GlobalEnv), envir = .GlobalEnv)
+      gc()
+      cat("[prepare_disk_only] Environment fully cleared (no saved models to keep). End of phase-1.\n")
+    }
+  } else if (.CLEAR_AFTER) {
+    # Legacy behavior: clear after saving; keep saved models/metadata in env
+    if (length(saved_names)) {
+      if (exists("bm_clear_env_except", inherits = TRUE)) {
+        bm_clear_env_except(keep_names = saved_names)
+      } else {
+        all_objs <- ls(envir = .GlobalEnv, all.names = FALSE)
+        to_rm    <- setdiff(all_objs, saved_names)
+        if (length(to_rm)) rm(list = to_rm, envir = .GlobalEnv)
+      }
+      gc()
+      cat("[prepare_disk_only] Environment cleared (kept saved models). End of phase-1.\n")
+    } else {
+      # nothing saved? fall back to full clear
+      rm(list = ls(envir = .GlobalEnv), envir = .GlobalEnv)
+      gc()
+      cat("[prepare_disk_only] Environment cleared. End of phase-1.\n")
+    }
+  } else {
+    cat("[prepare_disk_only] No environment clear requested. End of phase-1.\n")
+  }
+  
+  # Final stop/quit
+  if (exists(".hard_stop", mode = "function")) .hard_stop() else stop("prepare_disk_only done.")
+}
+
+
+# Derive boolean once from MODE (no redundancy)
+train <- identical(MODE, "train")
+INPUT_SPLIT    <- "test"   # or "test" / "train" / "auto"
+USE_EMBEDDED_X <- FALSE          # keep FALSE to ensure it uses your chosen split
+
+## —— Ensembling
+ENABLE_ENSEMBLE_AVG   <- TRUE
+ENABLE_ENSEMBLE_WAVG  <- TRUE
+ENABLE_ENSEMBLE_VOTE  <- TRUE
+ENSEMBLE_WEIGHT_COLUMN <- "tuned_f1"  # falls back automatically if missing
+ENSEMBLE_RESPECT_MINIMIZE <- TRUE
+ENSEMBLE_VOTE_USE_TUNED_THRESH <- TRUE
+# ENSEMBLE_VOTE_QUORUM <- 4L      # optional explicit quorum
+
+## —— Printing
+PREDICT_FULL_PRINT  <- TRUE      # show everything
+PREDICT_HEAD_N      <- 100L      # if not full-printing
+PREDICT_PRINT_MAX   <- 1e7
+PREDICT_PRINT_WIDTH <- 240L
+PREDICT_USE_TIBBLE  <- TRUE
+
+## —— Artifacts
+ARTIFACTS_DIR       <- file.path(getwd(), "artifacts")
+PREDICT_RDS_DEBUG   <- FALSE     # set TRUE if model_rds shows NA
+
+# ======================= PREDICT-ONLY (choose split via INPUT_SPLIT) =======================
+############################################################
+# PREDICT-ONLY MODE (!train) — cleaned & fixed for regression
+############################################################
+if(train) {
+
+  ## =========================================================================================
+  ## SINGLE-RUN MODE (no logs, no lineage, no temp/prune/add) — Scenario A & B
+  ## Foldering: artifacts/SingleRuns/<timestamp>__m<num_networks>__wSeed|wNoSeed
+  ## =========================================================================================
+  ## =========================
+  ## SINGLE-RUN MODE (no ensemble)
+  ## =========================
+  if (!isTRUE(do_ensemble)) {
+    cat(sprintf(
+      "Single-run mode → training %d model%s inside one DDESONN instance, skipping all ensemble/logging.\n",
+      as.integer(num_networks), if (num_networks == 1L) "" else "s"
+    ))
+    
+    ## --- tiny helper (match ensemble stamping semantics) ---
+    .scalar_num <- function(x, idx = NA_integer_) {
+      v <- suppressWarnings(as.numeric(x))
+      if (!length(v)) return(NA_real_)
+      if (is.finite(idx) && !is.na(idx) && idx >= 1L && idx <= length(v)) return(v[idx])
+      v[1]
+    }
+    
+    # --------------------- RUN DIR SETUP (single stamp) ---------------------
+    seeds <- 1:x
+    metrics_rows <- list()
+    
+    ts_stamp  <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    seed_tag  <- if (length(seeds) > 1L) "wSeed" else "wNoSeed"
+    run_stamp <- sprintf("%s__m%d__%s", ts_stamp, as.integer(num_networks), seed_tag)
+    
+    OUT_ROOT <- file.path("artifacts", "SingleRuns")
+    RUN_DIR  <- normalizePath(file.path(OUT_ROOT, run_stamp), winslash = "/", mustWork = FALSE)
+    
+    # Keep .BM_DIR (used by bm_* helpers) but point it ONLY to RUN_DIR
+    # assign(".BM_DIR", RUN_DIR, envir = .GlobalEnv)
+    
+    cat(sprintf("[SINGLE] RUN_DIR = %s\n", RUN_DIR))
+    
+    # Filenames (inside RUN_DIR)
+    s_chr <- as.character(length(seeds))
+    agg_pred_file    <- file.path(RUN_DIR, sprintf("SingleRun_Pretty_Test_Metrics_%s_seeds_%s.rds", s_chr, ts_stamp))
+    agg_metrics_file <- file.path(RUN_DIR, sprintf("SingleRun_Test_Metrics_%s_seeds_%s.rds",          s_chr, ts_stamp))
+    # ------------------------------------------------------------------------
+    
+    for (i in seq_along(seeds)) {
+      s <- seeds[i]
+      set.seed(s)
+      
+      run_model <- DDESONN$new(
+        num_networks    = max(1L, as.integer(num_networks)),
+        input_size      = input_size,
+        hidden_sizes    = hidden_sizes,
+        output_size     = output_size,
+        N               = N,
+        lambda          = lambda,
+        ensemble_number = 0L,
+        ensembles       = NULL,
+        ML_NN           = ML_NN,
+        method          = init_method,
+        custom_scale    = custom_scale
+      )
+      
+      if (length(run_model$ensemble)) {
+        for (m in seq_along(run_model$ensemble)) {
+          run_model$ensemble[[m]]$PerEpochViewPlotsConfig <- list(
+            accuracy_plot   = isTRUE(accuracy_plot),
+            saturation_plot = isTRUE(saturation_plot),
+            max_weight_plot = isTRUE(max_weight_plot),
+            viewAllPlots    = isTRUE(viewAllPlots),
+            verbose         = isTRUE(verbose)
+          )
+          run_model$ensemble[[m]]$FinalUpdatePerformanceandRelevanceViewPlotsConfig <- list(
+            performance_high_mean_plots = isTRUE(performance_high_mean_plots),
+            performance_low_mean_plots  = isTRUE(performance_low_mean_plots),
+            relevance_high_mean_plots   = isTRUE(relevance_high_mean_plots),
+            relevance_low_mean_plots    = isTRUE(relevance_low_mean_plots),
+            viewAllPlots                = isTRUE(viewAllPlots),
+            verbose                     = isTRUE(verbose)
+          )
+        }
+      }
+      
+      model_results <- run_model$train(
+        Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
+        lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs, use_biases=use_biases,
+        threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
+        activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+        dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+        beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
+        batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
+        epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
+        shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights, preprocessScaledData=preprocessScaledData,
+        X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
+        train=train, viewTables=viewTables, verbose=verbose
+      )
+      
+      ## === STAMP MAIN_0 METADATA with best_* including best_val_prediction_time ===
+      best_train_acc_ret     <- try(model_results$predicted_outputAndTime$best_train_acc,           silent = TRUE); if (inherits(best_train_acc_ret, "try-error")) best_train_acc_ret <- NA_real_
+      best_epoch_train_ret   <- try(model_results$predicted_outputAndTime$best_epoch_train,         silent = TRUE); if (inherits(best_epoch_train_ret, "try-error")) best_epoch_train_ret <- NA_integer_
+      best_val_acc_ret       <- try(model_results$predicted_outputAndTime$best_val_acc,             silent = TRUE); if (inherits(best_val_acc_ret, "try-error")) best_val_acc_ret <- NA_real_
+      best_val_epoch_ret     <- try(model_results$predicted_outputAndTime$best_val_epoch,           silent = TRUE); if (inherits(best_val_epoch_ret, "try-error")) best_val_epoch_ret <- NA_integer_
+      best_val_pred_time_ret <- try(model_results$predicted_outputAndTime$best_val_prediction_time, silent = TRUE); if (inherits(best_val_pred_time_ret, "try-error")) best_val_pred_time_ret <- NA_real_
+      
+      for (k in seq_len(max(1L, as.integer(num_networks)))) {
+        mvar <- sprintf("Ensemble_Main_0_model_%d_metadata", as.integer(k))
+        if (!exists(mvar, envir = .GlobalEnv)) next
+        md <- get(mvar, envir = .GlobalEnv)
+        
+        md$best_train_acc           <- .scalar_num(md$best_train_acc           %||% best_train_acc_ret,     idx = k)
+        md$best_epoch_train         <- as.integer(.scalar_num(md$best_epoch_train %||% best_epoch_train_ret, idx = k))
+        md$best_val_acc             <- .scalar_num(md$best_val_acc             %||% best_val_acc_ret,       idx = k)
+        md$best_val_epoch           <- as.integer(.scalar_num(md$best_val_epoch %||% best_val_epoch_ret,    idx = k))
+        md$best_val_prediction_time <- .scalar_num(md$best_val_prediction_time %||% best_val_pred_time_ret, idx = k)
+        
+        assign(mvar, md, envir = .GlobalEnv)
+        cat(sprintf("[STAMPED][SINGLE MAIN_0] slot=%d best_val_acc=%s\n", k, as.character(md$best_val_acc)))
+      }
+      
+      ## Ensure the trained slot carries its metadata
+      if (length(run_model$ensemble)) {
+        for (k in seq_len(max(1L, as.integer(num_networks)))) {
+          mvar <- sprintf("Ensemble_Main_0_model_%d_metadata", as.integer(k))
+          if (exists(mvar, envir = .GlobalEnv)) {
+            run_model$ensemble[[k]]$metadata <- get(mvar, envir = .GlobalEnv)
+          }
+        }
+      }
+      
+      # --- flatten TRAIN metrics ---
+      flat <- tryCatch(
+        rapply(
+          list(
+            performance_metric = model_results$performance_relevance_data$performance_metric,
+            relevance_metric   = model_results$performance_relevance_data$relevance_metric
+          ),
+          f = function(z) z, how = "unlist"
+        ),
+        error = function(e) setNames(vector("list", 0L), character(0))
+      )
+      if (length(flat)) {
+        L <- as.list(flat)
+        flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+      }
+      nms <- names(flat)
+      if (length(nms)) {
+        drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
+          grepl("grid_used", nms, fixed = TRUE) |
+          grepl("(^|\\.)details(\\.|$)", nms)
+        keep <- !drop & !is.na(flat)
+        flat <- flat[keep]; nms <- names(flat)
+      }
+      
+      # --- schema-safe row_df ---
+      if (length(flat) == 0L) {
+        row_df <- data.frame(
+          run_index = i, seed = s,
+          quantization_error = NA_real_, topographic_error = NA_real_, clustering_quality_db = NA_real_,
+          accuracy = NA_real_, precision = NA_real_, recall = NA_real_, f1_score = NA_real_,
+          MSE=NA_real_, MAE=NA_real_, RMSE=NA_real_, R2=NA_real_,
+          MAPE=NA_real_, SMAPE=NA_real_, WMAPE=NA_real_, MASE=NA_real_,
+          stringsAsFactors = FALSE
+        )
+      } else {
+        out <- setNames(vector("list", length(flat)), nms)
+        num <- suppressWarnings(as.numeric(flat))
+        for (j in seq_along(flat)) out[[j]] <- if (!is.na(num[j])) num[j] else as.character(flat[[j]])
+        row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
+        row_df <- cbind(data.frame(run_index = i, seed = s, stringsAsFactors = FALSE), row_df)
+      }
+      
+      # --- Unified safe getters for best_* ---
+      get_best_num <- function(res, name, as_int = FALSE) {
+        v <- tryCatch(res[[name]], error = function(e) NULL)
+        if (is.null(v) && !is.null(res$predicted_outputAndTime)) {
+          v <- tryCatch(res$predicted_outputAndTime[[name]], error = function(e) NULL)
+        }
+        if (is.null(v)) return(if (as_int) NA_integer_ else NA_real_)
+        vnum <- suppressWarnings(as.numeric(v))
+        if (!length(vnum)) return(if (as_int) NA_integer_ else NA_real_)
+        if (as_int) as.integer(vnum[1]) else vnum[1]
+      }
+      
+      bt  <- get_best_num(model_results, "best_train_acc",           as_int = FALSE)
+      bet <- get_best_num(model_results, "best_epoch_train",         as_int = TRUE)
+      bv  <- get_best_num(model_results, "best_val_acc",             as_int = FALSE)
+      bev <- get_best_num(model_results, "best_val_epoch",           as_int = TRUE)
+      bvt <- get_best_num(model_results, "best_val_prediction_time", as_int = FALSE)
+      
+      row_df$best_train_acc           <- bt
+      row_df$best_epoch_train         <- bet
+      row_df$best_val_acc             <- bv
+      row_df$best_val_epoch           <- bev
+      row_df$best_val_prediction_time <- bvt
+      
+      cat(sprintf("[SINGLE] seed=%s best_train=%.6f@%s | best_val=%.6f@%s | best_val_time=%s\n",
+                  s, bt, as.character(bet), bv, as.character(bev), as.character(bvt)))
+      
+      metrics_rows[[i]] <- row_df
+      
+      # Pass trained model out of the loop
+      if (i == length(seeds)) main_model <- run_model
+      
+      cat(sprintf("Seed %d → collected %d metrics\n", s, max(0, ncol(row_df) - 2L)))
+      
+      # ============================
+      # TEST EVAL (per-slot, per-seed)
+      # ============================
+      if (isTRUE(test)) {
+        SAVE_PREDICTIONS_COLUMN_IN_RDS <- FALSE
+        
+        for (k in seq_len(max(1L, as.integer(num_networks)))) {
+          env_name <- sprintf("Ensemble_Main_0_model_%d_metadata", as.integer(k))
+          
+          md_k <- tryCatch(run_model$ensemble[[k]]$metadata, error = function(e) NULL)
+          if (is.null(md_k) || !is.list(md_k)) {
+            if (exists(env_name, envir = .GlobalEnv)) {
+              md_k <- get(env_name, envir = .GlobalEnv)
+            }
+          }
+          if (is.null(md_k) || !is.list(md_k)) {
+            warning(sprintf("[single-run] Missing metadata for slot %d (both model and ENV); skipping.", k))
+            next
+          }
+          if (is.null(md_k$model_serial_num) || !nzchar(as.character(md_k$model_serial_num))) {
+            md_k$model_serial_num <- sprintf("0.main.%d", as.integer(k))
+          }
+          assign(env_name, md_k, envir = .GlobalEnv)
+          
+          ok <- tryCatch({
+            ret <- desonn_predict_eval(
+              LOAD_FROM_RDS = FALSE,
+              ENV_META_NAME = env_name,
+              INPUT_SPLIT   = "test",
+              CLASSIFICATION_MODE = CLASSIFICATION_MODE,
+              RUN_INDEX = i,
+              SEED      = s,
+              OUTPUT_DIR = RUN_DIR,                  # write inside stamped folder
+              #$$$$$$$$$$$$$ BEGIN — explicit assertion to prove folder is passed
+              OUT_DIR_ASSERT = RUN_DIR,              #$$$$$$$$$$$$$ (new optional arg; the function will verify)
+              #$$$$$$$$$$$$$ END
+              SAVE_METRICS_RDS = TRUE,
+              METRICS_PREFIX   = "metrics_test",
+              SAVE_PREDICTIONS_COLUMN_IN_RDS = SAVE_PREDICTIONS_COLUMN_IN_RDS,
+              AGG_PREDICTIONS_FILE = agg_pred_file,    # absolute path under RUN_DIR
+              AGG_METRICS_FILE     = agg_metrics_file, # absolute path under RUN_DIR
+              MODEL_SLOT           = k
+            )
+            TRUE
+          }, error = function(e) {
+            message(sprintf("[single-run][TEST] seed=%s slot=%d desonn_predict_eval ERROR: %s",
+                            s, k, conditionMessage(e)))
+            FALSE
+          })
+          
+          cat(sprintf("[single-run][TEST] seed=%s slot=%d wrote? %s\n", s, k, ok))
+        }
+      }
+    }
+    
+    # --- bind all TRAIN metrics ---
+    if (length(metrics_rows) == 0L) {
+      results_table <- data.frame()
+    } else {
+      results_table <- metrics_rows[[1]]
+      if (length(metrics_rows) > 1L) {
+        for (k in 2:length(metrics_rows)) {
+          x <- results_table
+          y <- metrics_rows[[k]]
+          for (m in setdiff(names(y), names(x))) x[[m]] <- NA
+          for (m in setdiff(names(x), names(y))) y[[m]] <- NA
+          ord <- union(names(x), names(y))
+          results_table <- rbind(x[, ord, drop = FALSE], y[, ord, drop = FALSE])
+        }
+      }
+    }
+    
+    colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
+    
+    out_path <- file.path(
+      RUN_DIR,
+      sprintf("SingleRun_Train_Acc_Val_Metrics_%s_seeds_%s.rds", as.character(length(seeds)), ts_stamp)
+    )
+    
+    saveRDS(results_table, out_path)
+    cat("Saved multi-seed metrics table to:", out_path, " | rows=", nrow(results_table),
+        " cols=", ncol(results_table), "\n")
+    
+    main_model$ensemble_number <- 0L
+    ensembles <- attach_run_to_container(ensembles, main_model)
+    print_ensembles_summary(ensembles)
+    
+    if (exists("ensembles", inherits = TRUE) && is.list(ensembles)) {
+      if (is.null(ensembles$main_ensemble)) ensembles$main_ensemble <- list()
+      ensembles$main_ensemble[[1]] <- main_model
+    }
+    
+    if (!is.null(main_model$performance_metric)) {
+      cat("\nSingle run performance_metric (DDESONN-level):\n"); print(main_model$performance_metric)
+    }
+    if (!is.null(main_model$relevance_metric)) {
+      cat("\nSingle run relevance_metric (DDESONN-level):\n"); print(main_model$relevance_metric)
+    }
+  }
+  
+
+  
+  
+  
+  
+  else {
+    ## =======================
+    ## ENSEMBLE (multi-seed)
+    ##   - Scenario C: num_temp_iterations == 0
+    ##   - Scenario D: num_temp_iterations > 0 (prune/add)
+    ##   Output: ONE ROW PER MODEL SLOT PER SEED
+    ## =======================
+    
+    '%||%' <- get0("%||%", ifnotfound = function(x, y) if (is.null(x)) y else x)
+    
+    main_meta_var <- function(i) sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(i))
+    temp_meta_var <- function(e,i) sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(e), as.integer(i))
+    
+    snapshot_main_serials_meta <- function() {
+      vars <- grep("^Ensemble_Main_(0|1)_model_\\d+_metadata$", ls(.GlobalEnv), value = TRUE)
+      if (!length(vars)) return(character())
+      ord  <- suppressWarnings(as.integer(sub("^Ensemble_Main_(?:0|1)_model_(\\d+)_metadata$", "\\1", vars)))
+      vars <- vars[order(ord)]
+      vapply(vars, function(v) {
+        md <- get(v, envir = .GlobalEnv)
+        as.character(md$model_serial_num %||% NA_character_)
+      }, character(1))
+    }
+    
+    get_temp_serials_meta <- function(iter_j) {
+      e <- iter_j + 1L
+      vars <- grep(sprintf("^Ensemble_Temp_%d_model_\\d+_metadata$", e), ls(.GlobalEnv), value = TRUE)
+      if (!length(vars)) return(character())
+      ord <- suppressWarnings(as.integer(sub(sprintf("^Ensemble_Temp_%d_model_(\\d+)_metadata$", e), "\\1", vars)))
+      vars <- vars[order(ord)]
+      vapply(vars, function(v) {
+        md <- get(v, envir = .GlobalEnv)
+        s  <- md$model_serial_num
+        if (!is.null(s) && nzchar(as.character(s))) as.character(s) else NA_character_
+      }, character(1))
+    }
+    
+    .metric_minimize <- function(metric) isTRUE(get0(paste0("MINIMIZE_", metric), ifnotfound = FALSE, inherits = TRUE))
+    is_real_serial   <- function(s) is.character(s) && length(s) == 1L && nzchar(s) && !is.na(s)
+    EMPTY_SLOT <- structure(list(.empty_slot = TRUE), class = "EMPTY_SLOT")
+    
+    .scalar_num <- function(x, idx = NA_integer_) {
+      v <- suppressWarnings(as.numeric(x))
+      if (!length(v)) return(NA_real_)
+      if (is.finite(idx) && !is.na(idx) && idx >= 1L && idx <= length(v)) return(v[idx])
+      v[1]
+    }
+    
+    prune_network_from_ensemble <- function(ensembles, target_metric_name_worst) {
+      minimize  <- .metric_minimize(target_metric_name_worst)
+      main_sers <- snapshot_main_serials_meta()
+      if (!length(main_sers)) return(NULL)
+      
+      get_metric_by_serial <- function(serial, metric_name) {
+        vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                     ls(.GlobalEnv), value = TRUE)
+        for (v in vars) {
+          md <- get(v, envir = .GlobalEnv)
+          if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+            val <- tryCatch(md$performance_metric[[metric_name]], error = function(e) NULL)
+            if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error = function(e) NULL)
+            vn <- suppressWarnings(as.numeric(val))
+            return(if (length(vn) && is.finite(vn[1])) vn[1] else NA_real_)
+          }
+        }
+        NA_real_
+      }
+      
+      main_vals <- vapply(main_sers, get_metric_by_serial, numeric(1), target_metric_name_worst)
+      if (all(!is.finite(main_vals))) return(NULL)
+      
+      worst_idx  <- if (minimize) which.max(main_vals) else which.min(main_vals)
+      worst_slot <- as.integer(worst_idx)
+      if (!(length(ensembles$main_ensemble) >= 1L)) return(NULL)
+      main_container <- ensembles$main_ensemble[[1]]
+      if (is.null(main_container$ensemble) || !length(main_container$ensemble)) return(NULL)
+      if (worst_slot < 1L || worst_slot > length(main_container$ensemble)) return(NULL)
+      
+      removed_model <- main_container$ensemble[[worst_slot]]
+      main_container$ensemble[[worst_slot]] <- EMPTY_SLOT
+      ensembles$main_ensemble[[1]] <- main_container
+      
+      list(
+        removed_network   = removed_model,
+        updated_ensembles = ensembles,
+        worst_model_index = worst_slot,
+        worst_slot        = worst_slot,
+        worst_serial      = as.character(main_sers[worst_slot]),
+        worst_value       = as.numeric(main_vals[worst_slot])
+      )
+    }
+    
+    add_network_to_ensemble <- function(ensembles, target_metric_name_best,
+                                        removed_network, ensemble_number,
+                                        worst_model_index, removed_serial, removed_value) {
+      minimize     <- .metric_minimize(target_metric_name_best)
+      temp_serials <- get_temp_serials_meta(ensemble_number)
+      if (!length(temp_serials)) return(list(updated_ensembles=ensembles, worst_slot=as.integer(worst_model_index)))
+      
+      get_metric_by_serial <- function(serial, metric_name) {
+        vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                     ls(.GlobalEnv), value = TRUE)
+        for (v in vars) {
+          md <- get(v, envir = .GlobalEnv)
+          if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+            val <- tryCatch(md$performance_metric[[metric_name]], error = function(e) NULL)
+            if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error = function(e) NULL)
+            vn <- suppressWarnings(as.numeric(val))
+            return(if (length(vn) && is.finite(vn[1])) vn[1] else NA_real_)
+          }
+        }
+        NA_real_
+      }
+      
+      temp_vals <- vapply(temp_serials, get_metric_by_serial, numeric(1), target_metric_name_best)
+      if (all(!is.finite(temp_vals))) return(list(updated_ensembles=ensembles, worst_slot=as.integer(worst_model_index)))
+      
+      best_idx    <- if (minimize) which.min(temp_vals) else which.max(temp_vals)
+      best_serial <- as.character(temp_serials[best_idx])
+      
+      ## place candidate if truly better
+      worst_slot <- as.integer(worst_model_index)
+      if (!(length(ensembles$main_ensemble) >= 1L)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      main_container <- ensembles$main_ensemble[[1]]
+      if (is.null(main_container$ensemble) || !length(main_container$ensemble)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      
+      temp_parts       <- strsplit(best_serial, "\\.")[[1]]
+      temp_model_index <- suppressWarnings(as.integer(temp_parts[3]))
+      if (!is.finite(temp_model_index) || is.na(temp_model_index)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      
+      if (!(length(ensembles$temp_ensemble) >= 1L) || is.null(ensembles$temp_ensemble[[1]]$ensemble)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      temp_container <- ensembles$temp_ensemble[[1]]
+      if (temp_model_index < 1L || temp_model_index > length(temp_container$ensemble)) return(list(updated_ensembles=ensembles, worst_slot=worst_slot))
+      
+      candidate_model <- temp_container$ensemble[[temp_model_index]]
+      main_container$ensemble[[worst_slot]] <- candidate_model
+      ensembles$main_ensemble[[1]] <- main_container
+      
+      temp_e  <- suppressWarnings(as.integer(temp_parts[1]))
+      tvar <- temp_meta_var(temp_e, temp_model_index)
+      mvar <- main_meta_var(worst_slot)
+      if (exists(tvar, envir = .GlobalEnv)) {
+        tmd <- get(tvar, envir = .GlobalEnv)
+        tmd$model_serial_num <- best_serial
+        assign(mvar, tmd, envir = .GlobalEnv)
+      }
+      list(updated_ensembles=ensembles, worst_slot=worst_slot)
+    }
+    
+    resolve_env_meta <- function(slot = 1L, prefer = c("main","temp"), temp_iter_fallback = 1L) {
+      prefer <- match.arg(prefer)
+      cand <- if (prefer == "main") {
+        c(sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(slot)),
+          sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(temp_iter_fallback), as.integer(slot)))
+      } else {
+        c(sprintf("Ensemble_Temp_%d_model_%d_metadata", as.integer(temp_iter_fallback), as.integer(slot)),
+          sprintf("Ensemble_Main_1_model_%d_metadata", as.integer(slot)))
+      }
+      hit <- cand[vapply(cand, exists, logical(1), envir = .GlobalEnv, inherits = TRUE)]
+      if (length(hit)) return(hit[[1L]])
+      stop(sprintf("resolve_env_meta: No MAIN/TEMP metadata found for slot=%d (tried: %s)",
+                   as.integer(slot), paste(cand, collapse = ", ")))
+    }
+    
+    ## ========= FIX for fusion: ensure AGG file layout matches what the fuser expects =========
+    assign("SAVE_PREDICTIONS_COLUMN_IN_RDS", TRUE, envir = .GlobalEnv)
+    
+    .fix_agg_layout_for_fuser <- function(path, run_index = NULL, seed = NULL,
+                                          split = "test", mode = "binary") {
+      if (!file.exists(path)) return(invisible(FALSE))
+      df <- readRDS(path)
+      if (!is.data.frame(df) || !NROW(df)) return(invisible(FALSE))
+      
+      # Uppercase aliases many fusers subset on
+      if (!"RUN_INDEX"   %in% names(df) && "run_index" %in% names(df)) df$RUN_INDEX    <- as.integer(df$run_index)
+      if (!"SEED"        %in% names(df) && "seed"      %in% names(df)) df$SEED         <- as.integer(df$seed)
+      if (!"MODEL_SLOT"  %in% names(df) && "model_slot"%in% names(df)) df$MODEL_SLOT   <- as.integer(df$model_slot)
+      
+      # SPLIT / CLASSIFICATION_MODE
+      if (!"SPLIT" %in% names(df)) df$SPLIT <- toupper(if ("split" %in% names(df)) df$split else split)
+      if (!"split" %in% names(df)) df$split <- tolower(df$SPLIT)
+      if (!"CLASSIFICATION_MODE" %in% names(df)) {
+        df$CLASSIFICATION_MODE <- toupper(if ("mode" %in% names(df)) df$mode else mode)
+      }
+      
+      # prediction columns: provide legacy aliases
+      if (!"y_pred" %in% names(df) && "y_prob" %in% names(df)) df$y_pred <- as.numeric(df$y_prob)
+      
+      # ensure full preds is a list-column (some fusers check this)
+      if ("y_prob_full" %in% names(df)) {
+        ypf <- df$y_prob_full
+        if (!is.list(ypf)) {
+          # make it a list of length-1 numeric vectors
+          ypf <- lapply(as.numeric(df$y_prob), function(z) c(z))
+        }
+        df$y_pred_full <- I(ypf)
+      } else if (!"y_pred_full" %in% names(df) && "y_prob" %in% names(df)) {
+        df$y_pred_full <- I(lapply(as.numeric(df$y_prob), function(z) c(z)))
+      }
+      
+      # optionally narrow to the run/seed being fused (prevents accidental empty subset)
+      if (!is.null(run_index)) df <- df[df$RUN_INDEX == as.integer(run_index), , drop = FALSE]
+      if (!is.null(seed) && "SEED" %in% names(df)) df <- df[df$SEED == as.integer(seed), , drop = FALSE]
+      
+      saveRDS(df, path)
+      invisible(TRUE)
+    }
+    ## ========= END FIX helpers =========
+    
+    ## -------------------------
+    ## Seed loop
+    ## -------------------------
+    seeds <- 1:x
+    per_slot_rows <- list()
+    ts_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    
+    ## Run folder (matches your screenshot)
+    OUT_ROOT <- file.path("artifacts", "EnsembleRuns")
+    RUN_DIR  <- file.path(OUT_ROOT, ts_stamp)
+    dir.create(file.path(RUN_DIR, "fused"), recursive = TRUE, showWarnings = FALSE)
+    log_dir <- file.path(RUN_DIR, "logs")
+    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+    
+    TARGET_METRIC <- get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
+    num_temp_iterations <- as.integer(num_temp_iterations %||% 0L)
+    
+    total_seeds_chr <- as.character(length(seeds))
+    agg_pred_file    <- file.path(RUN_DIR, sprintf("agg_predictions_test__%s_seeds_%s.rds", total_seeds_chr, ts_stamp))
+    agg_metrics_file <- file.path(RUN_DIR, sprintf("agg_metrics_test__%s_seeds_%s.rds",     total_seeds_chr, ts_stamp))
+    
+    ## Pre-create train/val metrics file in the run folder
+    out_path_train <- file.path(RUN_DIR, sprintf("Ensembles_Train_Acc_Val_Metrics_%s_seeds_%s.rds",
+                                                 length(seeds), ts_stamp))
+    saveRDS(data.frame(), out_path_train)
+    
+    row_ptr <- 0L
+    for (i in seq_along(seeds)) {
+      s <- seeds[i]
+      set.seed(s)
+      cat(sprintf("[ENSEMBLE] Seed %d/%d\n", s, length(seeds)))
+      
+      ## reset metadata
+      vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                   ls(.GlobalEnv), value = TRUE)
+      if (length(vars)) rm(list = vars, envir = .GlobalEnv)
+      if (exists("ensembles", inherits = TRUE)) try(rm(ensembles, inherits = TRUE), silent = TRUE)
+      
+      ## tables for logs
+      ensembles <- list(
+        main_ensemble = list(), temp_ensemble = list(),
+        tables = list(
+          main_log = data.frame(iteration=integer(), phase=character(), slot=integer(),
+                                serial=character(), metric_name=character(),
+                                metric_value=numeric(), message=character(),
+                                timestamp=as.POSIXct(character()), stringsAsFactors=FALSE),
+          movement_log = data.frame(iteration=integer(), phase=character(), slot=integer(),
+                                    role=character(), serial=character(),
+                                    metric_name=character(), metric_value=numeric(),
+                                    message=character(), timestamp=as.POSIXct(character()),
+                                    stringsAsFactors=FALSE),
+          change_log = data.frame(iteration=integer(), role=character(), serial=character(),
+                                  metric_name=character(), metric_value=numeric(),
+                                  message=character(), timestamp=as.POSIXct(character()),
+                                  stringsAsFactors=FALSE)
+        )
+      )
+      
+      ## MAIN
+      main_model <- DDESONN$new(
+        num_networks    = max(1L, as.integer(num_networks)),
+        input_size      = input_size, hidden_sizes = hidden_sizes, output_size = output_size,
+        N = N, lambda = lambda, ensemble_number = 1L, ensembles = ensembles,
+        ML_NN = ML_NN, method = init_method, custom_scale = custom_scale
+      )
+      
+      model_results_main <<- main_model$train(
+        Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
+        lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs, use_biases=use_biases,
+        threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
+        activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+        dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+        beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
+        batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
+        epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
+        shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights, preprocessScaledData=preprocessScaledData,
+        X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
+        train=train, viewTables=viewTables, verbose=verbose
+      )
+      ensembles$main_ensemble[[1]] <- main_model
+      
+      ## STAMP MAIN META
+      best_train_acc_ret     <- try(model_results_main$predicted_outputAndTime$best_train_acc,           silent=TRUE); if (inherits(best_train_acc_ret,"try-error")) best_train_acc_ret <- NA_real_
+      best_epoch_train_ret   <- try(model_results_main$predicted_outputAndTime$best_epoch_train,         silent=TRUE); if (inherits(best_epoch_train_ret,"try-error")) best_epoch_train_ret <- NA_integer_
+      best_val_acc_ret       <- try(model_results_main$predicted_outputAndTime$best_val_acc,             silent=TRUE); if (inherits(best_val_acc_ret,"try-error")) best_val_acc_ret <- NA_real_
+      best_val_epoch_ret     <- try(model_results_main$predicted_outputAndTime$best_val_epoch,           silent=TRUE); if (inherits(best_val_epoch_ret,"try-error")) best_val_epoch_ret <- NA_integer_
+      best_val_pred_time_ret <- try(model_results_main$predicted_outputAndTime$best_val_prediction_time, silent=TRUE); if (inherits(best_val_pred_time_ret,"try-error")) best_val_pred_time_ret <- NA_real_
+      
+      K <- max(1L, as.integer(num_networks))
+      for (k in seq_len(K)) {
+        mvar <- main_meta_var(k)
+        if (!exists(mvar, envir = .GlobalEnv)) next
+        md <- get(mvar, envir = .GlobalEnv)
+        
+        md$best_train_acc           <- .scalar_num(md$best_train_acc           %||% best_train_acc_ret,     idx = k)
+        md$best_epoch_train         <- as.integer(.scalar_num(md$best_epoch_train %||% best_epoch_train_ret, idx = k))
+        md$best_val_acc             <- .scalar_num(md$best_val_acc             %||% best_val_acc_ret,       idx = k)
+        md$best_val_epoch           <- as.integer(.scalar_num(md$best_val_epoch %||% best_val_epoch_ret,    idx = k))
+        md$best_val_prediction_time <- .scalar_num(md$best_val_prediction_time %||% best_val_pred_time_ret, idx = k)
+        
+        assign(mvar, md, envir = .GlobalEnv)
+        cat(sprintf("[STAMPED][MAIN] slot=%d best_val_acc=%s\n", k, as.character(md$best_val_acc)))
+      }
+      
+      ## === MAIN snapshot for Scenario C (no prune/add) → persist ONLY main_log ===
+      if (num_temp_iterations == 0L) {
+        ts_iter <- Sys.time()
+        main_only <- snapshot_main_serials_meta()
+        if (length(main_only)) {
+          get_metric_by_serial_local <- function(serial, metric_name) {
+            vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                         ls(.GlobalEnv), value = TRUE)
+            for (v in vars) {
+              md <- get(v, envir = .GlobalEnv)
+              if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+                val <- tryCatch(md$performance_metric[[metric_name]], error=function(e) NULL)
+                if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error=function(e) NULL)
+                vn <- suppressWarnings(as.numeric(val))
+                return(if (length(vn) && is.finite(vn[1])) vn[1] else NA_real_)
+              }
+            }
+            NA_real_
+          }
+          vals_only <- vapply(main_only, get_metric_by_serial_local, numeric(1), TARGET_METRIC)
+          rows_only <- data.frame(
+            iteration=NA_integer_, phase="main_only", slot=seq_along(main_only),
+            serial=as.character(main_only), metric_name=TARGET_METRIC,
+            metric_value=as.numeric(vals_only), message="", timestamp=ts_iter,
+            stringsAsFactors=FALSE
+          )
+          ensembles$tables$main_log <- rbind(ensembles$tables$main_log, rows_only)
+          ml_path_rds <- file.path(log_dir, sprintf("main_log_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+          saveRDS(ensembles$tables$main_log, ml_path_rds)
+          cat("[LOGS] main_log (Scenario C) saved → ", ml_path_rds, "\n", sep = "")
+        }
+      }
+      
+      ## Scenario C test + fusion
+      if (num_temp_iterations == 0L && isTRUE(test)) {
+        for (k in seq_len(K)) {
+          ENV_META_NAME <- resolve_env_meta(k, "main", 1L)
+          desonn_predict_eval(
+            LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
+            CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
+            OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
+            SAVE_PREDICTIONS_COLUMN_IN_RDS = TRUE,    ## needed for fusion
+            AGG_PREDICTIONS_FILE = agg_pred_file, AGG_METRICS_FILE = agg_metrics_file,
+            MODEL_SLOT = k
+          )
+        }
+        ## >>> FIX: normalize agg file so fuser never sees "no entries"
+        .fix_agg_layout_for_fuser(agg_pred_file, run_index = i, seed = s, split = "test", mode = CLASSIFICATION_MODE)
+        
+        if (num_networks > 1L) {
+          yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL); stopifnot(!is.null(yi))
+          fused <- desonn_fuse_from_agg(
+            AGG_PREDICTIONS_FILE = agg_pred_file, RUN_INDEX = i, SEED = s,
+            y_true = yi, methods = c("avg","wavg","vote_soft","vote_hard"),
+            weight_column = "tuned_f1", use_tuned_threshold_for_vote = TRUE,
+            default_threshold = 0.5, classification_mode = CLASSIFICATION_MODE
+          )
+          fused_path <- file.path(RUN_DIR, "fused",
+                                  sprintf("fused_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+          saveRDS(fused, fused_path)
+          cat("[SAVE] fused → ", fused_path, "\n", sep = "")
+        }
+      }
+      
+      ## Scenario D prune/add with logs
+      if (num_temp_iterations > 0L) {
+        for (j in seq_len(num_temp_iterations)) {
+          ensembles$temp_ensemble <- vector("list", 1L)
+          temp_model <- DDESONN$new(
+            num_networks=max(1L, as.integer(num_networks)), input_size=input_size,
+            hidden_sizes=hidden_sizes, output_size=output_size, N=N, lambda=lambda,
+            ensemble_number = j + 1L, ensembles = ensembles, ML_NN=ML_NN, method=init_method, custom_scale=custom_scale
+          )
+          ensembles$temp_ensemble[[1]] <- temp_model
+          
+          invisible(temp_model$train(
+            Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
+            lr_min=lr_min, ensemble_number=j+1L, num_epochs=num_epochs, use_biases=use_biases,
+            threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
+            activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+            dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+            beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
+            batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
+            epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
+            shuffle_bn=shuffle_bn, loss_type=loss_type, sample_weights=sample_weights, preprocessScaledData=preprocessScaledData,
+            X_validation=X_validation, y_validation=y_validation, validation_metrics=validation_metrics, threshold_function=threshold_function, ML_NN=ML_NN,
+            train=train, viewTables=viewTables, verbose=verbose
+          ))
+          
+          ## MAIN snapshot BEFORE prune/add → main_log
+          ts_iter <- Sys.time()
+          main_before <- snapshot_main_serials_meta()
+          if (length(main_before)) {
+            get_metric_by_serial_local <- function(serial, metric_name) {
+              vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                           ls(.GlobalEnv), value = TRUE)
+              for (v in vars) {
+                md <- get(v, envir = .GlobalEnv)
+                if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+                  val <- tryCatch(md$performance_metric[[metric_name]], error=function(e) NULL)
+                  if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error=function(e) NULL)
+                  vn <- suppressWarnings(as.numeric(val))
+                  return(if (length(vn) && is.finite(vn[1])) vn[1] else NA_real_)
+                }
+              }
+              NA_real_
+            }
+            vals_before <- vapply(main_before, get_metric_by_serial_local, numeric(1), TARGET_METRIC)
+            rows_before <- data.frame(
+              iteration=j, phase="main_before", slot=seq_along(main_before),
+              serial=as.character(main_before), metric_name=TARGET_METRIC,
+              metric_value=as.numeric(vals_before), message="", timestamp=ts_iter,
+              stringsAsFactors=FALSE
+            )
+            ensembles$tables$main_log <- rbind(ensembles$tables$main_log, rows_before)
+            ml_path_rds <- file.path(log_dir, sprintf("main_log_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+            saveRDS(ensembles$tables$main_log, ml_path_rds)
+            cat("[LOGS] main_log (before) saved → ", ml_path_rds, "\n", sep = "")
+          }
+          
+          ## STAMP TEMP META
+          best_train_acc_tmp     <- try(temp_model$train_last_result$best_train_acc,           silent=TRUE); if (inherits(best_train_acc_tmp,"try-error")) best_train_acc_tmp <- NA_real_
+          best_epoch_train_tmp   <- try(temp_model$train_last_result$best_epoch_train,         silent=TRUE); if (inherits(best_epoch_train_tmp,"try-error")) best_epoch_train_tmp <- NA_integer_
+          best_val_acc_tmp       <- try(temp_model$train_last_result$best_val_acc,             silent=TRUE); if (inherits(best_val_acc_tmp,"try-error")) best_val_acc_tmp <- NA_real_
+          best_val_epoch_tmp     <- try(temp_model$train_last_result$best_val_epoch,           silent=TRUE); if (inherits(best_val_epoch_tmp,"try-error")) best_val_epoch_tmp <- NA_integer_
+          best_val_pred_time_tmp <- try(temp_model$train_last_result$best_val_prediction_time, silent=TRUE); if (inherits(best_val_pred_time_tmp,"try-error")) best_val_pred_time_tmp <- NA_real_
+          
+          for (k in seq_len(K)) {
+            tvar <- temp_meta_var(j + 1L, k)
+            if (!exists(tvar, envir = .GlobalEnv)) next
+            tmd <- get(tvar, envir = .GlobalEnv)
+            tmd$best_train_acc           <- .scalar_num(tmd$best_train_acc           %||% best_train_acc_tmp,     idx = k)
+            tmd$best_epoch_train         <- as.integer(.scalar_num(tmd$best_epoch_train %||% best_epoch_train_tmp, idx = k))
+            tmd$best_val_acc             <- .scalar_num(tmd$best_val_acc             %||% best_val_acc_tmp,       idx = k)
+            tmd$best_val_epoch           <- as.integer(.scalar_num(tmd$best_val_epoch %||% best_val_epoch_tmp,    idx = k))
+            tmd$best_val_prediction_time <- .scalar_num(tmd$best_val_prediction_time %||% best_val_pred_time_tmp, idx = k)
+            assign(tvar, tmd, envir = .GlobalEnv)
+            cat(sprintf("[STAMPED][TEMP e=%d] slot=%d best_val_acc=%s\n", j+1L, k, as.character(tmd$best_val_acc)))
+          }
+          
+          pruned <- prune_network_from_ensemble(
+            ensembles,
+            get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE)
+          )
+          if (!is.null(pruned)) {
+            added <- add_network_to_ensemble(
+              ensembles               = pruned$updated_ensembles,
+              target_metric_name_best = get0("metric_name", ifnotfound = get0("TARGET_METRIC", ifnotfound = "accuracy", inherits = TRUE), inherits = TRUE),
+              removed_network         = pruned$removed_network,
+              ensemble_number         = j,
+              worst_model_index       = pruned$worst_model_index,
+              removed_serial          = pruned$worst_serial,
+              removed_value           = pruned$worst_value
+            )
+            ensembles <- added$updated_ensembles
+            
+            ## movement/change logs
+            ts_iter <- Sys.time()
+            if (is_real_serial(pruned$worst_serial)) {
+              rrow <- data.frame(
+                iteration=j, phase="removed", slot=pruned$worst_model_index, role="removed",
+                serial=pruned$worst_serial, metric_name=TARGET_METRIC,
+                metric_value=as.numeric(pruned$worst_value),
+                message=if (!is.null(added$worst_slot)) sprintf("%s replaced", pruned$worst_serial) else "removed (no replacement)",
+                timestamp=ts_iter, stringsAsFactors=FALSE
+              )
+              ensembles$tables$movement_log <- rbind(ensembles$tables$movement_log, rrow)
+            }
+            if (!is.null(added$worst_slot)) {
+              arow <- data.frame(
+                iteration=j, phase="added", slot=added$worst_slot, role="added",
+                serial=get0(main_meta_var(added$worst_slot), ifnotfound=list(model_serial_num=NA), inherits=TRUE)$model_serial_num %||% NA_character_,
+                metric_name=TARGET_METRIC, metric_value=NA_real_,
+                message="candidate moved into main", timestamp=ts_iter, stringsAsFactors=FALSE
+              )
+              ensembles$tables$movement_log <- rbind(ensembles$tables$movement_log, arow)
+            }
+            mv_path_rds <- file.path(log_dir, sprintf("movement_log_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+            saveRDS(ensembles$tables$movement_log, mv_path_rds)
+            cat("[LOGS] movement_log saved → ", mv_path_rds, "\n", sep = "")
+            
+            ch_path_rds <- file.path(log_dir, sprintf("change_log_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+            saveRDS(ensembles$tables$change_log, ch_path_rds)
+            cat("[LOGS] change_log saved → ", ch_path_rds, "\n", sep = "")
+          }
+          
+          ## MAIN snapshot AFTER prune/add → main_log
+          ts_iter <- Sys.time()
+          main_after <- snapshot_main_serials_meta()
+          if (length(main_after)) {
+            get_metric_by_serial_local <- function(serial, metric_name) {
+              vars <- grep("^(Ensemble_Main_(0|1)_model_\\d+_metadata|Ensemble_Temp_\\d+_model_\\d+_metadata)$",
+                           ls(.GlobalEnv), value = TRUE)
+              for (v in vars) {
+                md <- get(v, envir = .GlobalEnv)
+                if (identical(as.character(md$model_serial_num %||% NA_character_), as.character(serial))) {
+                  val <- tryCatch(md$performance_metric[[metric_name]], error=function(e) NULL)
+                  if (is.null(val)) val <- tryCatch(md$relevance_metric[[metric_name]], error=function(e) NULL)
+                  vn <- suppressWarnings(as.numeric(val))
+                  return(if (length(vn) && is.finite(vn[1])) vn[1] else NA_real_)
+                }
+              }
+              NA_real_
+            }
+            vals_after <- vapply(main_after, get_metric_by_serial_local, numeric(1), TARGET_METRIC)
+            rows_after <- data.frame(
+              iteration=j, phase="main_after", slot=seq_along(main_after),
+              serial=as.character(main_after), metric_name=TARGET_METRIC,
+              metric_value=as.numeric(vals_after), message="", timestamp=ts_iter,
+              stringsAsFactors=FALSE
+            )
+            ensembles$tables$main_log <- rbind(ensembles$tables$main_log, rows_after)
+            ml_path_rds <- file.path(log_dir, sprintf("main_log_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+            saveRDS(ensembles$tables$main_log, ml_path_rds)
+            cat("[LOGS] main_log (after) saved → ", ml_path_rds, "\n", sep = "")
+          }
+        } ## end temp iterations
+        
+        ## Scenario D test + fusion
+        if (isTRUE(test)) {
+          for (k in seq_len(K)) {
+            ENV_META_NAME <- resolve_env_meta(k, "main", num_temp_iterations)
+            desonn_predict_eval(
+              LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
+              CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
+              OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
+              SAVE_PREDICTIONS_COLUMN_IN_RDS = TRUE,   ## needed for fusion
+              AGG_PREDICTIONS_FILE = agg_pred_file, AGG_METRICS_FILE = agg_metrics_file,
+              MODEL_SLOT = k
+            )
+          }
+          ## >>> FIX: normalize agg file so fuser never sees "no entries"
+          .fix_agg_layout_for_fuser(agg_pred_file, run_index = i, seed = s, split = "test", mode = CLASSIFICATION_MODE)
+          
+          if (num_networks > 1L) {
+            yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL); stopifnot(!is.null(yi))
+            fused <- desonn_fuse_from_agg(
+              AGG_PREDICTIONS_FILE = agg_pred_file, RUN_INDEX = i, SEED = s,
+              y_true = yi, methods = c("avg","wavg","vote_soft","vote_hard"),
+              weight_column = "tuned_f1", use_tuned_threshold_for_vote = TRUE,
+              default_threshold = 0.5, classification_mode = CLASSIFICATION_MODE
+            )
+            fused_path <- file.path(RUN_DIR, "fused",
+                                    sprintf("fused_run%03d_seed%s_%s.rds", i, s, ts_stamp))
+            saveRDS(fused, fused_path)
+            cat("[SAVE] fused → ", fused_path, "\n", sep = "")
+          }
+        }
+      }
+      
+      ## ==========================
+      ## Per-SLOT rows for this seed
+      ## ==========================
+      for (k in seq_len(K)) {
+        mvar <- main_meta_var(k)
+        if (!exists(mvar, envir = .GlobalEnv)) next
+        md <- get(mvar, envir = .GlobalEnv)
+        
+        flat <- tryCatch(
+          rapply(list(performance_metric = md$performance_metric,
+                      relevance_metric   = md$relevance_metric),
+                 f = function(z) z, how = "unlist"),
+          error = function(e) setNames(vector("list", 0L), character(0))
+        )
+        
+        if (length(flat)) {
+          L <- as.list(flat)
+          flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+        }
+        nms <- names(flat)
+        if (length(nms)) {
+          drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
+            grepl("(^|\\.)grid_used(\\.|$)", nms) |
+            grepl("(^|\\.)details(\\.|$)", nms)
+          keep <- !drop & !is.na(flat)
+          flat <- flat[keep]; nms <- names(flat)
+        }
+        
+        if (length(flat) == 0L) {
+          row_df <- data.frame(run_index = i, seed = s, MODEL_SLOT = k, stringsAsFactors = FALSE)
+        } else {
+          out <- setNames(vector("list", length(flat)), nms)
+          num <- suppressWarnings(as.numeric(flat))
+          for (jj in seq_along(flat)) out[[jj]] <- if (!is.na(num[jj])) num[jj] else as.character(flat[[jj]])
+          row_df <- as.data.frame(out, check.names = TRUE, stringsAsFactors = FALSE)
+          row_df <- cbind(data.frame(run_index = i, seed = s, MODEL_SLOT = k, stringsAsFactors = FALSE), row_df)
+        }
+        
+        row_df$serial     <- as.character(md$model_serial_num %||% NA_character_)
+        row_df$model_name <- md$model_name %||% NA_character_
+        
+        get_num <- function(x) suppressWarnings(as.numeric(x))
+        if (!("accuracy" %in% names(row_df)) || !is.finite(get_num(row_df$accuracy))) {
+          if ("accuracy_precision_recall_f1_tuned.accuracy" %in% names(row_df)) {
+            row_df$accuracy <- get_num(row_df[["accuracy_precision_recall_f1_tuned.accuracy"]])
+          }
+        }
+        
+        have_cm <- all(c("confusion_matrix.TP","confusion_matrix.FP","confusion_matrix.TN","confusion_matrix.FN") %in% names(row_df))
+        if (!have_cm) {
+          map_tuned_cm <- function(src_name, dst_name) {
+            if (src_name %in% names(row_df) && !(dst_name %in% names(row_df))) {
+              row_df[[dst_name]] <<- get_num(row_df[[src_name]])
+            }
+          }
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.TP", "confusion_matrix.TP")
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.FP", "confusion_matrix.FP")
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.TN", "confusion_matrix.TN")
+          map_tuned_cm("accuracy_precision_recall_f1_tuned.confusion_matrix.FN", "confusion_matrix.FN")
+        }
+        
+        row_df$best_train_acc           <- .scalar_num(md$best_train_acc)
+        row_df$best_epoch_train         <- as.integer(.scalar_num(md$best_epoch_train))
+        row_df$best_val_acc             <- .scalar_num(md$best_val_acc)
+        row_df$best_val_epoch           <- as.integer(.scalar_num(md$best_val_epoch))
+        row_df$best_val_prediction_time <- .scalar_num(md$best_val_prediction_time)
+        
+        row_ptr <- row_ptr + 1L
+        per_slot_rows[[row_ptr]] <- row_df
+      }
+      
+    } ## seeds
+    
+    ## ---- Aggregate: ONE ROW PER MODEL SLOT PER SEED ----
+    if (length(per_slot_rows) == 0L) {
+      results_table <- data.frame()
+    } else {
+      results_table <- per_slot_rows[[1]]
+      if (length(per_slot_rows) > 1L) {
+        for (k in 2:length(per_slot_rows)) {
+          x <- results_table; y <- per_slot_rows[[k]]
+          for (m in setdiff(names(y), names(x))) x[[m]] <- NA
+          for (m in setdiff(names(x), names(y))) y[[m]] <- NA
+          ord <- union(names(x), names(y))
+          results_table <- rbind(x[, ord, drop = FALSE], y[, ord, drop = FALSE])
+        }
+      }
+    }
+    
+    colnames(results_table) <- sub("^(performance_metric|relevance_metric)\\.", "", colnames(results_table))
+    
+    saveRDS(results_table, out_path_train)
+    cat("Saved ENSEMBLE per-slot TRAIN metrics table to:", out_path_train,
+        " | rows=", nrow(results_table), " cols=", ncol(results_table), "\n")
+    
+    ## Reindex AGG files
+    for (agg_path in c(agg_metrics_file, agg_pred_file)) {
+      if (!file.exists(agg_path)) next
+      df <- try(readRDS(agg_path), silent = TRUE); if (inherits(df, "try-error")) next
+      if (!is.data.frame(df) || !NROW(df)) next
+      order_keys <- snapshot_main_serials_meta(); if (!length(order_keys)) next
+      if (!("serial" %in% names(df))) df$serial <- NA_character_
+      need <- is.na(df$serial) | !nzchar(df$serial)
+      if (any(need)) {
+        slot_col <- if ("MODEL_SLOT" %in% names(df)) "MODEL_SLOT" else if ("model" %in% names(df)) "model" else NA_character_
+        if (!is.na(slot_col) && length(order_keys)) {
+          idx <- which(need)
+          slot_vals <- suppressWarnings(as.integer(df[[slot_col]]))
+          ok  <- idx[slot_vals[idx] >= 1L & slot_vals[idx] <= length(order_keys)]
+          if (length(ok)) df$serial[ok] <- order_keys[slot_vals[ok]]
+        }
+      }
+      n <- NROW(df)
+      ord_idx  <- match(df$serial, order_keys)
+      tie_seed <- if ("SEED" %in% names(df)) df$SEED else rep(999999L, n)
+      tie_slot <- if ("MODEL_SLOT" %in% names(df)) df$MODEL_SLOT else if ("model" %in% names(df)) suppressWarnings(as.integer(df$model)) else seq_len(n)
+      o <- try(order(ord_idx, tie_seed, tie_slot, na.last = TRUE), silent = TRUE)
+      if (inherits(o, "try-error") || length(o) != n) o <- seq_len(n)
+      df <- df[o, , drop = FALSE]; df$run_index <- seq_len(nrow(df))
+      saveRDS(df, agg_path)
+      cat("Reindexed (by serial) AGG file:", agg_path, " | rows=", nrow(df), "\n")
+    }
+  }
+  
+  
+
+  
+
+  
+  
+  
+  
+  
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+saveToDisk <- FALSE
+
+if (saveToDisk) {
+  # ---- ensure output dir ----
+  out_dir <- "artifacts_runs"
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+  
+  # ---- locate main ensemble (required) ----
+  if (!exists("ensembles", inherits = TRUE) || is.null(ensembles$main_ensemble)) {
+    stop("[saveToDisk] ensembles$main_ensemble is missing or NULL; cannot save.")
+  }
+  main_ensemble_obj <- ensembles$main_ensemble
+  
+  # ---- collect temp ensembles (optional) ----
+  temp_list <- list()
+  
+  # 1) If your code maintains a list like ensembles$temp_ensembles, grab it
+  if (!is.null(ensembles$temp_ensembles) && length(ensembles$temp_ensembles) > 0) {
+    temp_list <- ensembles$temp_ensembles
+  }
+  
+  # 2) Also sweep the global env for any temp_ensemble_<n> variables and add them
+  temp_sym_names <- ls(envir = .GlobalEnv, pattern = "^temp_ensemble_\\d+$")
+  if (length(temp_sym_names)) {
+    for (nm in temp_sym_names) {
+      obj <- get(nm, envir = .GlobalEnv)
+      # avoid duplicate names from ensembles$temp_ensembles
+      if (is.null(names(temp_list)) || !(nm %in% names(temp_list))) {
+        temp_list[[nm]] <- obj
+      }
+    }
+  }
+  
+  # ---- bundle payload ----
+  ensemble_results <- list(
+    main_ensemble  = main_ensemble_obj,
+    temp_ensembles = temp_list  # may be an empty list, which is fine
+  )
+  
+  # ---- filename logic (no overwrite) ----
+  base_file_name <- file.path(out_dir, "ensemble_results")
+  
+  generate_new_file_name <- function(base_name) {
+    i <- 1L
+    candidate <- paste0(base_name, "_", i, ".rds")
+    while (file.exists(candidate)) {
+      i <- i + 1L
+      candidate <- paste0(base_name, "_", i, ".rds")
+    }
+    candidate
+  }
+  
+  file_name <- if (file.exists(paste0(base_file_name, ".rds"))) {
+    generate_new_file_name(base_file_name)
+  } else {
+    paste0(base_file_name, ".rds")
+  }
+  
+  # ---- save ----
+  saveRDS(ensemble_results, file_name)
+  cat("Data saved to file:", file_name, "\n")
+  cat(sprintf("[saveToDisk] Included %d temp ensemble(s).\n", length(temp_list)))
+}
