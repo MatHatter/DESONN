@@ -68,11 +68,11 @@ SONN <- R6Class(
     model_iter_num = NULL,
     optimal_epoch = NULL,
     activation_functions = NULL,
-    activation_functions_learn = NULL,
+    activation_functions_predict = NULL,
     dropout_rates = NULL,
     dropout_rates_learn = NULL,
     
-    initialize = function(input_size, hidden_sizes = NULL, output_size, Rdata = NULL, N,  lambda, ML_NN, dropout_rates = NULL, activation_functions_learn = NULL, activation_functions = NULL, method = init_method, custom_scale = custom_scale) {
+    initialize = function(input_size, hidden_sizes = NULL, output_size, Rdata = NULL, N,  lambda, ML_NN, dropout_rates = NULL, activation_functions = NULL, activation_functions_predict = NULL, method = init_method, custom_scale = custom_scale) {
       
       # Initialize SONN parameters and architecture
       self$input_size <- input_size
@@ -675,7 +675,7 @@ SONN <- R6Class(
     },
 
     learn = function(Rdata, labels, lr, CLASSIFICATION_MODE,
-                     activation_functions_learn, dropout_rates_learn, sample_weights) {
+                     activation_functions, dropout_rates_learn, sample_weights) {
       print("------------------------learn-begin-------------------------------------------------")
       start_time <- Sys.time()
 
@@ -806,7 +806,7 @@ SONN <- R6Class(
           
           Z <- input_data %*% weights_matrix + bias_matrix
           
-          activation_function <- if (length(activation_functions_learn) >= layer) activation_functions_learn[[layer]] else NULL
+          activation_function <- if (length(activation_functions) >= layer) activation_functions[[layer]] else NULL
           activation_name <- if (is.function(activation_function)) attr(activation_function, "name") else "none"
           cat(sprintf("[Debug] Layer %d : Activation Function = %s\n", layer, activation_name))
           
@@ -848,7 +848,7 @@ SONN <- R6Class(
           # Use CE shortcut on the output layer IF classification + (sigmoid|softmax)
           use_ce_shortcut <- FALSE
           if (identical(CLASSIFICATION_MODE, "binary") || identical(CLASSIFICATION_MODE, "multiclass")) {
-            act_fun <- if (length(activation_functions_learn) >= layer) activation_functions_learn[[layer]] else NULL
+            act_fun <- if (length(activation_functions) >= layer) activation_functions[[layer]] else NULL
             act_name <- if (is.function(act_fun)) attr(act_fun, "name") else "none"
             if (layer == self$num_layers && (act_name %in% c("sigmoid", "softmax"))) {
               use_ce_shortcut <- TRUE
@@ -914,11 +914,11 @@ SONN <- R6Class(
         Z <- X_dropped %*% weights_matrix + bias_matrix
         
         # Activation
-        if (is.function(activation_functions_learn)) {
-          activation_function <- activation_functions_learn
+        if (is.function(activation_functions)) {
+          activation_function <- activation_functions
         } else {
-          if (!is.list(activation_functions_learn)) activation_functions_learn <- list(activation_functions_learn)
-          activation_function <- activation_functions_learn[[1]]
+          if (!is.list(activation_functions)) activation_functions <- list(activation_functions)
+          activation_function <- activation_functions[[1]]
         }
         activation_name <- if (is.function(activation_function)) attr(activation_function, "name") else "none"
         A <- if (is.function(activation_function)) activation_function(Z) else Z
@@ -966,7 +966,7 @@ SONN <- R6Class(
     },
   
     # Method to perform prediction
-    predict = function(Rdata, weights, biases, activation_functions, verbose=FALSE, debug=FALSE) {
+    predict = function(Rdata, weights, biases, activation_functions_predict, verbose=FALSE, debug=FALSE) {
       # ---- Debug/Verbose toggles ----
       if (is.null(debug)) {
         debug <- isTRUE(get0("DEBUG_PREDICT_FORWARD", inherits = TRUE, ifnotfound = FALSE))
@@ -1015,7 +1015,7 @@ SONN <- R6Class(
       # Ensure lists
       if (!is.list(weights)) weights <- list(weights)
       if (!is.list(biases))  biases  <- list(biases)
-      if (!is.null(activation_functions) && !is.list(activation_functions)) activation_functions <- list(activation_functions)
+      if (!is.null(activation_functions_predict) && !is.list(activation_functions_predict)) activation_functions_predict <- list(activation_functions_predict)
       
       start_time  <- Sys.time()
       output      <- as.matrix(Rdata)
@@ -1087,17 +1087,17 @@ SONN <- R6Class(
         Z_curr <- output  # keep for last-layer probe
         
         # Apply activation if provided
-        if (!is.null(activation_functions) &&
-            length(activation_functions) >= layer &&
-            is.function(activation_functions[[layer]])) {
+        if (!is.null(activation_functions_predict) &&
+            length(activation_functions_predict) >= layer &&
+            is.function(activation_functions_predict[[layer]])) {
           
           act_name <- tryCatch({
-            nm <- attr(activation_functions[[layer]], "name")
+            nm <- attr(activation_functions_predict[[layer]], "name")
             if (is.null(nm)) "function" else nm
           }, error = function(e) "function")
           
           .dbg("L%02d: ACT[%s] applying...", layer, act_name)
-          output <- activation_functions[[layer]](output)
+          output <- activation_functions_predict[[layer]](output)
           
           # After-activation probe
           if (isTRUE(debug) || isTRUE(verbose)) {
@@ -1112,7 +1112,7 @@ SONN <- R6Class(
           
           # Last-layer variance probe
           if (layer == num_layers) {
-            last_af_name <- tryCatch(tolower(attr(activation_functions[[layer]], "name")),
+            last_af_name <- tryCatch(tolower(attr(activation_functions_predict[[layer]], "name")),
                                      error = function(e) NA_character_)
             probe_last_layer(Z_last = Z_curr, A_last = output,
                              last_af_name = last_af_name, tag = "[PROBE]")
@@ -1353,7 +1353,7 @@ SONN <- R6Class(
             labels = labels,
             lr = lr,
             CLASSIFICATION_MODE = CLASSIFICATION_MODE,
-            activation_functions_learn = activation_functions,
+            activation_functions = activation_functions,
             dropout_rates_learn = dropout_rates,
             sample_weights = sample_weights
           )
@@ -3323,7 +3323,7 @@ SONN <- R6Class(
 
       # Return the predicted output
       return(list(predicted_output_l2 = predicted_output_train_reg, training_time = training_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch, best_val_prediction_time = best_val_prediction_time, learn_output = learn_result$learn_output, learn_time = learn_result$learn_time, learn_dim_hidden_layers = learn_result$dim_hidden_layers, learn_hidden_outputs = learn_result$hidden_outputs, learn_grads_matrix = learn_result$grads_matrix, learn_bias_gradients = learn_result$bias_gradients, learn_errors = learn_result$errors, optimal_epoch = optimal_epoch, weights_record = weights_record, biases_record = biases_record, best_weights_record = best_weights, best_biases_record = best_biases, lossesatoptimalepoch = lossesatoptimalepoch, loss_increase_flag = loss_increase_flag, loss_status = loss_status, dim_hidden_layers = dim_hidden_layers, predicted_output_val = predicted_output_val, best_val_probs = best_val_probs, best_val_labels = best_val_labels))
-    },
+    }
   )
 )
 #
@@ -3438,9 +3438,9 @@ DDESONN <- R6Class(
         }
         # Instantiate SONN network based on conditions
         if (ML_NN) {
-          new_network <- SONN$new(input_size = input_size, hidden_sizes = hidden_sizes, output_size = output_size, N = N, lambda = lambda, ML_NN = ML_NN, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions, method = init_method, custom_scale = custom_scale)
+          new_network <- SONN$new(input_size = input_size, hidden_sizes = hidden_sizes, output_size = output_size, N = N, lambda = lambda, ML_NN = ML_NN, activation_functions = activation_functions, activation_functions_predict = activation_functions_predict, method = init_method, custom_scale = custom_scale)
         } else {
-          new_network <- SONN$new(input_size = input_size, output_size = output_size, N = N, lambda = lambda, ML_NN = ML_NN, activation_functions_learn = activation_functions_learn, activation_functions = activation_functions, method = init_method, custom_scale = custom_scale)
+          new_network <- SONN$new(input_size = input_size, output_size = output_size, N = N, lambda = lambda, ML_NN = ML_NN, activation_functions = activation_functions, activation_functions_predict = activation_functions_predict, method = init_method, custom_scale = custom_scale)
         }
         
         # Set names for the model
@@ -3596,7 +3596,7 @@ DDESONN <- R6Class(
     }
     ,
     
-    train = function(Rdata, labels, lr, lr_decay_rate, lr_decay_epoch, lr_min, ensemble_number, num_epochs, use_biases, threshold, reg_type, numeric_columns, CLASSIFICATION_MODE, activation_functions_learn, activation_functions, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, preprocessScaledData, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
+    train = function(Rdata, labels, lr, lr_decay_rate, lr_decay_epoch, lr_min, ensemble_number, num_epochs, use_biases, threshold, reg_type, numeric_columns, CLASSIFICATION_MODE, activation_functions, activation_functions_predict, dropout_rates_learn, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, batch_normalize_data, gamma_bn = NULL, beta_bn = NULL, epsilon_bn = 1e-5, momentum_bn = 0.9, is_training_bn = TRUE, shuffle_bn = FALSE, loss_type, sample_weights, preprocessScaledData, X_validation, y_validation, validation_metrics, threshold_function, ML_NN, train, viewTables, verbose) {
       
       
       if (!is.null(numeric_columns) && !batch_normalize_data) {
@@ -3708,6 +3708,7 @@ DDESONN <- R6Class(
       all_weights <- vector("list", length(self$ensemble))
       all_biases <- vector("list", length(self$ensemble))
       all_activation_functions <- vector("list", length(self$ensemble))
+      all_activation_functions_predict <- vector("list", length(self$ensemble))
       
       # my_optimal_epoch_out_vector    <- vector("list", length(self$ensemble))
       
@@ -3726,7 +3727,7 @@ DDESONN <- R6Class(
           
           # self$ensemble[[i]]$self_organize(Rdata, labels, lr)
           if (learnOnlyTrainingRun == FALSE) {
-            # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions_learn, dropout_rates_learn)
+            # learn_results <- self$ensemble[[i]]$learn(Rdata, labels, lr, activation_functions, dropout_rates_learn)
             predicted_outputAndTime <- suppressMessages(
               self$ensemble[[i]]$train_with_l2_regularization(
                 Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs, model_iter_num, update_weights, update_biases, use_biases, ensemble_number, reg_type, activation_functions, dropout_rates, optimizer, beta1, beta2, epsilon, lookahead_step, loss_type, sample_weights, X_validation, y_validation, threshold_function, ML_NN, train, verbose
@@ -3762,22 +3763,23 @@ DDESONN <- R6Class(
             # Continue if predictions are available
             if (!is.null(predicted_outputAndTime$predicted_output_l2)) {
               
-              all_predicted_outputs[[i]]        <- predicted_outputAndTime$predicted_output_l2$predicted_output
-              all_training_times                <- predicted_outputAndTime$training_time
+              all_predicted_outputs[[i]]              <- predicted_outputAndTime$predicted_output_l2$predicted_output
+              all_training_times                      <- predicted_outputAndTime$training_time
               # all_prediction_times[[i]]         <- predicted_outputAndTime$train_reg_prediction_time
-              all_best_val_prediction_time[[i]] <- predicted_outputAndTime$best_val_prediction_time
-              all_errors[[i]]                   <- compute_error(predicted_outputAndTime$predicted_output_l2$predicted_output, y, CLASSIFICATION_MODE)
-              all_hidden_outputs[[i]]           <- predicted_outputAndTime$learn_hidden_outputs
-              all_layer_dims[[i]]               <- predicted_outputAndTime$learn_dim_hidden_layers
-              all_best_val_probs[[i]]           <- predicted_outputAndTime$best_val_probs
-              all_best_val_labels[[i]]          <- predicted_outputAndTime$best_val_labels
-              all_weights[[i]]                  <- predicted_outputAndTime$best_weights_record
-              all_biases[[i]]                   <- predicted_outputAndTime$best_biases_record
-              all_activation_functions[[i]]     <- activation_functions_learn
-              all_best_train_acc[[i]]           <- predicted_outputAndTime$best_train_acc
-              all_best_epoch_train[[i]]         <- predicted_outputAndTime$best_epoch_train
-              all_best_val_acc[[i]]             <- predicted_outputAndTime$best_val_acc
-              all_best_val_epoch[[i]]           <- predicted_outputAndTime$best_val_epoch
+              all_best_val_prediction_time[[i]]       <- predicted_outputAndTime$best_val_prediction_time
+              all_errors[[i]]                         <- compute_error(predicted_outputAndTime$predicted_output_l2$predicted_output, y, CLASSIFICATION_MODE)
+              all_hidden_outputs[[i]]                 <- predicted_outputAndTime$learn_hidden_outputs
+              all_layer_dims[[i]]                     <- predicted_outputAndTime$learn_dim_hidden_layers
+              all_best_val_probs[[i]]                 <- predicted_outputAndTime$best_val_probs
+              all_best_val_labels[[i]]                <- predicted_outputAndTime$best_val_labels
+              all_weights[[i]]                        <- predicted_outputAndTime$best_weights_record
+              all_biases[[i]]                         <- predicted_outputAndTime$best_biases_record
+              all_activation_functions[[i]]           <- activation_functions
+              all_activation_functions_predict[[i]]   <- activation_functions_predict
+              all_best_train_acc[[i]]                 <- predicted_outputAndTime$best_train_acc
+              all_best_epoch_train[[i]]               <- predicted_outputAndTime$best_epoch_train
+              all_best_val_acc[[i]]                   <- predicted_outputAndTime$best_val_acc
+              all_best_val_epoch[[i]]                 <- predicted_outputAndTime$best_val_epoch
 
               # --- Debug prints ---
               cat(">> Ensemble Index:", i, "\n")
@@ -3873,35 +3875,36 @@ DDESONN <- R6Class(
         # all_ensemble_name_model_name <<- do.call(c, all_ensemble_name_model_name)
         
         performance_relevance_data <- self$update_performance_and_relevance(
-          Rdata                        = Rdata,
-          labels                       = labels,
-          preprocessScaledData         = preprocessScaledData,
-          X_validation                 = X_validation,
-          y_validation                 = y_validation,
-          validation_metrics           = validation_metrics,
-          lr                           = lr,
-          CLASSIFICATION_MODE          = CLASSIFICATION_MODE,
-          ensemble_number              = ensemble_number,
-          model_iter_num               = model_iter_num,
-          num_epochs                   = num_epochs,
-          threshold                    = threshold,
-          threshold_function           = threshold_function,
-          learn_results                = learn_results,
-          predicted_output_list        = all_predicted_outputs,
-          all_best_val_probs           = all_best_val_probs,
-          all_best_val_labels          = all_best_val_labels,
-          all_best_val_prediction_time = all_best_val_prediction_time,
-          learn_time                   = NULL,
-          prediction_time_list         = all_prediction_times,
-          run_id                       = all_ensemble_name_model_name,
-          all_predicted_outputAndTime  = all_predicted_outputAndTime,
-          all_weights                  = all_weights,
-          all_biases                   = all_biases,
-          all_activation_functions     = all_activation_functions,
-          all_best_train_acc           = all_best_train_acc,
-          all_best_epoch_train         = all_best_epoch_train,
-          all_best_val_acc             = all_best_val_acc,
-          all_best_val_epoch           = all_best_val_epoch,
+          Rdata                            = Rdata,
+          labels                           = labels,
+          preprocessScaledData             = preprocessScaledData,
+          X_validation                     = X_validation,
+          y_validation                     = y_validation,
+          validation_metrics               = validation_metrics,
+          lr                               = lr,
+          CLASSIFICATION_MODE              = CLASSIFICATION_MODE,
+          ensemble_number                  = ensemble_number,
+          model_iter_num                   = model_iter_num,
+          num_epochs                       = num_epochs,
+          threshold                        = threshold,
+          threshold_function               = threshold_function,
+          learn_results                    = learn_results,
+          predicted_output_list            = all_predicted_outputs,
+          all_best_val_probs               = all_best_val_probs,
+          all_best_val_labels              = all_best_val_labels,
+          all_best_val_prediction_time     = all_best_val_prediction_time,
+          learn_time                       = NULL,
+          prediction_time_list             = all_prediction_times,
+          run_id                           = all_ensemble_name_model_name,
+          all_predicted_outputAndTime      = all_predicted_outputAndTime,
+          all_weights                      = all_weights,
+          all_biases                       = all_biases,
+          all_activation_functions         = all_activation_functions,
+          all_activation_functions_predict = all_activation_functions_predict,
+          all_best_train_acc               = all_best_train_acc,
+          all_best_epoch_train             = all_best_epoch_train,
+          all_best_val_acc                 = all_best_val_acc,
+          all_best_val_epoch               = all_best_val_epoch,
           ML_NN = ML_NN,
           viewTables = viewTables,
           verbose = verbose
@@ -4068,7 +4071,7 @@ DDESONN <- R6Class(
     }
     , # Method for updating performance and relevance metrics
     
-    update_performance_and_relevance = function(Rdata, labels, preprocessScaledData, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, threshold_function, learn_results, predicted_output_list, all_best_val_probs, all_best_val_labels, all_best_val_prediction_time, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, all_best_train_acc, all_best_epoch_train, all_best_val_acc, all_best_val_epoch, ML_NN, viewTables, verbose) {
+    update_performance_and_relevance = function(Rdata, labels, preprocessScaledData, X_validation, y_validation, validation_metrics, lr, CLASSIFICATION_MODE, ensemble_number, model_iter_num, num_epochs, threshold, threshold_function, learn_results, predicted_output_list, all_best_val_probs, all_best_val_labels, all_best_val_prediction_time, learn_time, prediction_time_list, run_id, all_predicted_outputAndTime, all_weights, all_biases, all_activation_functions, all_activation_functions_predict, all_best_train_acc, all_best_epoch_train, all_best_val_acc, all_best_val_epoch, ML_NN, viewTables, verbose) {
       
       
       # Initialize lists to store performance and relevance metrics for each SONN
@@ -4287,7 +4290,7 @@ DDESONN <- R6Class(
           cat("====================================\n\n")
           
           
-          self$store_metadata(run_id = single_ensemble_name_model_name, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime, best_val_prediction_time = best_val_prediction_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch)
+          self$store_metadata(run_id = single_ensemble_name_model_name, CLASSIFICATION_MODE, ensemble_number, activation_functions, activation_functions_predict, preprocessScaledData, validation_metrics, model_iter_num = i, num_epochs, threshold = NULL, predicted_output = single_predicted_output, actual_values = y, all_weights = all_weights, all_biases = all_biases, performance_metric = performance_metric, relevance_metric = relevance_metric, predicted_outputAndTime = single_predicted_outputAndTime, best_val_prediction_time = best_val_prediction_time, best_train_acc = best_train_acc, best_epoch_train = best_epoch_train, best_val_acc = best_val_acc, best_val_epoch = best_val_epoch)
           
         }
       }
@@ -4767,7 +4770,7 @@ DDESONN <- R6Class(
       return(low_mean_plots)
     }
     ,
-    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, preprocessScaledData, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime, best_val_prediction_time, best_train_acc, best_epoch_train, best_val_acc, best_val_epoch) {
+    store_metadata = function(run_id, CLASSIFICATION_MODE, ensemble_number, activation_functions, activation_functions_predict, preprocessScaledData, validation_metrics, model_iter_num, num_epochs, threshold, all_weights, all_biases, predicted_output, actual_values, performance_metric, relevance_metric, predicted_outputAndTime, best_val_prediction_time, best_train_acc, best_epoch_train, best_val_acc, best_val_epoch) {
       
       # ---------------- helpers (lightweight; keep most original structure) ----------------
       to_num_mat <- function(x) {
@@ -4988,6 +4991,7 @@ DDESONN <- R6Class(
         
         # Model-critical configs
         activation_functions = activation_functions,
+        activation_functions_predict = activation_functions_predict,
         dropout_rates        = dropout_rates,
         hidden_sizes         = self$hidden_sizes %||% hidden_sizes,
         output_size          = self$output_size %||% output_size,
@@ -6133,7 +6137,7 @@ robustness <- function(SONN, Rdata, labels, lr, CLASSIFICATION_MODE, num_epochs,
   
   if (!isTRUE(learnOnlyTrainingRun)) {
     # predict on noisy data
-    pred_obj <- SONN$predict(noisy_Rdata, weights, biases, activation_functions, verbose, debug)
+    pred_obj <- SONN$predict(noisy_Rdata, weights, biases, activation_functions_predict, verbose, debug)
     pred_raw <- pred_obj$predicted_output
     
     # coerce to numeric matrices

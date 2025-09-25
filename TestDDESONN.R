@@ -81,7 +81,7 @@ if (CLASSIFICATION_MODE == "binary") {
 
 
 # Activation functions applied in forward pass during training | learn() # You can keep them the same as predict() or customize, e.g. list(relu, selu, sigmoid) 
-activation_functions_learn <- activation_functions
+activation_functions_predict <- activation_functions
 epsilon <- 1e-7
 loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
@@ -1355,7 +1355,7 @@ if(train) {
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
         lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs, use_biases=use_biases,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
-        activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+        activation_functions=activation_functions, activation_functions_predict=activation_functions_predict,
         dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
         beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
         batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
@@ -1857,7 +1857,7 @@ if(train) {
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
         lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs, use_biases=use_biases,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
-        activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+        activation_functions=activation_functions, activation_functions_predict=activation_functions_predict,
         dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
         beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
         batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
@@ -1970,7 +1970,7 @@ if(train) {
             Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
             lr_min=lr_min, ensemble_number=j+1L, num_epochs=num_epochs, use_biases=use_biases,
             threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
-            activation_functions_learn=activation_functions_learn, activation_functions=activation_functions,
+            activation_functions=activation_functions, activation_functions_predict=activation_functions_predict,
             dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
             beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
             batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,

@@ -859,9 +859,9 @@ if (!exists(".run_predict", inherits = TRUE)) {
     custom_scale <- meta$custom_scale %||% NULL
     
     if (dbg) cat("[RUNPRED-DBG] meta names:", paste(names(meta), collapse=","), "\n")
-    activation_functions <- meta$activation_functions %||%
-      (meta$model$activation_functions %||% (meta$preprocessScaledData$activation_functions %||% NULL))
-    if (is.null(activation_functions)) {
+    activation_functions_p <- meta$activation_functions_predict %||%
+      (meta$model$activation_functions_predict %||% (meta$preprocessScaledData$activation_functions_predict %||% NULL))
+    if (is.null(activation_functions_predict)) {
       stop("[RUNPRED-ERR] activation_functions not found in meta.")
     }
     
@@ -908,7 +908,7 @@ if (!exists(".run_predict", inherits = TRUE)) {
       Rdata   = X,
       weights = rec$weights,
       biases  = rec$biases,
-      activation_functions = activation_functions,
+      activation_functions_predict = activation_functions_p,
       verbose = vrb,
       debug   = dbg
     )
