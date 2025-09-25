@@ -1948,7 +1948,7 @@ optimizers_log_update <- function(
 #################################################################################################
 # MAIN TEST PREDICT-ONLY FUNCTION (compat writer for fuser)
 #################################################################################################
-DDESONN_predict_eval <- function(
+ddesonn_predict_eval <- function(
     LOAD_FROM_RDS = FALSE,
     ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
     INPUT_SPLIT   = "test",

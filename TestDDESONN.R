@@ -23,11 +23,11 @@ source("utils/bootstrap_metadata.R")
 ## Classification mode
 ## =========================
 # CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "regression"
-CLASSIFICATION_MODE <- "binary"
-# CLASSIFICATION_MODE <- "regression"
+# CLASSIFICATION_MODE <- "binary"
+CLASSIFICATION_MODE <- "regression"
 set.seed(111)
 #number of seeds;if doing seed loop
-x <- 1
+x <- 2
 test <- TRUE
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
@@ -60,11 +60,6 @@ learnOnlyTrainingRun <- FALSE
 update_weights <- TRUE
 update_biases <- TRUE
 
-if (CLASSIFICATION_MODE == "binary") {
-  use_biases <- TRUE
-} else if (CLASSIFICATION_MODE == "regression") {
-  use_biases <- TRUE
-}
 # hidden_sizes <- NULL
 hidden_sizes <- c(64, 32)
 
@@ -83,15 +78,19 @@ if (CLASSIFICATION_MODE == "binary") {
 # Activation functions applied in forward pass during training | learn() # You can keep them the same as predict() or customize, e.g. list(relu, selu, sigmoid) 
 activation_functions_predict <- activation_functions
 epsilon <- 1e-7
-loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
 
-dropout_rates <- list(0.10, 0.00) # NULL for output layer
-
+if (CLASSIFICATION_MODE %in% c("binary", "multiclass")) {
+  loss_type <- "CrossEntropy" #NULL #'MSE', 'MAE', 'CrossEntropy', or 'CategoricalCrossEntropy'
+} else{
+  loss_type <- "MSE"
+}
+ropout_rates <- list(0.10, 0.00) # NULL for output layer
+dropout_rates <- list(0.10) # NULL for output layer
 
 threshold_function <- tune_threshold_accuracy
 threshold <- .5  # Classification threshold (not directly used in Random Forest)
 
-dropout_rates_learn <- dropout_rates
+
 
 num_layers <- length(hidden_sizes) + 1
 output_size <- 1  # For binary classification
@@ -175,11 +174,6 @@ if (CLASSIFICATION_MODE %in% c("binary", "regression")) {
   output_size <- 1L
 }
 
-if (!ML_NN) {
-  N <- input_size + output_size
-} else {
-  N <- input_size + sum(hidden_sizes) + output_size
-}
 
 reduce_data <- TRUE
 
@@ -321,11 +315,6 @@ if (USE_TIME_SPLIT) {
 ## When you train, pass X_train / y_train — NOT the full Rdata/labels.
 ## Likewise, for validation, forward X_validation and compare with y_validation.
 
-# ===== OPTIONAL LOG/CLIP TRANSFORMATION (kept from your "below" block; commented) =====
-# Apply log1p to avoid issues with zero values (log1p(x) = log(1 + x))
-# X_train$creatinine_phosphokinase      <- pmin(X_train$creatinine_phosphokinase, 3000)
-# X_validation$creatinine_phosphokinase <- pmin(X_validation$creatinine_phosphokinase, 3000)
-# X_test$creatinine_phosphokinase       <- pmin(X_test$creatinine_phosphokinase, 3000)
 
 # ------------------------------------------------------------
 # BINARY PATH (untouched)  vs  MULTICLASS PATH (make numeric + labels)
@@ -561,12 +550,6 @@ if (CLASSIFICATION_MODE == "binary") {
                  nrow(Rdata), nrow(labels)))
   }
   
-  # ---------- F) Recompute N now that sizes are final ----------
-  if (!ML_NN) {
-    N <- input_size + output_size
-  } else {
-    N <- input_size + sum(hidden_sizes) + output_size
-  }
   cat("[mc] N =", N, "\n")
   
   cat("===================== [MC] END =====================\n\n")
@@ -805,14 +788,16 @@ if (CLASSIFICATION_MODE == "binary") {
   if (nrow(Rdata) != nrow(labels)) {
     stop(sprintf("[reg][FATAL] Row mismatch: nrow(Rdata)=%d vs nrow(labels)=%d.", nrow(Rdata), nrow(labels)))
   }
-  
-  if (!ML_NN) {
-    N <- input_size + output_size
-  } else {
-    N <- input_size + sum(hidden_sizes) + output_size
-  }
+
   cat("[reg] N =", N, "\n")
   cat("==================== [REG] END ====================\n\n")
+}
+
+# ---------- Compute N now that sizes are final ----------
+if (!ML_NN) {
+  N <- input_size + output_size
+} else {
+  N <- input_size + sum(hidden_sizes) + output_size
 }
 
 
@@ -1353,10 +1338,10 @@ if(train) {
       
       model_results <- run_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
-        lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs, use_biases=use_biases,
+        lr_min=lr_min, ensemble_number=0L, num_epochs=num_epochs,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
         activation_functions=activation_functions, activation_functions_predict=activation_functions_predict,
-        dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+        dropout_rates=dropout_rates, optimizer=optimizer,
         beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
         batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
         epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
@@ -1417,9 +1402,9 @@ if(train) {
         drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
           grepl("grid_used", nms, fixed = TRUE) |
           grepl("(^|\\.)details(\\.|$)", nms)
-        keep <- !drop & !is.na(flat)
+        keep <- !drop                    # <-- keep NA values; do NOT filter them out
         flat <- flat[keep]; nms <- names(flat)
-      }
+        }
       
       # --- schema-safe row_df ---
       if (length(flat) == 0L) {
@@ -1428,7 +1413,7 @@ if(train) {
           quantization_error = NA_real_, topographic_error = NA_real_, clustering_quality_db = NA_real_,
           accuracy = NA_real_, precision = NA_real_, recall = NA_real_, f1_score = NA_real_,
           MSE=NA_real_, MAE=NA_real_, RMSE=NA_real_, R2=NA_real_,
-          MAPE=NA_real_, SMAPE=NA_real_, WMAPE=NA_real_, MASE=NA_real_,
+          MAPE=NA_real_, SMAPE=NA_real_, WMAPE=NA_real_, MASE=NA_real_, generalization_ability = NA_real_,
           stringsAsFactors = FALSE
         )
       } else {
@@ -1498,7 +1483,7 @@ if(train) {
           assign(env_name, md_k, envir = .GlobalEnv)
           
           ok <- tryCatch({
-            ret <- desonn_predict_eval(
+            ret <- ddesonn_predict_eval(
               LOAD_FROM_RDS = FALSE,
               ENV_META_NAME = env_name,
               INPUT_SPLIT   = "test",
@@ -1506,9 +1491,7 @@ if(train) {
               RUN_INDEX = i,
               SEED      = s,
               OUTPUT_DIR = RUN_DIR,                  # write inside stamped folder
-              #$$$$$$$$$$$$$ BEGIN — explicit assertion to prove folder is passed
-              OUT_DIR_ASSERT = RUN_DIR,              #$$$$$$$$$$$$$ (new optional arg; the function will verify)
-              #$$$$$$$$$$$$$ END
+              OUT_DIR_ASSERT = RUN_DIR,              #explicit assertion to prove folder is passed
               SAVE_METRICS_RDS = TRUE,
               METRICS_PREFIX   = "metrics_test",
               SAVE_PREDICTIONS_COLUMN_IN_RDS = SAVE_PREDICTIONS_COLUMN_IN_RDS,
@@ -1518,7 +1501,7 @@ if(train) {
             )
             TRUE
           }, error = function(e) {
-            message(sprintf("[single-run][TEST] seed=%s slot=%d desonn_predict_eval ERROR: %s",
+            message(sprintf("[single-run][TEST] seed=%s slot=%d ddesonn_predict_eval ERROR: %s",
                             s, k, conditionMessage(e)))
             FALSE
           })
@@ -1855,10 +1838,10 @@ if(train) {
       
       model_results_main <<- main_model$train(
         Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
-        lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs, use_biases=use_biases,
+        lr_min=lr_min, ensemble_number=1L, num_epochs=num_epochs,
         threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
         activation_functions=activation_functions, activation_functions_predict=activation_functions_predict,
-        dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+        dropout_rates=dropout_rates, optimizer=optimizer,
         beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
         batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
         epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
@@ -1928,7 +1911,7 @@ if(train) {
       if (num_temp_iterations == 0L && isTRUE(test)) {
         for (k in seq_len(K)) {
           ENV_META_NAME <- resolve_env_meta(k, "main", 1L)
-          desonn_predict_eval(
+          ddesonn_predict_eval(
             LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
             CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
             OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
@@ -1968,10 +1951,10 @@ if(train) {
           
           invisible(temp_model$train(
             Rdata=X, labels=y, lr=lr, lr_decay_rate=lr_decay_rate, lr_decay_epoch=lr_decay_epoch,
-            lr_min=lr_min, ensemble_number=j+1L, num_epochs=num_epochs, use_biases=use_biases,
+            lr_min=lr_min, ensemble_number=j+1L, num_epochs=num_epochs,
             threshold=threshold, reg_type=reg_type, numeric_columns=numeric_columns, CLASSIFICATION_MODE=CLASSIFICATION_MODE,
             activation_functions=activation_functions, activation_functions_predict=activation_functions_predict,
-            dropout_rates_learn=dropout_rates_learn, dropout_rates=dropout_rates, optimizer=optimizer,
+            dropout_rates=dropout_rates, optimizer=optimizer,
             beta1=beta1, beta2=beta2, epsilon=epsilon, lookahead_step=lookahead_step,
             batch_normalize_data=batch_normalize_data, gamma_bn=gamma_bn, beta_bn=beta_bn,
             epsilon_bn=epsilon_bn, momentum_bn=momentum_bn, is_training_bn=is_training_bn,
@@ -2113,7 +2096,7 @@ if(train) {
         if (isTRUE(test)) {
           for (k in seq_len(K)) {
             ENV_META_NAME <- resolve_env_meta(k, "main", num_temp_iterations)
-            desonn_predict_eval(
+            ddesonn_predict_eval(
               LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
               CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
               OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
@@ -2163,9 +2146,9 @@ if(train) {
         nms <- names(flat)
         if (length(nms)) {
           drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
-            grepl("(^|\\.)grid_used(\\.|$)", nms) |
+            grepl("grid_used", nms, fixed = TRUE) |
             grepl("(^|\\.)details(\\.|$)", nms)
-          keep <- !drop & !is.na(flat)
+          keep <- !drop                    # <-- keep NA values; do NOT filter them out
           flat <- flat[keep]; nms <- names(flat)
         }
         
