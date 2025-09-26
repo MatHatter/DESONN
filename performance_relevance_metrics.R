@@ -1556,23 +1556,23 @@ confusion_matrix <- function(SONN, labels, CLASSIFICATION_MODE, predicted_output
 # Global threshold helpers
 # =========================
 
-desonn_set_threshold <- function(value) {
+ddesonn_set_threshold <- function(value) {
   if (!is.numeric(value) || length(value) != 1L || !is.finite(value) || value <= 0 || value >= 1) {
-    stop("[desonn_set_threshold] value must be a single numeric in (0,1).")
+    stop("[ddesonn_set_threshold] value must be a single numeric in (0,1).")
   }
   .GlobalEnv$DESONN_THRESHOLDS <- list(binary = as.numeric(value))
   invisible(TRUE)
 }
 
-desonn_get_threshold <- function(default = NA_real_) {
-  x <- get0("DESONN_THRESHOLDS", envir = .GlobalEnv, inherits = FALSE)
+ddesonn_get_threshold <- function(default = NA_real_) {
+  x <- get0("DDESONN_THRESHOLDS", envir = .GlobalEnv, inherits = FALSE)
   if (is.null(x) || is.null(x$binary)) return(default)
   as.numeric(x$binary)
 }
 
-desonn_clear_threshold <- function() {
-  if (exists("DESONN_THRESHOLDS", envir = .GlobalEnv, inherits = FALSE)) {
-    rm("DESONN_THRESHOLDS", envir = .GlobalEnv)
+ddesonn_clear_threshold <- function() {
+  if (exists("DDESONN_THRESHOLDS", envir = .GlobalEnv, inherits = FALSE)) {
+    rm("DDESONN_THRESHOLDS", envir = .GlobalEnv)
   }
   invisible(TRUE)
 }

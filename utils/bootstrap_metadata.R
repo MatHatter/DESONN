@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------
 # Purpose:
-# - Snapshot/load/auto-find DESONN metadata objects named like:
+# - Snapshot/load/auto-find DDESONN metadata objects named like:
 #     Ensemble_<Kind>_<ens>_model_<idx>_(metadata|metada)[_YYYYMMDD_HHMMSS]
 # - Provide helpers to list/select models (env + RDS)
 # - Provide a hard-stop helper for one-shot “prepare disk only” runs

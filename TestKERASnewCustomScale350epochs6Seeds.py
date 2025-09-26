@@ -1,5 +1,5 @@
 # ============================================
-# Heart Failure (Binary) — Keras vs DESONN parity
+# Heart Failure (Binary) — Keras vs DDESONN parity
 # 50-seed run with accuracy table at end
 # ============================================
 

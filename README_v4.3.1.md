@@ -1,8 +1,8 @@
-# 🧠 DESONN Neural Network v3.0
+# 🧠 DDESONN Neural Network v3.0
 
-DESONN (Dynamic Evolving Self-Organizing Neural Network) is a custom R-based neural network framework designed to support both single-layer and multi-layer architectures with dropout, bias handling, activation functions, optimizer logic, and adaptive thresholding.
+DDESONN (Dynamic Evolving Self-Organizing Neural Network) is a custom R-based neural network framework designed to support both single-layer and multi-layer architectures with dropout, bias handling, activation functions, optimizer logic, and adaptive thresholding.
 
-# DESONN
+# DDESONN
 
 ## Ensemble labeling convention
 - **E = 0** → single-run (no ensembles); stored at `ensembles$main_ensemble[[1]]` (R is 1-based).
@@ -19,7 +19,7 @@ DESONN (Dynamic Evolving Self-Organizing Neural Network) is a custom R-based neu
 - 🔧 Fixed regularization logic for both **SL (single-layer)** and **ML (multi-layer)** modes:
   - Now applies `L1`, `L2`, and `L1_L2` properly to **weights** and **biases**
 - 🧠 Documented that `adam` optimizer is fully routed through centralized logic in `optimizers.R` via `apply_optimizer_update()`
-- 📌 Other optimizers (`SGD`, `RMSProp`, etc.) are still hardcoded in `DESONN.R` and will be moved in future versions
+- 📌 Other optimizers (`SGD`, `RMSProp`, etc.) are still hardcoded in `DDESONN.R` and will be moved in future versions
 - ➕ Added **new custom activation functions**: `bent_relu`, `bent_sigmoid`
 - 🔁 `predict()` now uses a completely separate forward-only path (no backprop logic inside)
 - ✅ Accuracy: **93.7%**

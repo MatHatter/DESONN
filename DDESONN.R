@@ -1211,7 +1211,7 @@ SONN <- R6Class(
       sd_output_log <- c()
       max_weight_log <- c()
       
-
+      losses <- numeric(num_epochs)
       
       total_learn_time <- 0
       # ======== TRAIN LOOP ========
@@ -1227,7 +1227,7 @@ SONN <- R6Class(
         val_loss_log       <- numeric(0)
         
         
-        for (epoch in 1:epoch_in_list) {
+        for (epoch in 1:num_epochs) {
           
           # lr <- lr_scheduler(epoch)
           cat("Epoch:", epoch, "| Learning Rate:", lr, "\n")
@@ -2307,7 +2307,7 @@ SONN <- R6Class(
           num_networks    = num_networks,
           ensemble_number = ensemble_number,
           model_index     = model_iter_num,
-          who             = "SONN"   # or "DESONN"
+          who             = "SONN"   # or "DDESONN"
         )
         
         output_file <- file.path("plots", paste0(fname_prefixer("loss_plot"), ".png"))

@@ -199,7 +199,7 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
   
   if (is.null(grad_matrix)) stop("Missing gradient matrix")
   
-  # ✅ FIXED: Don't double-index
+  # FIXED: Don't double-index
   param_list <- params
   
   param <- param_list$param
@@ -268,6 +268,122 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
   return(updated_params_list)
 }
 
+
+# train_with_l2_regularization helper before `if (train) {}`
+.extract_vec <- function(x) {
+  if (is.data.frame(x)) return(x[[1]])
+  if (is.matrix(x) || is.array(x)) {
+    if (ncol(x) == 1L) return(as.vector(x[,1]))
+    return(as.vector(x[,1]))
+  }
+  x
+}
+
+.align_len <- function(v, n) {
+  if (length(v) > n) v[seq_len(n)]
+  else if (length(v) < n) c(v, rep(NA, n - length(v)))
+  else v
+}
+
+.build_targets <- function(labels, n, K, CLASSIFICATION_MODE) {
+  lv <- .align_len(.extract_vec(labels), n)
+  cat("[dbg] targets: CLASSIFICATION_MODE =", CLASSIFICATION_MODE, "\n")
+  cat("[dbg] targets: labels class =", paste(class(labels), collapse=","), " | lv length =", length(lv), "\n")
+  
+  if (identical(CLASSIFICATION_MODE, "multiclass")) {
+    stopifnot(K >= 2)
+    if (is.matrix(labels) && nrow(labels) >= n && ncol(labels) == K &&
+        all(labels[seq_len(n), , drop=FALSE] %in% c(0,1))) {
+      Y <- matrix(as.numeric(labels[seq_len(n), , drop=FALSE]), n, K)
+      y_idx <- max.col(Y, ties.method = "first")
+      cat("[dbg] targets: using provided one-hot (n×K)\n")
+      return(list(Y=Y, y_idx=y_idx))
+    } else {
+      f <- if (is.factor(lv)) lv else factor(lv)
+      idx <- as.integer(f)
+      L <- nlevels(f)
+      if (L > K) {
+        cat(sprintf("[dbg] targets: L=%d > K=%d, truncating indices > K to K\n", L, K))
+        idx[idx > K] <- K
+      }
+      cat("[dbg] targets: factor levels L =", L, " | head idx =", paste(utils::head(idx,6), collapse=", "), "\n")
+      # use your global one_hot_from_ids
+      return(list(Y=one_hot_from_ids(idx, K, N=n), y_idx=idx))
+    }
+    
+  } else if (identical(CLASSIFICATION_MODE, "binary")) {
+    stopifnot(K == 1)
+    if (is.factor(lv)) {
+      y <- as.integer(lv) - 1L
+    } else {
+      y <- suppressWarnings(as.numeric(lv))
+      if (all(is.na(y))) { f <- factor(lv); y <- as.integer(f) - 1L }
+    }
+    y[is.na(y)] <- 0L
+    y <- pmin(pmax(as.numeric(y), 0), 1)
+    cat("[dbg] targets: binary y summary -> mean=", mean(y), " | sum=", sum(y), "\n")
+    return(list(y=y))
+    
+  } else if (identical(CLASSIFICATION_MODE, "regression")) {
+    cat("[dbg] targets: regression path | n=", n, " K=", K, "\n")
+    
+    if (is.matrix(labels) || is.data.frame(labels)) {
+      Ytmp <- suppressWarnings(matrix(as.numeric(as.matrix(labels)),
+                                      nrow = nrow(as.matrix(labels)),
+                                      ncol = ncol(as.matrix(labels))))
+    } else {
+      Ytmp <- suppressWarnings(matrix(as.numeric(lv), nrow = length(lv), ncol = 1L))
+    }
+    
+    if (all(is.na(Ytmp))) {
+      cat("[dbg] targets: all NA after coercion; filling zeros\n")
+      Ytmp <- matrix(0, nrow = max(1L, nrow(Ytmp)), ncol = max(1L, ncol(Ytmp)))
+    }
+    
+    # conform rows
+    if (nrow(Ytmp) > n) {
+      Ytmp <- Ytmp[seq_len(n), , drop = FALSE]
+    } else if (nrow(Ytmp) < n) {
+      add <- n - nrow(Ytmp)
+      last_row <- if (nrow(Ytmp) >= 1) Ytmp[nrow(Ytmp), , drop = FALSE] else matrix(0, 1, max(1L, ncol(Ytmp)))
+      Ytmp <- rbind(Ytmp, do.call(rbind, replicate(add, last_row, simplify = FALSE)))
+    }
+    # conform cols
+    if (ncol(Ytmp) > K) {
+      Ytmp <- Ytmp[, seq_len(K), drop = FALSE]
+    } else if (ncol(Ytmp) < K) {
+      if (ncol(Ytmp) == 0L) Ytmp <- matrix(0, nrow = nrow(Ytmp), ncol = 1L)
+      col_map <- rep(seq_len(ncol(Ytmp)), length.out = K)
+      Ytmp <- Ytmp[, col_map, drop = FALSE]
+    }
+    
+    storage.mode(Ytmp) <- "double"
+    cat("[dbg] targets: regression Y dim ->", paste(dim(Ytmp), collapse="x"),
+        " | summary mean=", mean(Ytmp), "\n")
+    
+    # provide both Y and y for downstream compatibility
+    return(list(Y = Ytmp, y = as.numeric(Ytmp[,1])))
+    
+  } else {
+    stop("Unknown CLASSIFICATION_MODE. Use 'multiclass', 'binary', or 'regression'.")
+  }
+}
+
+.bce_loss <- function(p, y, eps=1e-12) {
+  p <- pmin(pmax(as.numeric(p), eps), 1 - eps)
+  y <- pmin(pmax(as.numeric(y), 0), 1)
+  val <- mean(-(y*log(p) + (1-y)*log(1-p)))
+  if (!is.finite(val)) val <- NA_real_
+  val
+}
+
+.ce_loss_multiclass <- function(P, Y, eps=1e-12) {
+  P <- pmin(pmax(as.matrix(P), eps), 1 - eps)  # n×K
+  if (is.vector(Y)) Y <- one_hot_from_ids(as.integer(Y), K=ncol(P), N=nrow(P))
+  val <- mean(-rowSums(Y * log(P)))
+  if (!is.finite(val)) val <- NA_real_
+  val
+}
 
 # =======================
 # PREDICT-ONLY HELPERS (for !train)

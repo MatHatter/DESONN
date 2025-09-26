@@ -1,4 +1,4 @@
-#' Update biases block (ML + SL) for DESONN
+#' Update biases block (ML + SL) for DDESONN
 #'
 #' Direct extraction of your inlined `if (update_biases) { ... }` block.
 #' Preserves all logic, shapes, and debug prints.

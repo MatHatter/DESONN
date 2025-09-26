@@ -23,11 +23,11 @@ source("utils/bootstrap_metadata.R")
 ## Classification mode
 ## =========================
 # CLASSIFICATION_MODE <- "multiclass"   # "binary" | "multiclass" | "regression"
-# CLASSIFICATION_MODE <- "binary"
-CLASSIFICATION_MODE <- "regression"
+CLASSIFICATION_MODE <- "binary"
+# CLASSIFICATION_MODE <- "regression"
 set.seed(111)
 #number of seeds;if doing seed loop
-x <- 2
+x <- 1
 test <- TRUE
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
@@ -48,7 +48,7 @@ lr_decay_epoch <- 20
 lr_min <- 1e-5
 lambda <- 0.00028
 # lambda <- 0.00013
-num_epochs <- 3
+num_epochs <- 360
 validation_metrics <- TRUE
 test_metrics <- TRUE
 custom_scale <- 1.04349
@@ -1925,7 +1925,7 @@ if(train) {
         
         if (num_networks > 1L) {
           yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL); stopifnot(!is.null(yi))
-          fused <- desonn_fuse_from_agg(
+          fused <- ddesonn_fuse_from_agg(
             AGG_PREDICTIONS_FILE = agg_pred_file, RUN_INDEX = i, SEED = s,
             y_true = yi, methods = c("avg","wavg","vote_soft","vote_hard"),
             weight_column = "tuned_f1", use_tuned_threshold_for_vote = TRUE,
@@ -2110,7 +2110,7 @@ if(train) {
           
           if (num_networks > 1L) {
             yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL); stopifnot(!is.null(yi))
-            fused <- desonn_fuse_from_agg(
+            fused <- ddesonn_fuse_from_agg(
               AGG_PREDICTIONS_FILE = agg_pred_file, RUN_INDEX = i, SEED = s,
               y_true = yi, methods = c("avg","wavg","vote_soft","vote_hard"),
               weight_column = "tuned_f1", use_tuned_threshold_for_vote = TRUE,

@@ -1,7 +1,7 @@
 
-# 🧠 DESONN Neural Network v2.9
+# 🧠 DDESONN Neural Network v2.9
 
-DESONN (Dynamic Evolving Self-Organizing Neural Network) is a custom R-based neural network framework designed to support both single-layer and multi-layer architectures with dropout, bias handling, activation functions, optimizer logic, and adaptive thresholding.
+DDESONN (Dynamic Evolving Self-Organizing Neural Network) is a custom R-based neural network framework designed to support both single-layer and multi-layer architectures with dropout, bias handling, activation functions, optimizer logic, and adaptive thresholding.
 
 ## 🚀 Version 2.9 Highlights
 

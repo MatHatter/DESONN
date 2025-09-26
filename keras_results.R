@@ -64,7 +64,7 @@ seed train_acc val_acc test_acc
 
 
 #200 epochs
-= RESTART: C:\Users\wfky1\OneDrive\Documents\R\DESONN\TestKERASnewCustomScale6Seeds.py
+= RESTART: C:\Users\wfky1\OneDrive\Documents\R\DDESONN\TestKERASnewCustomScale6Seeds.py
 
 === Seed 505 ===
   
@@ -101,7 +101,7 @@ seed train_acc val_acc test_acc
             
             
             #360 epochs
-            = RESTART: C:\Users\wfky1\OneDrive\Documents\R\DESONN\TestKERASnewCustomScale360epochs6Seeds.py
+            = RESTART: C:\Users\wfky1\OneDrive\Documents\R\DDESONN\TestKERASnewCustomScale360epochs6Seeds.py
             
             === Seed 505 ===
               

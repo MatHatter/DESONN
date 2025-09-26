@@ -1,9 +1,9 @@
-#' Update weights block (ML + SL) for DESONN
+#' Update weights block (ML + SL) for DDESONN
 #' 
 #' This function is a direct extraction of your inlined `if (update_weights) { ... }`
 #' block. It preserves all original logic and debug prints.
 #' 
-#' @param self R6 model (DESONN/SONN) – modified in-place
+#' @param self R6 model (DDESONN/SONN) – modified in-place
 #' @param update_weights logical
 #' @param optimizer character (adam, rmsprop, sgd, sgd_momentum, nag, ftrl, lamb, lookahead, adagrad, adadelta)
 #' @param optimizer_params_weights list of per-layer optimizer params (will be returned/updated)

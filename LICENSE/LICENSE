@@ -1,7 +1,7 @@
-DESONN: Deep Ensemble Self-Organizing Neural Networks
+DDESONN: Deep Ensemble Self-Organizing Neural Networks
 Copyright (c) 2025 Mathew Fok. All rights reserved.
 
-This software is provided as part of the DESONN project. It is intended
+This software is provided as part of the DDESONN project. It is intended
 to be released as an official CRAN package library.
 
 Permission is hereby granted, free of charge, to any individual or
@@ -12,7 +12,7 @@ notice and this permission notice are included in all copies.
 Commercial use, redistribution, or inclusion of this software in any
 for-profit product or service is strictly prohibited without prior
 written permission from the copyright holder. This applies equally to
-**all versions of the DESONN repository** — including legacy releases,
+**all versions of the DDESONN repository** — including legacy releases,
 archived branches, and the current version.
 
 This software is distributed “as is,” without warranty of any kind,

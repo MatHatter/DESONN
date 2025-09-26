@@ -1,5 +1,5 @@
 # ============================================
-# Heart Failure (Binary) — Keras vs DESONN parity
+# Heart Failure (Binary) — Keras vs DDESONN parity
 # ============================================
 # - L1 regularization (custom scale factor)
 # - 200 epochs
