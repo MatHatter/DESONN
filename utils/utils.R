@@ -2061,10 +2061,33 @@ optimizers_log_update <- function(
 }
 
 
+
+# filtering in the rds tables for Ensmble/SingleRun_Test/Train_Acc_Val_Metrics
+
+.filter_flat_metric_names <- function(flat) {
+  if (!length(flat)) return(flat)
+  L <- as.list(flat)
+  flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+  nms  <- names(flat)
+  if (!length(nms)) return(flat)
+  
+  drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
+    grepl("grid_used", nms, fixed = TRUE) |
+    grepl("(^|\\.)details(\\.|$)", nms)
+  keep <- !drop
+  flat[keep]
+}
+
+.strip_metric_prefixes <- function(nm) {
+  sub("^(performance_metric|relevance_metric)\\.", "", nm)
+}
+
+
+
 #################################################################################################
 # MAIN TEST PREDICT-ONLY FUNCTION (compat writer for fuser)
 #################################################################################################
-ddesonn_predict_eval <- function(
+DDESONN_predict_eval <- function(
     LOAD_FROM_RDS = FALSE,
     ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
     INPUT_SPLIT   = "test",

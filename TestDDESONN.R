@@ -27,7 +27,7 @@ CLASSIFICATION_MODE <- "binary"
 # CLASSIFICATION_MODE <- "regression"
 set.seed(111)
 #number of seeds;if doing seed loop
-x <- 1
+x <- 2
 test <- TRUE
 init_method <- "he" #variance_scaling" #glorot_uniform" #"orthogonal" #"orthogonal" #lecun" #xavier"
 optimizer <- "adagrad" #"lamb" #ftrl #nag #"sgd" #NULL "rmsprop" #adam #sgd_momentum #lookahead #adagrad
@@ -48,7 +48,7 @@ lr_decay_epoch <- 20
 lr_min <- 1e-5
 lambda <- 0.00028
 # lambda <- 0.00013
-num_epochs <- 360
+num_epochs <- 3
 validation_metrics <- TRUE
 test_metrics <- TRUE
 custom_scale <- 1.04349
@@ -977,9 +977,9 @@ hyperparameter_grid_setup <- FALSE  # Set to FALSE to run a single combo manuall
 ## DDESONN Runner – Modes
 ## =========================
 ## SCENARIO A: Single-run only (no ensemble, ONE model)
-do_ensemble         <- FALSE
-num_networks        <- 1L
-num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
+# do_ensemble         <- FALSE
+# num_networks        <- 1L
+# num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 #
 ## SCENARIO B: Single-run, MULTI-MODEL (no ensemble)
 # do_ensemble         <- FALSE
@@ -987,9 +987,9 @@ num_temp_iterations <- 0L   # ignored when do_ensemble = FALSE
 # num_temp_iterations <- 0L
 #
 ## SCENARIO C: Main ensemble only (no TEMP/prune-add)
-# do_ensemble         <- TRUE
-# num_networks        <- 2L          # example main size
-# num_temp_iterations <- 0L
+do_ensemble         <- TRUE
+num_networks        <- 2L          # example main size
+num_temp_iterations <- 0L
 #
 ## SCENARIO D: Main + TEMP iterations (prune/add enabled)
 # do_ensemble         <- TRUE
@@ -1404,7 +1404,7 @@ if(train) {
           grepl("(^|\\.)details(\\.|$)", nms)
         keep <- !drop                    # <-- keep NA values; do NOT filter them out
         flat <- flat[keep]; nms <- names(flat)
-        }
+      }
       
       # --- schema-safe row_df ---
       if (length(flat) == 0L) {
@@ -1483,7 +1483,7 @@ if(train) {
           assign(env_name, md_k, envir = .GlobalEnv)
           
           ok <- tryCatch({
-            ret <- ddesonn_predict_eval(
+            ret <- DDESONN_predict_eval(
               LOAD_FROM_RDS = FALSE,
               ENV_META_NAME = env_name,
               INPUT_SPLIT   = "test",
@@ -1501,12 +1501,28 @@ if(train) {
             )
             TRUE
           }, error = function(e) {
-            message(sprintf("[single-run][TEST] seed=%s slot=%d ddesonn_predict_eval ERROR: %s",
+            message(sprintf("[single-run][TEST] seed=%s slot=%d DDESONN_predict_eval ERROR: %s",
                             s, k, conditionMessage(e)))
             FALSE
           })
           
           cat(sprintf("[single-run][TEST] seed=%s slot=%d wrote? %s\n", s, k, ok))
+        }
+        
+        ## --- canonical post-filter for the saved TEST agg metrics file (uses .filter_flat_metric_names) ---
+        if (file.exists(agg_metrics_file)) {
+          df <- try(readRDS(agg_metrics_file), silent = TRUE)
+          if (!inherits(df, "try-error") && is.data.frame(df) && NROW(df)) {
+            nms <- names(df)
+            # Build a named, atomic "dummy vector" and reuse the canonical filter to decide columns to KEEP
+            keep_map  <- setNames(as.list(rep(TRUE, length(nms))), nms)
+            kept_list <- .filter_flat_metric_names(keep_map)
+            keep_nms  <- names(kept_list)
+            # Subset to kept columns; preserve NA columns; then strip perf/relevance prefixes
+            df <- df[, intersect(keep_nms, names(df)), drop = FALSE]
+            names(df) <- sub("^(performance_metric|relevance_metric)\\.", "", names(df))
+            saveRDS(df, agg_metrics_file)
+          }
         }
       }
     }
@@ -1555,6 +1571,7 @@ if(train) {
       cat("\nSingle run relevance_metric (DDESONN-level):\n"); print(main_model$relevance_metric)
     }
   }
+  
   
 
   
@@ -1911,7 +1928,7 @@ if(train) {
       if (num_temp_iterations == 0L && isTRUE(test)) {
         for (k in seq_len(K)) {
           ENV_META_NAME <- resolve_env_meta(k, "main", 1L)
-          ddesonn_predict_eval(
+          DDESONN_predict_eval(
             LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
             CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
             OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
@@ -1923,9 +1940,23 @@ if(train) {
         ## >>> FIX: normalize agg file so fuser never sees "no entries"
         .fix_agg_layout_for_fuser(agg_pred_file, run_index = i, seed = s, split = "test", mode = CLASSIFICATION_MODE)
         
+        ## >>> NEW: post-filter ensemble TEST agg metrics (uses .filter_flat_metric_names)
+        if (file.exists(agg_metrics_file)) {
+          df <- try(readRDS(agg_metrics_file), silent = TRUE)
+          if (!inherits(df, "try-error") && is.data.frame(df) && NROW(df)) {
+            nms <- names(df)
+            keep_map  <- setNames(as.list(rep(TRUE, length(nms))), nms)
+            kept_list <- .filter_flat_metric_names(keep_map)
+            keep_nms  <- names(kept_list)
+            df <- df[, intersect(keep_nms, names(df)), drop = FALSE]
+            names(df) <- sub("^(performance_metric|relevance_metric)\\.", "", names(df))
+            saveRDS(df, agg_metrics_file)
+          }
+        }
+        
         if (num_networks > 1L) {
           yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL); stopifnot(!is.null(yi))
-          fused <- ddesonn_fuse_from_agg(
+          fused <- DDESONN_fuse_from_agg(
             AGG_PREDICTIONS_FILE = agg_pred_file, RUN_INDEX = i, SEED = s,
             y_true = yi, methods = c("avg","wavg","vote_soft","vote_hard"),
             weight_column = "tuned_f1", use_tuned_threshold_for_vote = TRUE,
@@ -2096,7 +2127,7 @@ if(train) {
         if (isTRUE(test)) {
           for (k in seq_len(K)) {
             ENV_META_NAME <- resolve_env_meta(k, "main", num_temp_iterations)
-            ddesonn_predict_eval(
+            DDESONN_predict_eval(
               LOAD_FROM_RDS = FALSE, ENV_META_NAME = ENV_META_NAME, INPUT_SPLIT = "test",
               CLASSIFICATION_MODE = CLASSIFICATION_MODE, RUN_INDEX = i, SEED = s,
               OUTPUT_DIR = RUN_DIR, SAVE_METRICS_RDS = FALSE, METRICS_PREFIX = "metrics_test",
@@ -2108,9 +2139,23 @@ if(train) {
           ## >>> FIX: normalize agg file so fuser never sees "no entries"
           .fix_agg_layout_for_fuser(agg_pred_file, run_index = i, seed = s, split = "test", mode = CLASSIFICATION_MODE)
           
+          ## >>> NEW: post-filter ensemble TEST agg metrics (uses .filter_flat_metric_names)
+          if (file.exists(agg_metrics_file)) {
+            df <- try(readRDS(agg_metrics_file), silent = TRUE)
+            if (!inherits(df, "try-error") && is.data.frame(df) && NROW(df)) {
+              nms <- names(df)
+              keep_map  <- setNames(as.list(rep(TRUE, length(nms))), nms)
+              kept_list <- .filter_flat_metric_names(keep_map)
+              keep_nms  <- names(kept_list)
+              df <- df[, intersect(keep_nms, names(df)), drop = FALSE]
+              names(df) <- sub("^(performance_metric|relevance_metric)\\.", "", names(df))
+              saveRDS(df, agg_metrics_file)
+            }
+          }
+          
           if (num_networks > 1L) {
             yi <- get0("y_test", inherits=TRUE, ifnotfound=NULL); stopifnot(!is.null(yi))
-            fused <- ddesonn_fuse_from_agg(
+            fused <- DDESONN_fuse_from_agg(
               AGG_PREDICTIONS_FILE = agg_pred_file, RUN_INDEX = i, SEED = s,
               y_true = yi, methods = c("avg","wavg","vote_soft","vote_hard"),
               weight_column = "tuned_f1", use_tuned_threshold_for_vote = TRUE,
@@ -2247,6 +2292,7 @@ if(train) {
       cat("Reindexed (by serial) AGG file:", agg_path, " | rows=", nrow(df), "\n")
     }
   }
+  
   
   
 

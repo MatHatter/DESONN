@@ -1556,21 +1556,21 @@ confusion_matrix <- function(SONN, labels, CLASSIFICATION_MODE, predicted_output
 # Global threshold helpers
 # =========================
 
-ddesonn_set_threshold <- function(value) {
+DDESONN_set_threshold <- function(value) {
   if (!is.numeric(value) || length(value) != 1L || !is.finite(value) || value <= 0 || value >= 1) {
-    stop("[ddesonn_set_threshold] value must be a single numeric in (0,1).")
+    stop("[DDESONN_set_threshold] value must be a single numeric in (0,1).")
   }
   .GlobalEnv$DESONN_THRESHOLDS <- list(binary = as.numeric(value))
   invisible(TRUE)
 }
 
-ddesonn_get_threshold <- function(default = NA_real_) {
+DDESONN_get_threshold <- function(default = NA_real_) {
   x <- get0("DDESONN_THRESHOLDS", envir = .GlobalEnv, inherits = FALSE)
   if (is.null(x) || is.null(x$binary)) return(default)
   as.numeric(x$binary)
 }
 
-ddesonn_clear_threshold <- function() {
+DDESONN_clear_threshold <- function() {
   if (exists("DDESONN_THRESHOLDS", envir = .GlobalEnv, inherits = FALSE)) {
     rm("DDESONN_THRESHOLDS", envir = .GlobalEnv)
   }
@@ -1670,7 +1670,7 @@ accuracy_precision_recall_f1_tuned <- function(
     p_pos <- as.numeric(P[,1])
     
     # --- Global threshold logic ---
-    global_th <- desonn_get_threshold(default = NA_real_)
+    global_th <- DDESONN_get_threshold(default = NA_real_)
     tuned_now <- FALSE
     
     if (is.na(global_th)) {
@@ -1704,7 +1704,7 @@ accuracy_precision_recall_f1_tuned <- function(
           best <- list(th=th, score=score)
         }
       }
-      desonn_set_threshold(best$th)
+      DDESONN_set_threshold(best$th)
       global_th <- best$th
       tuned_now <- TRUE
       dbg(sprintf("[accuracy_precision_recall_f1_tuned] Tuned global threshold = %.4f (metric=%s)",
