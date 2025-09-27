@@ -1,5 +1,5 @@
 # ===============================================================
-# DeepDynamic — DDDESONN
+# DeepDynamic — DDESONN
 # Deep Dynamic Ensemble Self-Organizing Neural Network
 # ---------------------------------------------------------------
 # Copyright (c) 2024-2025 Mathew William Fok
@@ -8,7 +8,7 @@
 # Commercial use, redistribution, or incorporation into any
 # profit-seeking product or service is strictly prohibited.
 #
-# This license applies to all versions of DeepDynamic/DDDESONN,
+# This license applies to all versions of DeepDynamic/DDESONN,
 # past, present, and future, including legacy releases.
 #
 # Intended future distribution: CRAN package.
@@ -128,7 +128,7 @@ make_fname_prefix <- function(do_ensemble,
                               ensemble_number = NULL,
                               model_index = NULL,
                               who) {
-  if (missing(who) || !nzchar(who)) stop("'who' must be 'SONN' or 'DDESONN'")
+  if (missing(who) || !nzchar(who)) stop("'who' must be 'SONN' or 'DESONN'")
   who <- toupper(who)
   
   if (is.null(total_models))
@@ -146,7 +146,7 @@ make_fname_prefix <- function(do_ensemble,
   if (isTRUE(do_ensemble)) {
     return(function(base_name) {
       paste0(
-        "DDESONN", if (!is.na(ens)) paste0("_", ens),    # omit if NA
+        "DESONN", if (!is.na(ens)) paste0("_", ens),    # omit if NA
         "_SONN",  if (!is.na(mod)) paste0("_", mod),
         "_", base_name
       )
@@ -159,7 +159,7 @@ make_fname_prefix <- function(do_ensemble,
         prefix <- if (!is.na(mod)) sprintf("SONN_%dof%d_", mod, tot) else sprintf("SONN_of%d_", tot)
         paste0(prefix, base_name)
       })
-    } else if (who == "DDESONN") {
+    } else if (who == "DESONN") {
       return(function(base_name) paste0(sprintf("SONN_%d-%d_", 1L, tot), base_name))
     } else {
       stop("invalid 'who'")
@@ -199,7 +199,7 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
   
   if (is.null(grad_matrix)) stop("Missing gradient matrix")
   
-  # FIXED: Don't double-index
+  # ✅ FIXED: Don't double-index
   param_list <- params
   
   param <- param_list$param
@@ -268,122 +268,6 @@ lookahead_update <- function(params, grads_list, lr, beta1, beta2, epsilon, look
   return(updated_params_list)
 }
 
-
-# train_with_l2_regularization helper before `if (train) {}`
-.extract_vec <- function(x) {
-  if (is.data.frame(x)) return(x[[1]])
-  if (is.matrix(x) || is.array(x)) {
-    if (ncol(x) == 1L) return(as.vector(x[,1]))
-    return(as.vector(x[,1]))
-  }
-  x
-}
-
-.align_len <- function(v, n) {
-  if (length(v) > n) v[seq_len(n)]
-  else if (length(v) < n) c(v, rep(NA, n - length(v)))
-  else v
-}
-
-.build_targets <- function(labels, n, K, CLASSIFICATION_MODE) {
-  lv <- .align_len(.extract_vec(labels), n)
-  cat("[dbg] targets: CLASSIFICATION_MODE =", CLASSIFICATION_MODE, "\n")
-  cat("[dbg] targets: labels class =", paste(class(labels), collapse=","), " | lv length =", length(lv), "\n")
-  
-  if (identical(CLASSIFICATION_MODE, "multiclass")) {
-    stopifnot(K >= 2)
-    if (is.matrix(labels) && nrow(labels) >= n && ncol(labels) == K &&
-        all(labels[seq_len(n), , drop=FALSE] %in% c(0,1))) {
-      Y <- matrix(as.numeric(labels[seq_len(n), , drop=FALSE]), n, K)
-      y_idx <- max.col(Y, ties.method = "first")
-      cat("[dbg] targets: using provided one-hot (n×K)\n")
-      return(list(Y=Y, y_idx=y_idx))
-    } else {
-      f <- if (is.factor(lv)) lv else factor(lv)
-      idx <- as.integer(f)
-      L <- nlevels(f)
-      if (L > K) {
-        cat(sprintf("[dbg] targets: L=%d > K=%d, truncating indices > K to K\n", L, K))
-        idx[idx > K] <- K
-      }
-      cat("[dbg] targets: factor levels L =", L, " | head idx =", paste(utils::head(idx,6), collapse=", "), "\n")
-      # use your global one_hot_from_ids
-      return(list(Y=one_hot_from_ids(idx, K, N=n), y_idx=idx))
-    }
-    
-  } else if (identical(CLASSIFICATION_MODE, "binary")) {
-    stopifnot(K == 1)
-    if (is.factor(lv)) {
-      y <- as.integer(lv) - 1L
-    } else {
-      y <- suppressWarnings(as.numeric(lv))
-      if (all(is.na(y))) { f <- factor(lv); y <- as.integer(f) - 1L }
-    }
-    y[is.na(y)] <- 0L
-    y <- pmin(pmax(as.numeric(y), 0), 1)
-    cat("[dbg] targets: binary y summary -> mean=", mean(y), " | sum=", sum(y), "\n")
-    return(list(y=y))
-    
-  } else if (identical(CLASSIFICATION_MODE, "regression")) {
-    cat("[dbg] targets: regression path | n=", n, " K=", K, "\n")
-    
-    if (is.matrix(labels) || is.data.frame(labels)) {
-      Ytmp <- suppressWarnings(matrix(as.numeric(as.matrix(labels)),
-                                      nrow = nrow(as.matrix(labels)),
-                                      ncol = ncol(as.matrix(labels))))
-    } else {
-      Ytmp <- suppressWarnings(matrix(as.numeric(lv), nrow = length(lv), ncol = 1L))
-    }
-    
-    if (all(is.na(Ytmp))) {
-      cat("[dbg] targets: all NA after coercion; filling zeros\n")
-      Ytmp <- matrix(0, nrow = max(1L, nrow(Ytmp)), ncol = max(1L, ncol(Ytmp)))
-    }
-    
-    # conform rows
-    if (nrow(Ytmp) > n) {
-      Ytmp <- Ytmp[seq_len(n), , drop = FALSE]
-    } else if (nrow(Ytmp) < n) {
-      add <- n - nrow(Ytmp)
-      last_row <- if (nrow(Ytmp) >= 1) Ytmp[nrow(Ytmp), , drop = FALSE] else matrix(0, 1, max(1L, ncol(Ytmp)))
-      Ytmp <- rbind(Ytmp, do.call(rbind, replicate(add, last_row, simplify = FALSE)))
-    }
-    # conform cols
-    if (ncol(Ytmp) > K) {
-      Ytmp <- Ytmp[, seq_len(K), drop = FALSE]
-    } else if (ncol(Ytmp) < K) {
-      if (ncol(Ytmp) == 0L) Ytmp <- matrix(0, nrow = nrow(Ytmp), ncol = 1L)
-      col_map <- rep(seq_len(ncol(Ytmp)), length.out = K)
-      Ytmp <- Ytmp[, col_map, drop = FALSE]
-    }
-    
-    storage.mode(Ytmp) <- "double"
-    cat("[dbg] targets: regression Y dim ->", paste(dim(Ytmp), collapse="x"),
-        " | summary mean=", mean(Ytmp), "\n")
-    
-    # provide both Y and y for downstream compatibility
-    return(list(Y = Ytmp, y = as.numeric(Ytmp[,1])))
-    
-  } else {
-    stop("Unknown CLASSIFICATION_MODE. Use 'multiclass', 'binary', or 'regression'.")
-  }
-}
-
-.bce_loss <- function(p, y, eps=1e-12) {
-  p <- pmin(pmax(as.numeric(p), eps), 1 - eps)
-  y <- pmin(pmax(as.numeric(y), 0), 1)
-  val <- mean(-(y*log(p) + (1-y)*log(1-p)))
-  if (!is.finite(val)) val <- NA_real_
-  val
-}
-
-.ce_loss_multiclass <- function(P, Y, eps=1e-12) {
-  P <- pmin(pmax(as.matrix(P), eps), 1 - eps)  # n×K
-  if (is.vector(Y)) Y <- one_hot_from_ids(as.integer(Y), K=ncol(P), N=nrow(P))
-  val <- mean(-rowSums(Y * log(P)))
-  if (!is.finite(val)) val <- NA_real_
-  val
-}
 
 # =======================
 # PREDICT-ONLY HELPERS (for !train)
@@ -975,9 +859,9 @@ if (!exists(".run_predict", inherits = TRUE)) {
     custom_scale <- meta$custom_scale %||% NULL
     
     if (dbg) cat("[RUNPRED-DBG] meta names:", paste(names(meta), collapse=","), "\n")
-    activation_functions_p <- meta$activation_functions_predict %||%
-      (meta$model$activation_functions_predict %||% (meta$preprocessScaledData$activation_functions_predict %||% NULL))
-    if (is.null(activation_functions_predict)) {
+    activation_functions <- meta$activation_functions %||%
+      (meta$model$activation_functions %||% (meta$preprocessScaledData$activation_functions %||% NULL))
+    if (is.null(activation_functions)) {
       stop("[RUNPRED-ERR] activation_functions not found in meta.")
     }
     
@@ -1004,7 +888,7 @@ if (!exists(".run_predict", inherits = TRUE)) {
     }
     
     ## ---- Build a single-SONN wrapper and predict ----
-    main_model <- DDESONN$new(
+    main_model <- DESONN$new(
       num_networks    = num_networks,
       input_size      = input_size,
       hidden_sizes    = hidden_sizes,
@@ -1024,7 +908,7 @@ if (!exists(".run_predict", inherits = TRUE)) {
       Rdata   = X,
       weights = rec$weights,
       biases  = rec$biases,
-      activation_functions_predict = activation_functions_p,
+      activation_functions = activation_functions,
       verbose = vrb,
       debug   = dbg
     )
@@ -1070,7 +954,7 @@ if (!exists(".run_predict", inherits = TRUE)) {
 
 
 ##helpers for
-## if (!isTRUE(do_ensemble)) else {} in TestDDESONN.R
+## if (!isTRUE(do_ensemble)) else {} in TestDESONN.R
 
 ## ====== HELPERS (needed in both modes) ======
 is_real_serial <- function(x) is.character(x) && length(x) == 1 && !is.na(x) && nzchar(x)
@@ -1141,7 +1025,7 @@ get_metric_by_serial <- function(serial, metric_name) {
 ## =========================================================================================
 ## SINGLE-RUN MODE (no logs, no lineage, no temp/prune/add) — covers Scenario A & Scenario B
 ## =========================================================================================
-## if (!isTRUE(do_ensemble)) in TestDDESONN.R
+## if (!isTRUE(do_ensemble)) in TestDESONN.R
 
 `%||%` <- function(a, b) if (is.null(a) || !length(a)) b else a
 
@@ -1150,28 +1034,28 @@ ensemble_role <- function(ensemble_number) {
   if (is.na(ensemble_number) || ensemble_number <= 1L) "main" else "temp"
 }
 
-# Attach a DDESONN run into the top-level container in a consistent way
-attach_run_to_container <- function(ensembles_container, DDESONN_run) {
+# Attach a DESONN run into the top-level container in a consistent way
+attach_run_to_container <- function(ensembles_container, desonn_run) {
   stopifnot(is.list(ensembles_container))
-  role <- ensemble_role((DDESONN_run$ensemble_number %||% 0L))
+  role <- ensemble_role((desonn_run$ensemble_number %||% 0L))
   if (role == "main") {
     ensembles_container$main_ensemble <- ensembles_container$main_ensemble %||% list()
     # single-run: place at [[1]]; real ensembles can append
     if (length(ensembles_container$main_ensemble) == 0L) {
-      ensembles_container$main_ensemble[[1]] <- DDESONN_run
+      ensembles_container$main_ensemble[[1]] <- desonn_run
     } else {
-      ensembles_container$main_ensemble[[length(ensembles_container$main_ensemble) + 1L]] <- DDESONN_run
+      ensembles_container$main_ensemble[[length(ensembles_container$main_ensemble) + 1L]] <- desonn_run
     }
   } else {
     ensembles_container$temp_ensemble <- ensembles_container$temp_ensemble %||% list()
-    ensembles_container$temp_ensemble[[length(ensembles_container$temp_ensemble) + 1L]] <- DDESONN_run
+    ensembles_container$temp_ensemble[[length(ensembles_container$temp_ensemble) + 1L]] <- desonn_run
   }
   ensembles_container
 }
 
-# Get models inside a DDESONN run (SONN list) safely
-get_models <- function(DDESONN_run) {
-  x <- tryCatch(DDESONN_run$ensemble, error = function(...) NULL)
+# Get models inside a DESONN run (SONN list) safely
+get_models <- function(desonn_run) {
+  x <- tryCatch(desonn_run$ensemble, error = function(...) NULL)
   if (is.list(x)) x else list()
 }
 
@@ -1194,7 +1078,7 @@ print_ensembles_summary <- function(ensembles_container,
       "  • E = ensemble_number label (E=0 denotes single-run labeling).\n",
       "  • R lists are 1-based, so the single run lives at main_ensemble[[1]].\n",
       "  • Role: 'main' when E ∈ {0,1}; 'temp' when E ≥ 2.\n",
-      "  • 'models' = SONN models inside a DDESONN run.\n\n", sep = ""
+      "  • 'models' = SONN models inside a DESONN run.\n\n", sep = ""
     )
   }
   
@@ -2061,32 +1945,439 @@ optimizers_log_update <- function(
 }
 
 
-
-# filtering in the rds tables for Ensmble/SingleRun_Test/Train_Acc_Val_Metrics
-
-.filter_flat_metric_names <- function(flat) {
-  if (!length(flat)) return(flat)
-  L <- as.list(flat)
-  flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
-  nms  <- names(flat)
-  if (!length(nms)) return(flat)
-  
-  drop <- grepl("custom_relative_error_binned", nms, fixed = TRUE) |
-    grepl("grid_used", nms, fixed = TRUE) |
-    grepl("(^|\\.)details(\\.|$)", nms)
-  keep <- !drop
-  flat[keep]
-}
-
-.strip_metric_prefixes <- function(nm) {
-  sub("^(performance_metric|relevance_metric)\\.", "", nm)
-}
-
-
-
 #################################################################################################
-# MAIN TEST PREDICT-ONLY FUNCTION (compat writer for fuser)
+# MAIN TEST PREDICT-ONLY FUNCTION
 #################################################################################################
+    desonn_predict_eval <- function(
+    LOAD_FROM_RDS = FALSE,
+    ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
+    INPUT_SPLIT   = "test",
+    CLASSIFICATION_MODE,
+    RUN_INDEX,
+    SEED,
+    OUTPUT_DIR = "artifacts",
+    SAVE_METRICS_RDS = TRUE,
+    METRICS_PREFIX   = "metrics_test",
+    SAVE_PREDICTIONS_COLUMN_IN_RDS = get0("SAVE_PREDICTIONS_COLUMN_IN_RDS", inherits=TRUE, ifnotfound=FALSE),
+    AGG_PREDICTIONS_FILE = NULL,
+    AGG_METRICS_FILE     = NULL,
+    MODEL_SLOT           = 1L,
+    DEBUG                = TRUE,
+    OUT_DIR_ASSERT       = NULL            #$$$$$$$$$$$$$ NEW: proves exact folder was passed
+    ) {
+      ## ---------- debug helpers ----------
+      dcat <- function(..., .force = FALSE) if (isTRUE(DEBUG) || isTRUE(.force))
+        cat(sprintf("[DSE-DBG %s] ", format(Sys.time(), "%H:%M:%S")), paste0(..., collapse=""), "\n")
+      
+      dump_lengths <- function(lst, title="COL LENGTHS") {
+        nm <- names(lst); if (is.null(nm)) nm <- paste0("V", seq_along(lst))
+        lens <- vapply(lst, function(x) length(x), integer(1))
+        dcat(title, " → ", paste(paste0(nm, "=", lens), collapse=" | "))
+      }
+      
+      safe_df <- function(cols, nm="(unnamed df)") {
+        lens <- vapply(cols, length, integer(1))
+        if (!length(lens)) lens <- 0L
+        uq <- unique(lens)
+        if (length(uq) > 1L) {
+          dump_lengths(cols, paste0("safe_df(", nm, ") BAD-LENS"))
+          stop(sprintf("safe_df[%s]: different column lengths: %s",
+                       nm, paste(paste(names(cols), lens, sep="="), collapse=", ")))
+        }
+        # Promote NULL or length-0 to proper length-0 vector of a consistent type
+        L <- if (length(uq)) uq[1] else 0L
+        cols <- lapply(cols, function(x) {
+          if (is.null(x)) return(vector("logical", length = L))
+          if (length(x) == 0L && L > 0L) return(rep(NA, L))
+          x
+        })
+        data.frame(cols, stringsAsFactors = FALSE, check.names = TRUE)
+      }
+      
+      scalar_chr <- function(x) { #$$$$$$$$$$$$$ avoid length-0 character() traps
+        if (is.null(x) || length(x) == 0L) return(NA_character_)
+        as.character(x[[1]])
+      }
+      
+      `%||%` <- function(x, y) if (is.null(x)) y else x
+      r6 <- function(x) {
+        if (is.null(x)) return(NA_real_)
+        if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
+        suppressWarnings({ xn <- as.numeric(x[1]); if (!is.finite(xn)) return(NA_real_); round(xn, 6) })
+      }
+      
+      ## ---------- OUTPUT DIR + ASSERT ----------
+      out_norm <- normalizePath(OUTPUT_DIR, winslash = "/", mustWork = FALSE)
+      dcat("OUTPUT_DIR (given)=", OUTPUT_DIR, " | normalized=", out_norm)
+      if (!is.null(OUT_DIR_ASSERT)) {
+        assert_norm <- normalizePath(OUT_DIR_ASSERT, winslash = "/", mustWork = FALSE)
+        dcat("OUT_DIR_ASSERT (given)=", OUT_DIR_ASSERT, " | normalized=", assert_norm)
+        if (!identical(out_norm, assert_norm)) {
+          stop(sprintf("OUT_DIR_ASSERT mismatch:\n  OUTPUT_DIR=%s\n  ASSERT   =%s",
+                       out_norm, assert_norm))
+        }
+      }
+      if (!dir.exists(out_norm)) {
+        ok_dir <- dir.create(out_norm, recursive = TRUE, showWarnings = FALSE)
+        dcat("Created OUTPUT_DIR? ", ok_dir, " → ", out_norm)
+      } else {
+        dcat("OUTPUT_DIR exists: ", out_norm)
+      }
+      
+      ## ---------- config ----------
+      CLASSIFICATION_MODE <- tolower(CLASSIFICATION_MODE)
+      stopifnot(CLASSIFICATION_MODE %in% c("binary","multiclass","regression"))
+      CLASS_THRESHOLD <- as.numeric(get0("CLASS_THRESHOLD", inherits=TRUE, ifnotfound=0.5))
+      SONN         <- get0("SONN",     inherits=TRUE, ifnotfound=NULL)
+      verbose_flag <- isTRUE(get0("verbose", inherits=TRUE, ifnotfound=FALSE))
+      
+      dcat("CFG: split=", INPUT_SPLIT, " | mode=", CLASSIFICATION_MODE,
+           " | run=", RUN_INDEX, " | seed=", SEED, " | slot=", MODEL_SLOT, " | out=", out_norm)
+      
+      ## ---------- load meta ----------
+      if (LOAD_FROM_RDS) {
+        adir <- get0(".BM_DIR", inherits = TRUE, ifnotfound = "artifacts")
+        if (!dir.exists(adir)) stop(sprintf("Artifacts dir not found: %s", adir))
+        files <- list.files(adir, pattern = "\\.[Rr][Dd][Ss]$", full.names = TRUE, recursive = TRUE, include.dirs = FALSE)
+        patt <- sprintf("(?i)(?:^|_)%s_.*\\.[Rr][Dd][Ss]$", ENV_META_NAME)
+        hit  <- grepl(patt, basename(files), perl = TRUE)
+        if (!any(hit)) {
+          mm <- regexec("^Ensemble_(Main|Temp)_(\\d+)_model_(\\d+)_metadata$", ENV_META_NAME, perl = TRUE)
+          rs <- regmatches(ENV_META_NAME, mm)[[1]]
+          if (length(rs)) {
+            patt <- sprintf("(?i)(?:^|_)Ensemble_%s_%s_model_%s_metadata_.*\\.[Rr][Dd][Ss]$", rs[2], rs[3], rs[4])
+            hit  <- grepl(patt, basename(files), perl = TRUE)
+          }
+        }
+        if (!any(hit)) stop("No RDS metadata found matching ", ENV_META_NAME, " in '", adir, "'.")
+        cand <- files[hit]; info <- file.info(cand)
+        file <- cand[order(info$mtime, decreasing = TRUE)][1L]
+        meta <- readRDS(file); attr(meta, "artifact_path") <- file
+        dcat("LOAD meta: RDS → ", attr(meta, "artifact_path"))
+      } else {
+        if (!exists(ENV_META_NAME, inherits = TRUE)) stop("ENV meta object not found: ", ENV_META_NAME)
+        meta <- get(ENV_META_NAME, inherits = TRUE)
+        dcat("LOAD meta: ENV → ", ENV_META_NAME)
+      }
+      
+      ## ---------- select split ----------
+      sl <- tolower(INPUT_SPLIT)
+      if (sl == "test")            { Xi_raw <- meta$X_test;       yi_raw <- meta$y_test;       split_used <- "test" }
+      else if (sl == "validation") { Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation" }
+      else if (sl == "train")      { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
+      else {
+        Xi_raw <- meta$X_validation; yi_raw <- meta$y_validation; split_used <- "validation"
+        if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X_test; yi_raw <- meta$y_test; split_used <- "test" }
+        if (is.null(Xi_raw) || is.null(yi_raw)) { Xi_raw <- meta$X %||% meta$X_train; yi_raw <- meta$y %||% meta$y_train; split_used <- "train" }
+      }
+      if (is.null(Xi_raw) || is.null(yi_raw)) stop("Requested split not present in metadata: ", INPUT_SPLIT)
+      dcat(sprintf("SPLIT=%s | rows(X)=%s | cols(X)=%s", split_used, NROW(Xi_raw), NCOL(Xi_raw)))
+      
+      ## ---------- coerce + align ----------
+      .as_numeric_matrix_strict <- function(X, nm = "X") {
+        if (is.matrix(X) && is.numeric(X)) return(X)
+        if (is.vector(X) && !is.list(X)) { X <- matrix(X, ncol=1L); colnames(X) <- nm }
+        Xdf <- as.data.frame(X, stringsAsFactors=FALSE)
+        for (cc in names(Xdf)) {
+          col <- Xdf[[cc]]
+          if (is.list(col)) {
+            col <- vapply(col, function(x) {
+              if (is.null(x)) return(NA_real_)
+              if (is.list(x)) x <- unlist(x, recursive=TRUE, use.names=FALSE)
+              suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
+            }, numeric(1))
+          } else if (is.factor(col)) {
+            col <- as.numeric(as.character(col))
+          } else if (!is.numeric(col)) {
+            suppressWarnings(col <- as.numeric(col))
+          }
+          Xdf[[cc]] <- col
+        }
+        Xmat <- as.matrix(Xdf); storage.mode(Xmat) <- "double"
+        bad <- which(vapply(seq_len(ncol(Xmat)), function(j) !any(is.finite(Xmat[,j])), logical(1)))
+        if (length(bad)) stop(sprintf("[coerce:X] entirely non-numeric cols: %s", paste(colnames(Xmat)[bad], collapse=", ")))
+        Xmat
+      }
+      .as_numeric_vector_strict <- function(v, nm = "y") {
+        if (is.matrix(v)) { if (ncol(v) > 1L) stop(sprintf("[coerce:%s] matrix has %d cols (expect 1)", nm, ncol(v))); v <- v[,1L, drop=TRUE] }
+        if (is.data.frame(v)) { if (ncol(v) != 1L) stop(sprintf("[coerce:%s] data.frame has %d cols (expect 1)", nm, ncol(v))); v <- v[[1L]] }
+        if (is.list(v)) {
+          v <- vapply(v, function(x) {
+            if (is.null(x)) return(NA_real_)
+            if (is.list(x)) x <- unlist(x, recursive=TRUE, use.names=FALSE)
+            suppressWarnings(as.numeric(if (length(x)) x[1] else NA))
+          }, numeric(1))
+        }
+        if (is.factor(v)) v <- as.character(v)
+        if (!is.numeric(v)) suppressWarnings(v <- as.numeric(v))
+        if (!is.numeric(v)) stop(sprintf("[coerce:%s] cannot coerce to numeric", nm))
+        if (!length(v))    stop(sprintf("[coerce:%s] zero-length", nm))
+        v
+      }
+      
+      Xi <- .as_numeric_matrix_strict(Xi_raw, nm="X")
+      yi <- .as_numeric_vector_strict(yi_raw,  nm="y")
+      if (NROW(Xi_raw) != length(yi)) stop(sprintf("[LABEL-CHK] NROW(X)=%d vs len(y)=%d", NROW(Xi_raw), length(yi)))
+      
+      expected <- tryCatch({
+        nms <- meta$feature_names %||% meta$input_names %||% meta$colnames
+        if (is.null(nms)) colnames(Xi) else as.character(nms)
+      }, error=function(e) colnames(Xi))
+      miss <- setdiff(expected, colnames(Xi))
+      if (length(miss)) {
+        dcat("ALIGN: adding missing cols: ", paste(miss, collapse=", "))
+        Xi <- cbind(Xi, matrix(0, nrow=nrow(Xi), ncol=length(miss), dimnames=list(NULL, miss)))
+      }
+      Xi <- Xi[, expected, drop=FALSE]
+      dcat(sprintf("ALIGN: final X dims=%dx%d", nrow(Xi), ncol(Xi)))
+      
+      ## ---------- predict ----------
+      out <- .safe_run_predict(
+        X = Xi, meta = meta, model_index = 1L, ML_NN = TRUE,
+        verbose = isTRUE(get0("VERBOSE_RUNPRED", inherits=TRUE, ifnotfound=FALSE)),
+        debug   = isTRUE(get0("DEBUG_RUNPRED",   inherits=TRUE, ifnotfound=FALSE))
+      )
+      
+      .as_pred_matrix_local <- function(pred_obj, mode = c("binary","multiclass","regression")) {
+        mode <- match.arg(mode)
+        P <- if (is.list(pred_obj) && !is.null(pred_obj$predicted_output)) pred_obj$predicted_output else pred_obj
+        if (is.data.frame(P)) P <- as.matrix(P)
+        if (is.vector(P))     P <- matrix(as.numeric(P), ncol = 1L)
+        if (!is.matrix(P))    stop("[as_pred] Unsupported prediction object type.")
+        storage.mode(P) <- "double"
+        if (mode == "regression" && ncol(P) > 1L) P <- P[,1,drop=FALSE]
+        P
+      }
+      P_raw <- .as_pred_matrix_local(out, mode = if (CLASSIFICATION_MODE=="regression") "regression" else "binary")
+      if (is.null(colnames(P_raw))) colnames(P_raw) <- "pred"
+      dcat(sprintf("PRED: dims=%dx%d | mean=%.6f sd=%.6f | min=%.6f p50=%.6f max=%.6f",
+                   nrow(P_raw), ncol(P_raw), mean(P_raw), stats::sd(P_raw),
+                   suppressWarnings(min(P_raw)), suppressWarnings(as.numeric(stats::median(P_raw))),
+                   suppressWarnings(max(P_raw))))
+      
+      ## ---------- post-process ----------
+      if (CLASSIFICATION_MODE == "regression") {
+        P <- P_raw # (any inverse target transform already handled elsewhere in your pipeline)
+      } else if (CLASSIFICATION_MODE == "binary") {
+        P <- if (ncol(P_raw) == 1L) P_raw else {
+          mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex); matrix((ex/sm)[,2L], ncol=1L)
+        }
+      } else {
+        mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex); P <- ex / sm
+      }
+      base_n <- nrow(P)
+      dcat("POST: base_n(rows)=", base_n, " | P cols=", ncol(P))
+      
+      ## ---------- metrics ----------
+      yi_vec <- as.numeric(yi)
+      if (length(yi_vec) != base_n) {
+        dcat("WARN: yi_vec length != base_n; truncating to min.")
+        nmin <- min(length(yi_vec), base_n)
+        yi_vec <- yi_vec[seq_len(nmin)]
+        P     <- P[seq_len(nmin), , drop = FALSE]
+        base_n <- nmin
+      }
+      
+      acc <- prec <- rec <- f1s <- NA_real_; cm_base <- NULL
+      if (CLASSIFICATION_MODE == "binary" && base_n > 0) {
+        y_true <- if (all(yi_vec %in% c(0,1))) as.integer(yi_vec) else as.integer(yi_vec >= 0.5)
+        p_pos  <- as.numeric(P[,1]); thr <- CLASS_THRESHOLD
+        yhat   <- as.integer(p_pos >= thr)
+        TP <- sum(yhat==1 & y_true==1); FP <- sum(yhat==1 & y_true==0)
+        TN <- sum(yhat==0 & y_true==0); FN <- sum(yhat==0 & y_true==1)
+        acc <- (TP + TN) / length(y_true)
+        prec <- if ((TP+FP)>0) TP/(TP+FP) else 0
+        rec  <- if ((TP+FN)>0) TP/(TP+FN) else 0
+        f1s  <- if ((prec+rec)>0) 2*prec*rec/(prec+rec) else 0
+        cm_base <- list(TP=TP, FP=FP, TN=TN, FN=FN)
+      } else if (CLASSIFICATION_MODE == "multiclass" && base_n > 0) {
+        yhat <- max.col(P, ties.method="first")
+        ymc  <- if (is.matrix(yi_raw) && !is.null(ncol(yi_raw)) && ncol(yi_raw)>1) max.col(yi_raw, "first") else as.integer(yi_vec)
+        acc  <- mean(yhat == ymc)
+        K <- max(yhat, ymc, na.rm=TRUE)
+        macro_prec <- macro_rec <- macro_f1 <- numeric(K)
+        for (k in seq_len(K)) {
+          TPk <- sum(yhat==k & ymc==k)
+          FPk <- sum(yhat==k & ymc!=k)
+          FNk <- sum(yhat!=k & ymc==k)
+          pk <- if ((TPk+FPk)>0) TPk/(TPk+FPk) else 0
+          rk <- if ((TPk+FNk)>0) TPk/(TPk+FNk) else 0
+          fk <- if ((pk+rk)>0) 2*pk*rk/(pk+rk) else 0
+          macro_prec[k] <- pk; macro_rec[k] <- rk; macro_f1[k] <- fk
+        }
+        prec <- mean(macro_prec); rec <- mean(macro_rec); f1s <- mean(macro_f1)
+      }
+      dcat(sprintf("METR raw: acc=%.6f | prec=%.6f | rec=%.6f | f1=%.6f | base_n=%d",
+                   r6(acc), r6(prec), r6(rec), r6(f1s), base_n))
+      
+      # regression-style (NA-safe, optional)
+      mse_val   <- tryCatch(MSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
+      mae_val   <- tryCatch(MAE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
+      rmse_val  <- tryCatch(RMSE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
+      r2_val    <- tryCatch(R2(SONN, Xi, yi_vec, "regression", P, verbose_flag),   error=function(e) NA_real_)
+      mape_val  <- tryCatch(MAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
+      smape_val <- tryCatch(SMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),error=function(e) NA_real_)
+      wmape_val <- tryCatch(WMAPE(SONN, Xi, yi_vec, "regression", P, verbose_flag),error=function(e) NA_real_)
+      mase_val  <- tryCatch(MASE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
+      
+      tuned <- tryCatch(
+        accuracy_precision_recall_f1_tuned(
+          SONN = SONN, Rdata = Xi, labels = yi_vec,
+          CLASSIFICATION_MODE = CLASSIFICATION_MODE, predicted_output = P,
+          metric_for_tuning = get0("METRIC_FOR_TUNING", inherits=TRUE, ifnotfound="accuracy"),
+          threshold_grid    = get0("THRESHOLD_GRID",    inherits=TRUE, ifnotfound=seq(0.05,0.95,by=0.01)),
+          verbose = isTRUE(get0("TUNED_VERBOSE", inherits=TRUE, ifnotfound=FALSE))
+        ),
+        error=function(e) {
+          dcat("tuned() failed: ", conditionMessage(e))
+          list(accuracy=NA_real_, precision=NA_real_, recall=NA_real_, f1=NA_real_,
+               confusion_matrix=NULL, details=list(best_threshold=NA_real_, tuned_by="error"))
+        }
+      )
+      dcat(sprintf("METR tuned: thr=%s | f1=%s | acc=%s | rmse=%s",
+                   r6(tuned$details$best_threshold), r6(tuned$f1), r6(tuned$accuracy), r6(rmse_val)))
+      
+      ## ---------- flatten row ----------
+      performance_metric <- list(
+        quantization_error    = NA_real_,
+        topographic_error     = NA_real_,
+        clustering_quality_db = NA_real_,
+        MSE   = r6(mse_val),  MAE = r6(mae_val),  RMSE = r6(rmse_val),  R2   = r6(r2_val),
+        MAPE  = r6(mape_val), SMAPE = r6(smape_val), WMAPE = r6(wmape_val), MASE = r6(mase_val),
+        accuracy  = r6(acc), precision = r6(prec), recall = r6(rec), f1_score = r6(f1s),
+        confusion_matrix = cm_base,
+        accuracy_precision_recall_f1_tuned = tuned,
+        speed = NA_real_, speed_learn = NA_real_, memory_usage = NA_real_, robustness = NA_real_,
+        custom_relative_error_binned = NA
+      )
+      relevance_metric <- list(
+        hit_rate=NA_real_, ndcg=NA_real_, diversity=NA_real_, serendipity=NA_real_,
+        precision_boolean=NA_real_, recall=NA_real_, f1_score=NA_real_, mean_precision=NA_real_,
+        novelty=NA_real_
+      )
+      
+      flat <- tryCatch(
+        rapply(list(performance_metric=performance_metric, relevance_metric=relevance_metric),
+               f=function(z) z, how="unlist"),
+        error=function(e) setNames(vector("list",0L), character(0))
+      )
+      if (length(flat)) {
+        L <- as.list(flat)
+        flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
+      }
+      nms <- names(flat)
+      if (length(nms)) {
+        drop <- grepl("custom_relative_error_binned", nms, fixed=TRUE) |
+          grepl("grid_used", nms, fixed=TRUE) |
+          grepl("(^|\\.)details(\\.|$)", nms)
+        keep <- !drop & !is.na(flat)
+        flat <- flat[keep]; nms <- names(flat)
+      }
+      
+      # metrics row (length-1 columns only)
+      base_cols <- list(run_index = as.integer(RUN_INDEX), seed = as.integer(SEED))
+      if (length(flat)) for (j in seq_along(flat)) {
+        val <- suppressWarnings(as.numeric(flat[[j]]))
+        base_cols[[ make.names(names(flat)[j]) ]] <- if (!is.na(val)) val else as.character(flat[[j]])[1]
+      }
+      row_df <- safe_df(base_cols, "row_df")
+      row_df$model_slot <- as.integer(MODEL_SLOT)
+      dcat("ROW-DF built OK; nrow=", nrow(row_df), " ncol=", ncol(row_df))
+      
+      ## ---------- compact results (all scalars, no length-0) ----------
+      pred_hash <- tryCatch({
+        ss <- min(nrow(P), 2000); if (ss == 0) NA_character_ else {
+          if (!requireNamespace("digest", quietly = TRUE)) NA_character_
+          else digest::digest(round(P[seq_len(ss), , drop=FALSE], 6), algo="xxhash64")
+        }
+      }, error=function(e) NA_character_)
+      
+      results_df <- safe_df(list(
+        kind = if (LOAD_FROM_RDS) "RDS" else "ENV",
+        ens  = 0L,
+        model = as.integer(MODEL_SLOT),
+        split_used = scalar_chr(split_used),
+        n_pred_rows = as.integer(base_n),
+        accuracy = r6(acc),
+        precision = r6(prec),
+        recall = r6(rec),
+        f1 = r6(f1s),
+        tuned_threshold = r6(tuned$details$best_threshold),
+        tuned_accuracy  = r6(tuned$accuracy),
+        tuned_precision = r6(tuned$precision),
+        tuned_recall    = r6(tuned$recall),
+        tuned_f1        = r6(tuned$f1),
+        MSE = r6(mse_val), MAE = r6(mae_val), RMSE = r6(rmse_val), R2 = r6(r2_val),
+        pred_sig = scalar_chr(pred_hash),
+        model_rds = scalar_chr(attr(meta, "artifact_path")),      #$$$$$$$$$$$$$
+        artifact_used = scalar_chr(get0(".BM_DIR", inherits=TRUE, ifnotfound = NA_character_))  #$$$$$$$$$$$$$
+      ), "results_df")
+      dcat("RESULTS-DF OK")
+      
+      ## ---------- write artifacts (inside OUTPUT_DIR only) ----------
+      ts_now <- format(Sys.time(), "%Y%m%d_%H%M%S")
+      per_seed_metrics_path <- file.path(
+        out_norm,
+        sprintf("%s_run%03d_seed%s_%s_slot%d.rds",
+                METRICS_PREFIX, as.integer(RUN_INDEX), as.character(SEED), ts_now, as.integer(MODEL_SLOT))
+      )
+      dcat("WRITE paths: per_seed_metrics_path=", per_seed_metrics_path,
+           " | AGG_METRICS_FILE=", AGG_METRICS_FILE %||% "<NULL>",
+           " | AGG_PREDICTIONS_FILE=", AGG_PREDICTIONS_FILE %||% "<NULL>")
+      
+      if (isTRUE(SAVE_METRICS_RDS) && is.null(AGG_METRICS_FILE)) {
+        saveRDS(row_df, per_seed_metrics_path)
+        dcat("WRITE per-seed metrics OK")
+      }
+      
+      if (!is.null(AGG_METRICS_FILE) && nzchar(AGG_METRICS_FILE)) {
+        agg_tbl <- if (file.exists(AGG_METRICS_FILE)) readRDS(AGG_METRICS_FILE) else NULL
+        if (is.null(agg_tbl)) {
+          agg_tbl <- row_df
+        } else {
+          x <- agg_tbl; y <- row_df
+          for (m in setdiff(names(y), names(x))) x[[m]] <- NA
+          for (m in setdiff(names(x), names(y))) y[[m]] <- NA
+          ord <- union(names(x), names(y))
+          agg_tbl <- rbind(x[, ord, drop = FALSE], y[, ord, drop = FALSE])
+        }
+        saveRDS(agg_tbl, AGG_METRICS_FILE)
+        dcat("WRITE agg metrics append OK")
+      }
+      
+      if (!is.null(AGG_PREDICTIONS_FILE) && nzchar(AGG_PREDICTIONS_FILE)) {
+        pred_cols <- list(
+          run_index = rep_len(as.integer(RUN_INDEX), base_n),
+          seed      = rep_len(as.integer(SEED),      base_n),
+          model_slot= rep_len(as.integer(MODEL_SLOT),base_n),
+          y_true    = if (base_n) yi_vec else numeric(0),
+          y_prob    = if (base_n) as.numeric(P[,1]) else numeric(0)
+        )
+        if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
+          pred_cols$y_prob_full <- if (base_n) I(split(P, row(P)[,1])) else I(list())
+        }
+        pred_df <- safe_df(pred_cols, "pred_df")
+        if (base_n > 0L) {
+          agg_pred <- if (file.exists(AGG_PREDICTIONS_FILE)) readRDS(AGG_PREDICTIONS_FILE) else NULL
+          agg_pred <- if (is.null(agg_pred)) pred_df else rbind(agg_pred, pred_df)
+          saveRDS(agg_pred, AGG_PREDICTIONS_FILE)
+          dcat("WRITE agg preds append OK: +", nrow(pred_df), " rows")
+        } else {
+          dcat("WRITE agg preds: base_n=0 → nothing to append")
+        }
+      }
+      
+      invisible(list(
+        results_compact = results_df,
+        metrics_row     = row_df,
+        probs           = P,
+        split_used      = split_used,
+        out_dir         = out_norm,
+        n_rows          = base_n
+      ))
+    }
+
+
 DDESONN_predict_eval <- function(
     LOAD_FROM_RDS = FALSE,
     ENV_META_NAME = "Ensemble_Main_0_model_1_metadata",
@@ -2097,26 +2388,33 @@ DDESONN_predict_eval <- function(
     OUTPUT_DIR = "artifacts",
     SAVE_METRICS_RDS = TRUE,
     METRICS_PREFIX   = "metrics_test",
-    SAVE_PREDICTIONS_COLUMN_IN_RDS = TRUE,  # force-on
+    SAVE_PREDICTIONS_COLUMN_IN_RDS = get0("SAVE_PREDICTIONS_COLUMN_IN_RDS", inherits=TRUE, ifnotfound=FALSE),
     AGG_PREDICTIONS_FILE = NULL,
     AGG_METRICS_FILE     = NULL,
     MODEL_SLOT           = 1L,
     DEBUG                = TRUE,
-    OUT_DIR_ASSERT       = NULL
+    OUT_DIR_ASSERT       = NULL            #$$$$$$$$$$$$$ NEW: proves exact folder was passed
 ) {
   ## ---------- debug helpers ----------
   dcat <- function(..., .force = FALSE) if (isTRUE(DEBUG) || isTRUE(.force))
     cat(sprintf("[DSE-DBG %s] ", format(Sys.time(), "%H:%M:%S")), paste0(..., collapse=""), "\n")
+  
   dump_lengths <- function(lst, title="COL LENGTHS") {
     nm <- names(lst); if (is.null(nm)) nm <- paste0("V", seq_along(lst))
     lens <- vapply(lst, function(x) length(x), integer(1))
     dcat(title, " → ", paste(paste0(nm, "=", lens), collapse=" | "))
   }
+  
   safe_df <- function(cols, nm="(unnamed df)") {
-    lens <- vapply(cols, length, integer(1)); if (!length(lens)) lens <- 0L
-    uq <- unique(lens); if (length(uq) > 1L) { dump_lengths(cols, paste0("safe_df(", nm, ") BAD-LENS"))
+    lens <- vapply(cols, length, integer(1))
+    if (!length(lens)) lens <- 0L
+    uq <- unique(lens)
+    if (length(uq) > 1L) {
+      dump_lengths(cols, paste0("safe_df(", nm, ") BAD-LENS"))
       stop(sprintf("safe_df[%s]: different column lengths: %s",
-                   nm, paste(paste(names(cols), lens, sep="="), collapse=", "))) }
+                   nm, paste(paste(names(cols), lens, sep="="), collapse=", ")))
+    }
+    # Promote NULL or length-0 to proper length-0 vector of a consistent type
     L <- if (length(uq)) uq[1] else 0L
     cols <- lapply(cols, function(x) {
       if (is.null(x)) return(vector("logical", length = L))
@@ -2125,25 +2423,17 @@ DDESONN_predict_eval <- function(
     })
     data.frame(cols, stringsAsFactors = FALSE, check.names = TRUE)
   }
-  scalar_chr <- function(x) { if (is.null(x) || length(x) == 0L) return(NA_character_); as.character(x[[1]]) }
+  
+  scalar_chr <- function(x) { #$$$$$$$$$$$$$ avoid length-0 character() traps
+    if (is.null(x) || length(x) == 0L) return(NA_character_)
+    as.character(x[[1]])
+  }
+  
   `%||%` <- function(x, y) if (is.null(x)) y else x
   r6 <- function(x) {
     if (is.null(x)) return(NA_real_)
     if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
     suppressWarnings({ xn <- as.numeric(x[1]); if (!is.finite(xn)) return(NA_real_); round(xn, 6) })
-  }
-  append_rds_df <- function(path, new_df) {
-    old <- if (file.exists(path)) try(readRDS(path), silent = TRUE) else NULL
-    if (inherits(old, "try-error") || !is.data.frame(old)) old <- NULL
-    if (is.null(old)) {
-      out <- new_df
-    } else {
-      common <- union(names(old), names(new_df))
-      for (m in setdiff(common, names(old)))    old[[m]]    <- NA
-      for (m in setdiff(common, names(new_df))) new_df[[m]] <- NA
-      out <- rbind(old[, common, drop=FALSE], new_df[, common, drop=FALSE])
-    }
-    saveRDS(out, path)
   }
   
   ## ---------- OUTPUT DIR + ASSERT ----------
@@ -2152,16 +2442,25 @@ DDESONN_predict_eval <- function(
   if (!is.null(OUT_DIR_ASSERT)) {
     assert_norm <- normalizePath(OUT_DIR_ASSERT, winslash = "/", mustWork = FALSE)
     dcat("OUT_DIR_ASSERT (given)=", OUT_DIR_ASSERT, " | normalized=", assert_norm)
-    if (!identical(out_norm, assert_norm)) stop(sprintf("OUT_DIR_ASSERT mismatch:\n  OUTPUT_DIR=%s\n  ASSERT   =%s", out_norm, assert_norm))
+    if (!identical(out_norm, assert_norm)) {
+      stop(sprintf("OUT_DIR_ASSERT mismatch:\n  OUTPUT_DIR=%s\n  ASSERT   =%s",
+                   out_norm, assert_norm))
+    }
   }
-  if (!dir.exists(out_norm)) dir.create(out_norm, recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(out_norm)) {
+    ok_dir <- dir.create(out_norm, recursive = TRUE, showWarnings = FALSE)
+    dcat("Created OUTPUT_DIR? ", ok_dir, " → ", out_norm)
+  } else {
+    dcat("OUTPUT_DIR exists: ", out_norm)
+  }
   
   ## ---------- config ----------
   CLASSIFICATION_MODE <- tolower(CLASSIFICATION_MODE)
   stopifnot(CLASSIFICATION_MODE %in% c("binary","multiclass","regression"))
   CLASS_THRESHOLD <- as.numeric(get0("CLASS_THRESHOLD", inherits=TRUE, ifnotfound=0.5))
-  SONN         <- get0("SONN", inherits=TRUE, ifnotfound=NULL)
+  SONN         <- get0("SONN",     inherits=TRUE, ifnotfound=NULL)
   verbose_flag <- isTRUE(get0("verbose", inherits=TRUE, ifnotfound=FALSE))
+  
   dcat("CFG: split=", INPUT_SPLIT, " | mode=", CLASSIFICATION_MODE,
        " | run=", RUN_INDEX, " | seed=", SEED, " | slot=", MODEL_SLOT, " | out=", out_norm)
   
@@ -2245,6 +2544,7 @@ DDESONN_predict_eval <- function(
     if (!length(v))    stop(sprintf("[coerce:%s] zero-length", nm))
     v
   }
+  
   Xi <- .as_numeric_matrix_strict(Xi_raw, nm="X")
   yi <- .as_numeric_vector_strict(yi_raw,  nm="y")
   if (NROW(Xi_raw) != length(yi)) stop(sprintf("[LABEL-CHK] NROW(X)=%d vs len(y)=%d", NROW(Xi_raw), length(yi)))
@@ -2287,7 +2587,7 @@ DDESONN_predict_eval <- function(
   
   ## ---------- post-process ----------
   if (CLASSIFICATION_MODE == "regression") {
-    P <- P_raw
+    P <- P_raw # (any inverse target transform already handled elsewhere in your pipeline)
   } else if (CLASSIFICATION_MODE == "binary") {
     P <- if (ncol(P_raw) == 1L) P_raw else {
       mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex); matrix((ex/sm)[,2L], ncol=1L)
@@ -2295,7 +2595,8 @@ DDESONN_predict_eval <- function(
   } else {
     mx <- apply(P_raw, 1, max); ex <- exp(P_raw - mx); sm <- rowSums(ex); P <- ex / sm
   }
-  base_n <- nrow(P); dcat("POST: base_n(rows)=", base_n, " | P cols=", ncol(P))
+  base_n <- nrow(P)
+  dcat("POST: base_n(rows)=", base_n, " | P cols=", ncol(P))
   
   ## ---------- metrics ----------
   yi_vec <- as.numeric(yi)
@@ -2310,7 +2611,7 @@ DDESONN_predict_eval <- function(
   acc <- prec <- rec <- f1s <- NA_real_; cm_base <- NULL
   if (CLASSIFICATION_MODE == "binary" && base_n > 0) {
     y_true <- if (all(yi_vec %in% c(0,1))) as.integer(yi_vec) else as.integer(yi_vec >= 0.5)
-    p_pos  <- as.numeric(P[,1]); thr <- as.numeric(get0("CLASS_THRESHOLD", inherits=TRUE, ifnotfound=0.5))
+    p_pos  <- as.numeric(P[,1]); thr <- CLASS_THRESHOLD
     yhat   <- as.integer(p_pos >= thr)
     TP <- sum(yhat==1 & y_true==1); FP <- sum(yhat==1 & y_true==0)
     TN <- sum(yhat==0 & y_true==0); FN <- sum(yhat==0 & y_true==1)
@@ -2336,9 +2637,10 @@ DDESONN_predict_eval <- function(
     }
     prec <- mean(macro_prec); rec <- mean(macro_rec); f1s <- mean(macro_f1)
   }
-  dcat(sprintf("METR raw: acc=%.6f | prec=%.6f | rec=%.6f | f1=%.6f | base_n=%d", r6(acc), r6(prec), r6(rec), r6(f1s), base_n))
+  dcat(sprintf("METR raw: acc=%.6f | prec=%.6f | rec=%.6f | f1=%.6f | base_n=%d",
+               r6(acc), r6(prec), r6(rec), r6(f1s), base_n))
   
-  ## ---------- regression-style (optional) ----------
+  # regression-style (NA-safe, optional)
   mse_val   <- tryCatch(MSE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
   mae_val   <- tryCatch(MAE(SONN, Xi, yi_vec, "regression", P, verbose_flag),  error=function(e) NA_real_)
   rmse_val  <- tryCatch(RMSE(SONN, Xi, yi_vec, "regression", P, verbose_flag), error=function(e) NA_real_)
@@ -2356,34 +2658,63 @@ DDESONN_predict_eval <- function(
       threshold_grid    = get0("THRESHOLD_GRID",    inherits=TRUE, ifnotfound=seq(0.05,0.95,by=0.01)),
       verbose = isTRUE(get0("TUNED_VERBOSE", inherits=TRUE, ifnotfound=FALSE))
     ),
-    error=function(e) list(accuracy=NA_real_, precision=NA_real_, recall=NA_real_, f1=NA_real_,
-                           confusion_matrix=NULL, details=list(best_threshold=NA_real_, tuned_by="error"))
+    error=function(e) {
+      dcat("tuned() failed: ", conditionMessage(e))
+      list(accuracy=NA_real_, precision=NA_real_, recall=NA_real_, f1=NA_real_,
+           confusion_matrix=NULL, details=list(best_threshold=NA_real_, tuned_by="error"))
+    }
   )
   dcat(sprintf("METR tuned: thr=%s | f1=%s | acc=%s | rmse=%s",
                r6(tuned$details$best_threshold), r6(tuned$f1), r6(tuned$accuracy), r6(rmse_val)))
   
   ## ---------- flatten row ----------
   performance_metric <- list(
-    MSE=r6(mse_val), MAE=r6(mae_val), RMSE=r6(rmse_val), R2=r6(r2_val),
-    MAPE=r6(mape_val), SMAPE=r6(smape_val), WMAPE=r6(wmape_val), MASE=r6(mase_val),
-    accuracy=r6(acc), precision=r6(prec), recall=r6(rec), f1_score=r6(f1s),
-    accuracy_precision_recall_f1_tuned=tuned
+    quantization_error    = NA_real_,
+    topographic_error     = NA_real_,
+    clustering_quality_db = NA_real_,
+    MSE   = r6(mse_val),  MAE = r6(mae_val),  RMSE = r6(rmse_val),  R2   = r6(r2_val),
+    MAPE  = r6(mape_val), SMAPE = r6(smape_val), WMAPE = r6(wmape_val), MASE = r6(mase_val),
+    accuracy  = r6(acc), precision = r6(prec), recall = r6(rec), f1_score = r6(f1s),
+    confusion_matrix = cm_base,
+    accuracy_precision_recall_f1_tuned = tuned,
+    speed = NA_real_, speed_learn = NA_real_, memory_usage = NA_real_, robustness = NA_real_,
+    custom_relative_error_binned = NA
   )
-  flat <- tryCatch(rapply(list(performance_metric=performance_metric), f=function(z) z, how="unlist"),
-                   error=function(e) setNames(vector("list",0L), character(0)))
+  relevance_metric <- list(
+    hit_rate=NA_real_, ndcg=NA_real_, diversity=NA_real_, serendipity=NA_real_,
+    precision_boolean=NA_real_, recall=NA_real_, f1_score=NA_real_, mean_precision=NA_real_,
+    novelty=NA_real_
+  )
+  
+  flat <- tryCatch(
+    rapply(list(performance_metric=performance_metric, relevance_metric=relevance_metric),
+           f=function(z) z, how="unlist"),
+    error=function(e) setNames(vector("list",0L), character(0))
+  )
   if (length(flat)) {
     L <- as.list(flat)
     flat <- flat[vapply(L, is.atomic, logical(1)) & lengths(L) == 1L]
-    flat <- flat[!is.na(flat)]
   }
+  nms <- names(flat)
+  if (length(nms)) {
+    drop <- grepl("custom_relative_error_binned", nms, fixed=TRUE) |
+      grepl("grid_used", nms, fixed=TRUE) |
+      grepl("(^|\\.)details(\\.|$)", nms)
+    keep <- !drop & !is.na(flat)
+    flat <- flat[keep]; nms <- names(flat)
+  }
+  
+  # metrics row (length-1 columns only)
   base_cols <- list(run_index = as.integer(RUN_INDEX), seed = as.integer(SEED))
   if (length(flat)) for (j in seq_along(flat)) {
     val <- suppressWarnings(as.numeric(flat[[j]]))
     base_cols[[ make.names(names(flat)[j]) ]] <- if (!is.na(val)) val else as.character(flat[[j]])[1]
   }
-  row_df <- safe_df(base_cols, "row_df"); row_df$model_slot <- as.integer(MODEL_SLOT)
+  row_df <- safe_df(base_cols, "row_df")
+  row_df$model_slot <- as.integer(MODEL_SLOT)
   dcat("ROW-DF built OK; nrow=", nrow(row_df), " ncol=", ncol(row_df))
   
+  ## ---------- compact results (all scalars, no length-0) ----------
   pred_hash <- tryCatch({
     ss <- min(nrow(P), 2000); if (ss == 0) NA_character_ else {
       if (!requireNamespace("digest", quietly = TRUE)) NA_character_
@@ -2393,9 +2724,14 @@ DDESONN_predict_eval <- function(
   
   results_df <- safe_df(list(
     kind = if (LOAD_FROM_RDS) "RDS" else "ENV",
-    ens = 0L, model = as.integer(MODEL_SLOT),
-    split_used = scalar_chr(split_used), n_pred_rows = as.integer(base_n),
-    accuracy = r6(acc), precision = r6(prec), recall = r6(rec), f1 = r6(f1s),
+    ens  = 0L,
+    model = as.integer(MODEL_SLOT),
+    split_used = scalar_chr(split_used),
+    n_pred_rows = as.integer(base_n),
+    accuracy = r6(acc),
+    precision = r6(prec),
+    recall = r6(rec),
+    f1 = r6(f1s),
     tuned_threshold = r6(tuned$details$best_threshold),
     tuned_accuracy  = r6(tuned$accuracy),
     tuned_precision = r6(tuned$precision),
@@ -2403,77 +2739,59 @@ DDESONN_predict_eval <- function(
     tuned_f1        = r6(tuned$f1),
     MSE = r6(mse_val), MAE = r6(mae_val), RMSE = r6(rmse_val), R2 = r6(r2_val),
     pred_sig = scalar_chr(pred_hash),
-    model_rds = scalar_chr(attr(meta, "artifact_path")),
-    artifact_used = scalar_chr(get0(".BM_DIR", inherits=TRUE, ifnotfound = NA_character_))
+    model_rds = scalar_chr(attr(meta, "artifact_path")),      #$$$$$$$$$$$$$
+    artifact_used = scalar_chr(get0(".BM_DIR", inherits=TRUE, ifnotfound = NA_character_))  #$$$$$$$$$$$$$
   ), "results_df")
   dcat("RESULTS-DF OK")
   
-  ## ---------- write metrics ----------
+  ## ---------- write artifacts (inside OUTPUT_DIR only) ----------
   ts_now <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  per_seed_metrics_path <- file.path(out_norm, sprintf(
-    "%s_run%03d_seed%s_%s_slot%d.rds", METRICS_PREFIX, as.integer(RUN_INDEX),
-    as.character(SEED), ts_now, as.integer(MODEL_SLOT)))
+  per_seed_metrics_path <- file.path(
+    out_norm,
+    sprintf("%s_run%03d_seed%s_%s_slot%d.rds",
+            METRICS_PREFIX, as.integer(RUN_INDEX), as.character(SEED), ts_now, as.integer(MODEL_SLOT))
+  )
   dcat("WRITE paths: per_seed_metrics_path=", per_seed_metrics_path,
        " | AGG_METRICS_FILE=", AGG_METRICS_FILE %||% "<NULL>",
        " | AGG_PREDICTIONS_FILE=", AGG_PREDICTIONS_FILE %||% "<NULL>")
+  
   if (isTRUE(SAVE_METRICS_RDS) && is.null(AGG_METRICS_FILE)) {
-    saveRDS(row_df, per_seed_metrics_path); dcat("WRITE per-seed metrics OK")
+    saveRDS(row_df, per_seed_metrics_path)
+    dcat("WRITE per-seed metrics OK")
   }
+  
   if (!is.null(AGG_METRICS_FILE) && nzchar(AGG_METRICS_FILE)) {
-    agg_tbl <- if (file.exists(AGG_METRICS_FILE)) try(readRDS(AGG_METRICS_FILE), silent=TRUE) else NULL
-    if (inherits(agg_tbl, "try-error") || !is.data.frame(agg_tbl)) agg_tbl <- NULL
-    if (is.null(agg_tbl)) agg_tbl <- row_df else {
+    agg_tbl <- if (file.exists(AGG_METRICS_FILE)) readRDS(AGG_METRICS_FILE) else NULL
+    if (is.null(agg_tbl)) {
+      agg_tbl <- row_df
+    } else {
       x <- agg_tbl; y <- row_df
       for (m in setdiff(names(y), names(x))) x[[m]] <- NA
       for (m in setdiff(names(x), names(y))) y[[m]] <- NA
-      ord <- union(names(x), names(y)); agg_tbl <- rbind(x[, ord, drop=FALSE], y[, ord, drop=FALSE])
+      ord <- union(names(x), names(y))
+      agg_tbl <- rbind(x[, ord, drop = FALSE], y[, ord, drop = FALSE])
     }
-    saveRDS(agg_tbl, AGG_METRICS_FILE); dcat("WRITE agg metrics append OK")
+    saveRDS(agg_tbl, AGG_METRICS_FILE)
+    dcat("WRITE agg metrics append OK")
   }
   
-  ## ---------- write predictions (with legacy aliases) ----------
-  agg_pred_norm <- if (!is.null(AGG_PREDICTIONS_FILE) && nzchar(AGG_PREDICTIONS_FILE))
-    normalizePath(AGG_PREDICTIONS_FILE, winslash = "/", mustWork = FALSE) else NULL
-  
-  if (!is.null(agg_pred_norm) && nzchar(agg_pred_norm)) {
-    y_prob_full_col <- if (base_n) I(split(P, row(P)[,1])) else I(list())
-    pred_df <- safe_df(list(
-      # canonical
-      run_index   = rep_len(as.integer(RUN_INDEX), base_n),
-      seed        = rep_len(as.integer(SEED),      base_n),
-      model_slot  = rep_len(as.integer(MODEL_SLOT),base_n),
-      split       = rep_len(scalar_chr(split_used), base_n),
-      mode        = rep_len(tolower(CLASSIFICATION_MODE), base_n),
-      y_true      = if (base_n) yi_vec else numeric(0),
-      y_prob      = if (base_n) as.numeric(P[,1]) else numeric(0),
-      y_prob_full = y_prob_full_col,
-      # legacy aliases many fusers expect
-      RUN_INDEX          = rep_len(as.integer(RUN_INDEX), base_n),
-      SEED               = rep_len(as.integer(SEED),      base_n),
-      MODEL_SLOT         = rep_len(as.integer(MODEL_SLOT),base_n),
-      SPLIT_USED         = rep_len(scalar_chr(split_used), base_n),
-      CLASSIFICATION_MODE= rep_len(toupper(CLASSIFICATION_MODE), base_n),
-      y_pred             = if (base_n) as.numeric(P[,1]) else numeric(0),
-      y_pred_full        = y_prob_full_col
-    ), "pred_df")
-    
+  if (!is.null(AGG_PREDICTIONS_FILE) && nzchar(AGG_PREDICTIONS_FILE)) {
+    pred_cols <- list(
+      run_index = rep_len(as.integer(RUN_INDEX), base_n),
+      seed      = rep_len(as.integer(SEED),      base_n),
+      model_slot= rep_len(as.integer(MODEL_SLOT),base_n),
+      y_true    = if (base_n) yi_vec else numeric(0),
+      y_prob    = if (base_n) as.numeric(P[,1]) else numeric(0)
+    )
+    if (isTRUE(SAVE_PREDICTIONS_COLUMN_IN_RDS)) {
+      pred_cols$y_prob_full <- if (base_n) I(split(P, row(P)[,1])) else I(list())
+    }
+    pred_df <- safe_df(pred_cols, "pred_df")
     if (base_n > 0L) {
-      append_rds_df(agg_pred_norm, pred_df)
-      chk <- try(readRDS(agg_pred_norm), silent = TRUE)
-      if (is.data.frame(chk)) {
-        dcat(sprintf("AGG-PREDS sanity: file=%s | nrow=%d | cols=%s",
-                     agg_pred_norm, nrow(chk), paste(names(chk), collapse=",")))
-        sel <- with(chk, run_index==as.integer(RUN_INDEX) & model_slot==as.integer(MODEL_SLOT) &
-                      split==scalar_chr(split_used) & mode==tolower(CLASSIFICATION_MODE))
-        dcat(sprintf("AGG-PREDS filter count (run=%s, slot=%s, split=%s, mode=%s): %d",
-                     RUN_INDEX, MODEL_SLOT, split_used, tolower(CLASSIFICATION_MODE), sum(sel, na.rm=TRUE)))
-        if (!any(sel)) {
-          dcat("AGG-PREDS WARN: no rows match filter; unique combos:", .force=TRUE)
-          dcat(capture.output(print(utils::head(unique(chk[,c('run_index','model_slot','split','mode')])))), .force=TRUE)
-        }
-      } else {
-        dcat("AGG-PREDS sanity: read-back failed.")
-      }
+      agg_pred <- if (file.exists(AGG_PREDICTIONS_FILE)) readRDS(AGG_PREDICTIONS_FILE) else NULL
+      agg_pred <- if (is.null(agg_pred)) pred_df else rbind(agg_pred, pred_df)
+      saveRDS(agg_pred, AGG_PREDICTIONS_FILE)
+      dcat("WRITE agg preds append OK: +", nrow(pred_df), " rows")
     } else {
       dcat("WRITE agg preds: base_n=0 → nothing to append")
     }
@@ -2485,7 +2803,6 @@ DDESONN_predict_eval <- function(
     probs           = P,
     split_used      = split_used,
     out_dir         = out_norm,
-    agg_pred_path   = agg_pred_norm,
     n_rows          = base_n
   ))
 }
@@ -2493,231 +2810,165 @@ DDESONN_predict_eval <- function(
 
 
 
-
-
-
 # ============================================================
 # Fuse predictions from an aggregate predictions RDS (per run/seed)
 # ============================================================
-DDESONN_fuse_from_agg <- function(
+desonn_fuse_from_agg <- function(
     AGG_PREDICTIONS_FILE,
     RUN_INDEX,
-    SEED = NULL,
-    y_true,
+    SEED,
+    y_true,                             # numeric 0/1 (binary). For multiclass, pass class ids 1..K
     methods = c("avg","wavg","vote_soft","vote_hard"),
-    weight_column = "tuned_f1",
+    weight_column = c("tuned_f1","f1","accuracy"),  # used for wavg
     use_tuned_threshold_for_vote = TRUE,
     default_threshold = 0.5,
-    classification_mode = c("binary","multiclass","regression"),
-    DEBUG = TRUE
+    vote_quorum = NULL,                 # NULL = majority
+    classification_mode = c("binary","multiclass","regression")
 ) {
-  dcat <- function(..., .force=FALSE) if (DEBUG || .force)
-    cat(sprintf("[FUSE-DBG %s] ", format(Sys.time(), "%H:%M:%S")), paste0(..., collapse=""), "\n")
-  nint <- function(x) suppressWarnings(as.integer(x))
-  nnum <- function(x) suppressWarnings(as.numeric(x))
-  nz   <- function(x) !is.null(x) && length(x) > 0
-  classification_mode <- tolower(match.arg(classification_mode))
-  need_binary <- classification_mode == "binary"
+  `%||%` <- function(x,y) if (is.null(x)) y else x
+  r6 <- function(x) ifelse(is.finite(x), round(x,6), NA_real_)
+  classification_mode <- match.arg(classification_mode)
+  weight_column <- match.arg(weight_column)
+  methods <- unique(match.arg(methods, several.ok = TRUE))
   
-  stopifnot(!is.null(AGG_PREDICTIONS_FILE), nzchar(AGG_PREDICTIONS_FILE))
-  dcat("AGG file:", normalizePath(AGG_PREDICTIONS_FILE, winslash="/", mustWork=FALSE))
-  
-  if (!file.exists(AGG_PREDICTIONS_FILE))
-    stop("Aggregate predictions file not found: ", AGG_PREDICTIONS_FILE)
-  
-  df <- try(readRDS(AGG_PREDICTIONS_FILE), silent=TRUE)
-  if (inherits(df,"try-error") || !is.data.frame(df) || !NROW(df)) {
+  stopifnot(file.exists(AGG_PREDICTIONS_FILE))
+  pack <- readRDS(AGG_PREDICTIONS_FILE)
+  if (is.null(pack$entries) || !length(pack$entries))
     stop("Aggregate predictions file has no entries; ensure SAVE_PREDICTIONS_COLUMN_IN_RDS=TRUE during eval.")
-  }
-  dcat("Loaded rows:", NROW(df), " | cols:", paste(names(df), collapse=","))
   
-  ## ---- Coalesce/normalize expected columns ----
-  if (!("run_index" %in% names(df))) {
-    if ("RUN_INDEX" %in% names(df)) df$run_index <- df$RUN_INDEX else df$run_index <- NA_integer_
-  }
-  if (!("seed" %in% names(df))) {
-    if ("SEED" %in% names(df)) df$seed <- df$SEED else df$seed <- NA_integer_
-  }
-  if (!("model_slot" %in% names(df))) {
-    if ("MODEL_SLOT" %in% names(df)) df$model_slot <- df$MODEL_SLOT
-    else if ("model" %in% names(df))  df$model_slot <- nint(df$model)
-    else df$model_slot <- NA_integer_
-  }
-  if (!("split" %in% names(df))) {
-    if ("SPLIT_USED" %in% names(df)) df$split <- df$SPLIT_USED
-    else if ("SPLIT" %in% names(df))   df$split <- df$SPLIT
-    else df$split <- NA_character_
-  }
-  df$split <- tolower(as.character(df$split))
-  if (!("mode" %in% names(df))) {
-    if ("CLASSIFICATION_MODE" %in% names(df)) df$mode <- df$CLASSIFICATION_MODE
-    else df$mode <- NA_character_
-  }
-  df$mode <- tolower(as.character(df$mode))
+  # --- filter entries for this (RUN_INDEX, SEED) ---
+  entries <- Filter(function(e) {
+    is.list(e) && identical(as.integer(e$run_index), as.integer(RUN_INDEX)) &&
+      identical(as.integer(e$seed), as.integer(SEED))
+  }, pack$entries)
   
-  have_prob <- "y_prob" %in% names(df)
-  have_full <- "y_prob_full" %in% names(df)
-  if (!have_prob && "y_pred" %in% names(df)) { df$y_prob <- nnum(df$y_pred); have_prob <- TRUE }
-  if (!have_full && "y_pred_full" %in% names(df)) { df$y_prob_full <- df$y_pred_full; have_full <- TRUE }
+  if (!length(entries)) stop("No entries for run=", RUN_INDEX, " seed=", SEED)
   
-  if (!("y_true" %in% names(df))) stop("agg preds missing 'y_true' column.")
-  if (!have_prob) stop("agg preds missing 'y_prob' (or legacy 'y_pred').")
-  
-  dcat("After coalesce → rows:", NROW(df),
-       " | uniq(run_index)=", paste(unique(df$run_index), collapse=","),
-       " | uniq(seed)=", paste(unique(df$seed), collapse=","),
-       " | uniq(split)=", paste(unique(df$split), collapse=","),
-       " | uniq(mode)=", paste(unique(df$mode), collapse=","))
-  
-  ## ---- Filters ----
-  sel <- rep(TRUE, NROW(df))
-  want_run <- as.integer(RUN_INDEX)
-  sel_run <- df$run_index == want_run
-  dcat("Filter(run_index==", want_run, ") →", sum(sel_run, na.rm=TRUE))
-  sel <- sel & sel_run
-  
-  if (!is.null(SEED) && !is.na(SEED)) {
-    want_seed <- as.integer(SEED)
-    sel_seed <- df$seed == want_seed
-    dcat("Filter(seed==", want_seed, ") →", sum(sel_seed, na.rm=TRUE))
-    sel <- sel & sel_seed
+  # --- collect predictions and per-slot metrics ---
+  # Each entry looks like: list(run_index, seed, model_slot, results_df, predictions = list(<ENV_VAR>=P))
+  # We assume classification_mode == "binary" → take 1st column as positive prob.
+  get_prob <- function(P) {
+    if (is.null(P) || !is.matrix(P) || nrow(P)==0) return(NULL)
+    if (ncol(P) == 1L) as.numeric(P[,1]) else as.numeric(P[,1])
   }
   
-  split_pref <- if ("test" %in% df$split) "test" else unique(df$split)[1]
-  sel_split <- df$split == split_pref
-  dcat("Filter(split=='", split_pref, "') → ", sum(sel_split, na.rm=TRUE), sep="")
-  sel <- sel & sel_split
+  probs_list <- list()
+  w_vec <- c()
+  thr_vec <- c()
+  slots <- integer(0)
   
-  mode_pref <- classification_mode
-  sel_mode <- df$mode == mode_pref
-  dcat("Filter(mode=='", mode_pref, "') → ", sum(sel_mode, na.rm=TRUE), sep="")
-  sel <- sel & sel_mode
-  
-  n_after <- sum(sel, na.rm=TRUE)
-  dcat("After ALL filters →", n_after, "rows")
-  
-  if (n_after == 0) {
-    dcat("Unique combos present (first few):")
-    dcat(capture.output(print(utils::head(unique(df[,c("run_index","seed","split","mode","model_slot")])))), .force=TRUE)
-    stop("Aggregate predictions file has no entries AFTER FILTERS. ",
-         "Check RUN_INDEX/SEED/split/mode normalization.")
-  }
-  
-  dff <- df[sel, , drop=FALSE]
-  
-  ## ---- Sanity ----
-  if (need_binary && !all(dff$y_true %in% c(0,1))) {
-    dcat("WARN: y_true not strictly binary; coercing via >=0.5")
-    dff$y_true <- as.integer(nnum(dff$y_true) >= 0.5)
-  }
-  if (!("model_slot" %in% names(dff))) stop("model slot missing after filters.")
-  
-  ## ---- Build per-model matrices ----
-  ord <- order(dff$model_slot, seq_len(NROW(dff)))
-  dff <- dff[ord, , drop=FALSE]
-  
-  split_by_model <- split(dff, dff$model_slot)
-  K <- length(split_by_model)
-  dcat("Models detected:", K, " | slots:", paste(sort(as.integer(names(split_by_model))), collapse=","))
-  
-  yt <- nnum(split_by_model[[1]]$y_true)
-  N <- length(yt)
-  Y_hat <- matrix(NA_real_, nrow=N, ncol=K)
-  colnames(Y_hat) <- paste0("slot", names(split_by_model))
-  
-  jj <- 0L
-  for (nm in names(split_by_model)) {
-    jj <- jj + 1L
-    blk <- split_by_model[[nm]]
-    if (length(blk$y_true) != N) {
-      dcat("WARN: length mismatch for slot ", nm, " | expected N=", N, " got ", length(blk$y_true))
-      N <- min(N, length(blk$y_true))
-      yt <- yt[seq_len(N)]
-      blk <- blk[seq_len(N), , drop=FALSE]
+  for (e in entries) {
+    if (is.null(e$predictions)) {
+      stop("Entry has no predictions payload. Re-run eval with SAVE_PREDICTIONS_COLUMN_IN_RDS=TRUE.")
     }
-    Y_hat[, jj] <- nnum(blk$y_prob)[seq_len(N)]
+    # predictions is a named list of matrices; we saved exactly one under ENV_META_NAME
+    P <- e$predictions[[1]]
+    p <- get_prob(P)
+    if (is.null(p)) next
+    
+    # slot id
+    k <- as.integer(e$model_slot %||% NA_integer_)
+    slots <- c(slots, k)
+    
+    # weights from results_df row (single row)
+    rd <- e$results_df
+    pick_col <- function(df, nm) {
+      cn <- names(df)
+      hit <- cn[tolower(cn) == tolower(nm)]
+      if (length(hit)) as.numeric(df[[hit[1]]]) else NA_real_
+    }
+    w <- switch(weight_column,
+                "tuned_f1" = pick_col(rd, "tuned_f1"),
+                "f1"       = pick_col(rd, "f1"),
+                "accuracy" = pick_col(rd, "accuracy")
+    )
+    w_vec <- c(w_vec, ifelse(is.finite(w), w, NA_real_))
+    
+    # per-slot tuned threshold (optional for vote)
+    tthr <- pick_col(rd, "tuned_threshold")
+    thr_vec <- c(thr_vec, ifelse(is.finite(tthr), tthr, default_threshold))
+    
+    probs_list[[length(probs_list)+1]] <- p
   }
   
-  ## ---- helpers ----
-  # Preserve matrix shape when thresholding
-  bin_pred <- function(p, thr) {
-    res <- p >= thr
-    # Coerce to integer 0/1 without dropping dims
-    storage.mode(res) <- "integer"
-    if (is.null(dim(res))) dim(res) <- c(length(res), 1L)
-    res
+  if (!length(probs_list)) stop("No usable prediction vectors in aggregate file.")
+  # Align lengths
+  lens <- vapply(probs_list, length, integer(1))
+  N <- min(lens)
+  probs_mat <- do.call(cbind, lapply(probs_list, function(v) v[1:N]))
+  y_true <- as.numeric(y_true)[1:N]
+  
+  # --- metrics helpers (binary) ---
+  bin_metrics <- function(p, y, thr=0.5) {
+    y01 <- as.integer(y > 0)
+    yhat <- as.integer(p >= thr)
+    TP <- sum(yhat==1 & y01==1); FP <- sum(yhat==1 & y01==0)
+    FN <- sum(yhat==0 & y01==1); TN <- sum(yhat==0 & y01==0)
+    acc <- mean(yhat==y01)
+    prec <- if ((TP+FP)>0) TP/(TP+FP) else 0
+    rec  <- if ((TP+FN)>0) TP/(TP+FN) else 0
+    f1   <- if ((prec+rec)>0) 2*prec*rec/(prec+rec) else 0
+    list(acc=r6(acc), precision=r6(prec), recall=r6(rec), f1=r6(f1), TP=TP, FP=FP, FN=FN, TN=TN)
   }
   
-  res <- list()
-  res$meta <- list(
-    n_rows = N, n_models = K, slots = as.integer(names(split_by_model)),
-    run_index = want_run, seed = if (is.null(SEED)) NA_integer_ else as.integer(SEED),
-    split = split_pref, mode = mode_pref,
-    path = normalizePath(AGG_PREDICTIONS_FILE, winslash="/", mustWork=FALSE)
-  )
+  out_rows <- list()
+  out_preds <- list()
   
-  ## ---- Fusion ----
+  # 1) AVG
   if ("avg" %in% methods) {
-    p_avg <- if (K == 1L) as.numeric(Y_hat[,1]) else rowMeans(Y_hat, na.rm=TRUE)
-    thr   <- if (use_tuned_threshold_for_vote && "tuned_threshold" %in% names(dff))
-      suppressWarnings(as.numeric(stats::median(dff$tuned_threshold, na.rm=TRUE))) else default_threshold
-    pr <- bin_pred(p_avg, thr)
-    pr <- as.integer(pr)  # ensure vector
-    TP <- sum(pr==1 & yt==1); FP <- sum(pr==1 & yt==0); FN <- sum(pr==0 & yt==1)
-    f1 <- if ((TP+FP)==0 || (TP+FN)==0) 0 else { prec<-TP/(TP+FP); rec<-TP/(TP+FN); 2*prec*rec/(prec+rec) }
-    res$avg <- list(probs=p_avg, thr=thr, acc=mean(pr==yt), f1=f1)
-    dcat("FUSE(avg): thr=", round(res$avg$thr,4), " | acc=", round(res$avg$acc,4), " | f1=", round(res$avg$f1,4))
+    p_avg <- rowMeans(probs_mat, na.rm = TRUE)
+    m <- if (classification_mode=="binary") bin_metrics(p_avg, y_true, default_threshold) else list()
+    out_rows[["Ensemble_avg"]] <- c(list(kind="Ensemble_avg", n=N, slots=paste(slots, collapse=",")), m)
+    out_preds[["Ensemble_avg"]] <- matrix(p_avg, ncol=1, dimnames=list(NULL, "pred"))
   }
   
+  # 2) WAVG
   if ("wavg" %in% methods) {
-    if (!(weight_column %in% names(dff))) {
-      dcat("WARN: weight_column '", weight_column, "' not found; falling back to equal weights", sep="")
-      w <- rep(1/K, K)
-    } else {
-      wdf <- aggregate(dff[[weight_column]], by=list(model_slot=dff$model_slot),
-                       FUN=function(z) suppressWarnings(as.numeric(stats::median(z, na.rm=TRUE))))
-      w <- nnum(wdf$x); w[!is.finite(w)] <- 0
-      if (length(w) != K) { w <- rep(1/K, K); dcat("WARN: weight aggregation mismatch; using equal weights")}
-      if (sum(w) == 0) w <- rep(1/K, K) else w <- w / sum(w)
+    ww <- ifelse(is.finite(w_vec), w_vec, 0)
+    if (sum(ww) == 0) ww[] <- 1
+    ww <- ww / sum(ww)
+    p_w <- as.numeric(probs_mat %*% ww)
+    m <- if (classification_mode=="binary") bin_metrics(p_w, y_true, default_threshold) else list()
+    out_rows[["Ensemble_wavg"]] <- c(list(kind="Ensemble_wavg", n=N, slots=paste(slots, collapse=","), weights=ww), m)
+    out_preds[["Ensemble_wavg"]] <- matrix(p_w, ncol=1, dimnames=list(NULL, "pred"))
+  }
+  
+  # 3) VOTE
+  if ("vote_soft" %in% methods || "vote_hard" %in% methods) {
+    use_thr <- if (isTRUE(use_tuned_threshold_for_vote)) thr_vec else rep(default_threshold, ncol(probs_mat))
+    vote_mat <- sweep(probs_mat, 2, use_thr, FUN = ">=") * 1L
+    # soft = fraction of votes in [0,1]
+    vote_frac <- rowMeans(vote_mat, na.rm = TRUE)
+    # hard = 1 if votes >= quorum
+    q <- vote_quorum %||% ceiling(ncol(probs_mat)/2)
+    vote_hard <- as.integer(rowSums(vote_mat, na.rm = TRUE) >= q)
+    
+    if ("vote_soft" %in% methods) {
+      m <- if (classification_mode=="binary") bin_metrics(vote_frac, y_true, default_threshold) else list()
+      out_rows[["Ensemble_vote_soft"]] <- c(list(kind="Ensemble_vote_soft", n=N, slots=paste(slots, collapse=","), quorum=q), m)
+      out_preds[["Ensemble_vote_soft"]] <- matrix(vote_frac, ncol=1, dimnames=list(NULL, "pred"))
     }
-    p_w <- if (K == 1L) as.numeric(Y_hat[,1]) else as.numeric(Y_hat %*% matrix(w, ncol=1))
-    thr <- if (use_tuned_threshold_for_vote && "tuned_threshold" %in% names(dff))
-      suppressWarnings(as.numeric(stats::median(dff$tuned_threshold, na.rm=TRUE))) else default_threshold
-    pr  <- as.integer(bin_pred(p_w, thr))
-    TP <- sum(pr==1 & yt==1); FP <- sum(pr==1 & yt==0); FN <- sum(pr==0 & yt==1)
-    f1 <- if ((TP+FP)==0 || (TP+FN)==0) 0 else { prec<-TP/(TP+FP); rec<-TP/(TP+FN); 2*prec*rec/(prec+rec) }
-    res$wavg <- list(probs=p_w, thr=thr, acc=mean(pr==yt), f1=f1, weights=w)
-    dcat("FUSE(wavg): thr=", round(thr,4), " | acc=", round(res$wavg$acc,4), " | f1=", round(res$wavg$f1,4),
-         " | w=", paste(round(w,3), collapse=","))
+    if ("vote_hard" %in% methods) {
+      m <- if (classification_mode=="binary") bin_metrics(as.numeric(vote_hard), y_true, default_threshold) else list()
+      out_rows[["Ensemble_vote_hard"]] <- c(list(kind="Ensemble_vote_hard", n=N, slots=paste(slots, collapse=","), quorum=q), m)
+      out_preds[["Ensemble_vote_hard"]] <- matrix(as.numeric(vote_hard), ncol=1, dimnames=list(NULL, "pred"))
+    }
   }
   
-  if ("vote_soft" %in% methods) {
-    thr <- if (use_tuned_threshold_for_vote && "tuned_threshold" %in% names(dff))
-      suppressWarnings(as.numeric(stats::median(dff$tuned_threshold, na.rm=TRUE))) else default_threshold
-    votes <- bin_pred(Y_hat, thr)              # matrix N x K
-    if (!is.matrix(votes)) votes <- matrix(votes, nrow=length(votes), ncol=1L)
-    prop1 <- if (K == 1L) as.numeric(votes[,1]) else rowMeans(votes)  # keep vector
-    pr    <- as.integer(prop1 >= 0.5)
-    TP <- sum(pr==1 & yt==1); FP <- sum(pr==1 & yt==0); FN <- sum(pr==0 & yt==1)
-    f1 <- if ((TP+FP)==0 || (TP+FN)==0) 0 else { prec<-TP/(TP+FP); rec<-TP/(TP+FN); 2*prec*rec/(prec+rec) }
-    res$vote_soft <- list(pred=pr, thr=thr, acc=mean(pr==yt), f1=f1, prop=prop1)
-    dcat("FUSE(vote_soft): thr=", round(thr,4), " | acc=", round(res$vote_soft$acc,4), " | f1=", round(res$vote_soft$f1,4))
-  }
+  # format a compact data.frame of metrics
+  rows_df <- do.call(rbind, lapply(names(out_rows), function(k) {
+    r <- out_rows[[k]]
+    data.frame(
+      kind = k, n = as.integer(r$n %||% NA), slots = as.character(r$slots %||% NA),
+      accuracy = r6(r$acc %||% NA), precision = r6(r$precision %||% NA),
+      recall = r6(r$recall %||% NA), f1 = r6(r$f1 %||% NA),
+      TP = as.integer(r$TP %||% NA), FP = as.integer(r$FP %||% NA),
+      FN = as.integer(r$FN %||% NA), TN = as.integer(r$TN %||% NA),
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(rows_df) <- NULL
   
-  if ("vote_hard" %in% methods) {
-    thr <- if (use_tuned_threshold_for_vote && "tuned_threshold" %in% names(dff))
-      suppressWarnings(as.numeric(stats::median(dff$tuned_threshold, na.rm=TRUE))) else 0.5
-    votes <- bin_pred(Y_hat, thr)              # matrix N x K
-    if (!is.matrix(votes)) votes <- matrix(votes, nrow=length(votes), ncol=1L)
-    pr    <- if (K == 1L) as.integer(votes[,1]) else as.integer(rowSums(votes) >= ceiling(K/2))
-    TP <- sum(pr==1 & yt==1); FP <- sum(pr==1 & yt==0); FN <- sum(pr==0 & yt==1)
-    f1 <- if ((TP+FP)==0 || (TP+FN)==0) 0 else { prec<-TP/(TP+FP); rec<-TP/(TP+FN); 2*prec*rec/(prec+rec) }
-    res$vote_hard <- list(pred=pr, thr=thr, acc=mean(pr==yt), f1=f1)
-    dcat("FUSE(vote_hard): thr=", round(thr,4), " | acc=", round(res$vote_hard$acc,4), " | f1=", round(res$vote_hard$f1,4))
-  }
-  
-  return(res)
+  list(metrics = rows_df, predictions = out_preds)
 }
-
-
 
